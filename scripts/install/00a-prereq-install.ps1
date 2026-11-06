@@ -258,7 +258,9 @@ Write-Host ''
 
 Write-Host '  Что проверить в НОВОМ окне PowerShell:' -ForegroundColor White
 Write-Host '    python --version          -> Python 3.11.9' -ForegroundColor Gray
-Write-Host '    where python              -> путь в ...\Programs\Python\Python311\, НЕ WindowsApps' -ForegroundColor Gray
+Write-Host '    Get-Command python        -> путь в ...\Programs\Python\Python311\, НЕ WindowsApps' -ForegroundColor Gray
+Write-Host '      (не "where python": в PowerShell where - это алиас Where-Object,' -ForegroundColor DarkGray
+Write-Host '       он молча ничего не выведет)' -ForegroundColor DarkGray
 Write-Host '    7z                        -> если ставили' -ForegroundColor Gray
 
 if ($szFinal -and $szFinal -like '*AppData*') {

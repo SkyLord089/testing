@@ -79,7 +79,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\00a-prereq-install.ps
 > **После этого обязательно закройте окно PowerShell и откройте новое.**
 > Иначе `PATH` в текущем процессе останется старым и `python` не найдётся.
 
-**Про заглушку Microsoft Store.** Если `where python` показывает
+**Про заглушку Microsoft Store.** Проверяйте `Get-Command python` (в PowerShell
+`where` — это алиас `Where-Object`, а не `where.exe`, и он молча ничего не
+напечатает). Если `Get-Command python` показывает
 `...\WindowsApps\python.exe` — это не Python, а ярлык на Store. Настоящий
 python.org встаёт в PATH выше по приоритету и обычно перекрывает её. Если
 Store всё равно открывается:
