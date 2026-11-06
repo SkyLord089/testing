@@ -21,9 +21,16 @@
 Всё ставится одной последовательностью, с проверкой после каждого шага:
 
 ```powershell
-# PowerShell от администратора, из корня репозитория
+# 0) один раз: убедиться, что скрипты в правильной кодировке
+powershell -ExecutionPolicy Bypass -File .\scripts\check-encoding.ps1
+
+# дальше — по шагам или оркестратором
 powershell -ExecutionPolicy Bypass -File .\scripts\install\00-all.ps1 -Profile target
 ```
+
+> Если вместо таблицы проверок вы увидели `Unexpected token` и строки вида
+> `РћР¶РёРґР°РµС‚СЃСЏ` — это кодировка, а не ошибка в скрипте. Причина и лечение:
+> [`docs/08-install-fresh.md` → раздел 7](docs/08-install-fresh.md#7-кодировки-почему-скрипты-иногда-падают-с-unexpected-token).
 
 Или по шагам (так виднее, что происходит):
 
@@ -93,6 +100,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\90-fallback-hip62.ps1
 | `scripts/install/04-comfyui-zluda.ps1` | ComfyUI-Zluda + venv + torch 2.7.0+cu118 + ZLUDA + патч DLL |
 | `scripts/install/05-gfx803-rocblas.ps1` | Ядра rocBLAS gfx803: `-ListOnly`, бэкап, `-Clean`, проверка |
 | `scripts/install/06-verify.ps1` | Проверка установки: hipInfo, ядра gfx803, DLL, torch.cuda, GEMM/addmm |
+| `scripts/check-encoding.ps1` | Сторож кодировок: ловит `.ps1` без BOM и `.bat` с BOM, умеет `-Fix` |
 | `scripts/install/90-fallback-hip62.ps1` | План Б: откат на HIP 6.2.4 с сохранением torch 2.7 |
 
 ---

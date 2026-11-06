@@ -221,3 +221,62 @@ cd C:\AI\ComfyUI-Zluda
    **`cublasLt.dll` не копировать.**
 8. Ядра gfx803: распаковать `.7z`, файлы `*gfx803*` → `C:\Program Files\AMD\ROCm\6.4\bin\rocblas\library` (сначала бэкап папки).
 9. Запуск: `scripts\comfyui-user.bat` (положить в корень ComfyUI-Zluda).
+
+---
+
+## 7. Кодировки: почему скрипты иногда падают с `Unexpected token`
+
+Если вы отредактировали `.ps1` в чужом редакторе и получили такое:
+
+```
+At .\scripts\install\01-prereq-check.ps1:45 char:24
++ $note = 'РћР¶РёРґР°РµС‚СЃСЏ Windows 11; ...
++                        ~~~~
+Unexpected token 'СЃСЃ' in expression or statement.
+```
+
+**Это не ошибка в скрипте.** Кракозябры `РћР¶РёРґР°РµС‚СЃСЏ` — это UTF-8, прочитанный как CP1251.
+Windows PowerShell 5.1 определяет кодировку `.ps1` так:
+
+| BOM в файле | Как читает PS 5.1 | Результат |
+|---|---|---|
+| UTF-8 BOM (`EF BB BF`) | UTF-8 | корректно |
+| UTF-16 LE/BE BOM | UTF-16 | корректно |
+| **BOM нет** | **ANSI (CP1251)** | **кракозябры и parse-ошибки** |
+
+Кавычки внутри русских строк после такого «декодирования» перестают быть
+кавычками — парсер видит обрыв строки и сыпет `Unexpected token` пачками.
+
+### Правила для файлов репозитория
+
+| Тип | Кодировка | BOM | EOL |
+|---|---|---|---|
+| `*.ps1` | UTF-8 | **есть** | CRLF |
+| `*.bat` | **CP866** | **нет** | CRLF |
+| `*.py` | UTF-8 | нет | LF |
+| `*.md` | UTF-8 | нет | LF |
+
+`.bat` — отдельная история: `cmd.exe` читает файл в кодировке консоли (CP866)
+и **не понимает BOM** — он попадёт в первую строку и сломает `@echo off`.
+Поэтому в `.bat` русский текст допустим только в CP866, а `git` для них
+помечен `-text`, чтобы ничего не перекодировать.
+
+### Проверка и починка
+
+```powershell
+# проверить все скрипты
+powershell -ExecutionPolicy Bypass -File .\scripts\check-encoding.ps1
+
+# починить: добавить BOM и привести EOL к CRLF
+powershell -ExecutionPolicy Bypass -File .\scripts\check-encoding.ps1 -Fix
+```
+
+### Если правите в VS Code
+
+В правом нижнем углу должно быть **UTF-8 with BOM** для `.ps1`.
+Если стоит просто `UTF-8` — нажмите на неё → *Save with Encoding* → `UTF-8 with BOM`.
+Для `.bat` — наоборот, `Cyrillic (Windows 866)` без BOM.
+
+> Обходной путь без правки файлов: запускать через PowerShell 7 (`pwsh`),
+> он читает UTF-8 без BOM корректно. Но на чистой Windows 11 `pwsh` нет,
+> поэтому основной путь — BOM.
