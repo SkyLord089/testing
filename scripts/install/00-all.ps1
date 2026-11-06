@@ -71,6 +71,7 @@ Write-Host @"
     HIP SDK (без выбора)    : C:\Program Files\AMD\ROCm
 
   Этапы:
+    0. Python 3.11.9 + 7-Zip      (авто, тихая установка)
     1. Проверка окружения         (авто)
     2. Драйвер AMD                (ручной, скрипт открывает страницу)
     3. HIP SDK $hipVer          (полуавто: GUI установщика)
@@ -82,8 +83,11 @@ Write-Host @"
 if ($Stage -eq 'all') { $Stage = '1' }
 
 switch ([string]$Stage) {
+    '0' { Run '00a-prereq-install.ps1' @{} }
     '1' {
-        Banner 'ЭТАП 1'
+        Banner 'ЭТАП 0-1: предпосылки и проверка'
+        Run '00a-prereq-install.ps1' @{}
+        Pause-Here 'Python и 7-Zip поставлены? Закрой это окно и открой НОВОЕ, чтобы PATH обновился.'
         Run '01-prereq-check.ps1' @{ InstallDir = $InstallDir }
         Pause-Here 'Проверь вывод выше. Если FAIL - исправь, потом продолжаем.'
         if (-not $NonInteractive) {
@@ -117,5 +121,5 @@ switch ([string]$Stage) {
         Run '05-gfx803-rocblas.ps1' @{ Archive = $RocblasArchive; HipVersion = $hipVer; Clean = $true }
     }
     '6' { Run '06-verify.ps1' @{ InstallDir = $InstallDir } }
-    default { throw "Stage: 1..6 или all" }
+    default { throw 'Stage: 0..6 или all' }
 }

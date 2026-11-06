@@ -61,7 +61,39 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\00-all.ps1 -Profile t
 
 Отдельные этапы — ниже (так понятнее, если что-то пошло не так).
 
-### Этап 1 — проверка окружения
+### Этап 0 - предпосылки (Python, 7-Zip)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install\00a-prereq-install.ps1
+```
+
+Ставит тихо, **без прав администратора** (в профиль пользователя):
+
+| Что | Версия | Куда |
+|---|---|---|
+| Python | 3.11.9 x64 | `%LOCALAPPDATA%\Programs\Python\Python311` |
+| 7-Zip | 24.08 | `C:\Program Files\7-Zip` (или в профиль, если без админа) |
+
+Установщики качаются на диск кита (D:), на C: не оседают.
+
+> **После этого обязательно закройте окно PowerShell и откройте новое.**
+> Иначе `PATH` в текущем процессе останется старым и `python` не найдётся.
+
+**Про заглушку Microsoft Store.** Если `where python` показывает
+`...\WindowsApps\python.exe` — это не Python, а ярлык на Store. Настоящий
+python.org встаёт в PATH выше по приоритету и обычно перекрывает её. Если
+Store всё равно открывается:
+
+*Параметры → Приложения → Дополнительные компоненты → Управление псевдонимами
+выполнения приложений* → выключить `python.exe` и `python3.exe`.
+
+**7-Zip не обязателен.** Если его не хочется ставить, скрипт `05` сам
+распакует `.7z` через python-модуль `py7zr` (поставит его автоматически).
+7-Zip нужен только для удобства и ускорения распаковки.
+
+---
+
+### Этап 1 - проверка окружения
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install\01-prereq-check.ps1
@@ -70,7 +102,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\01-prereq-check.ps1
 Проверяет: Windows 11 и сборку, права администратора, свободное место (нужно ≥25 ГБ), наличие Python/Git/7-Zip, видеокарту и VRAM, размер файла подкачки, «залежи» старых ROCm в PATH.
 **Выход:** таблица `OK/WARN/FAIL` и список того, что доустановить.
 
-### Этап 2 — драйвер
+### Этап 2 - драйвер
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install\02-driver.ps1 -OpenPage
@@ -81,7 +113,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\02-driver.ps1 -OpenPa
 
 > Если после установки HIP `hipInfo` не видит карту — вернись сюда и поставь **25.8.1** (Polaris), затем **24.9.1**. Это единственный «магический» параметр во всей схеме.
 
-### Этап 3 — HIP SDK
+### Этап 3 - HIP SDK
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install\03-install-hip.ps1 -HipVersion 6.4.2
@@ -98,7 +130,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\03-install-hip.ps1 -H
 
 > **Если `hipErrorNoDevice`:** см. `docs\01-diagnosis.md#1`. Порядок: убрать чужие ROCm из PATH → проверить `HIP_VISIBLE_DEVICES` (пустая строка = ноль устройств) → другой драйвер.
 
-### Этап 4 — ComfyUI-Zluda + torch 2.7 + ZLUDA
+### Этап 4 - ComfyUI-Zluda + torch 2.7 + ZLUDA
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install\04-comfyui-zluda.ps1 -InstallDir C:\AI\ComfyUI-Zluda -Profile target
@@ -118,7 +150,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\04-comfyui-zluda.ps1 
 8. копирует `comfy\customzluda\zluda.py` → `comfy\zluda.py` (штатный патч ComfyUI под ZLUDA: снимает ROCm из PATH, ставит `DISABLE_ADDMM_CUDA_LT`, гасит cudnn/flash_sdp, чинит topk/stft/onnx);
 9. кладёт свой лаунчер `comfyui-user.bat`.
 
-### Этап 5 — ядра rocBLAS для gfx803
+### Этап 5 - ядра rocBLAS для gfx803
 
 > **Скачать архив заранее** (6 МБ):
 > ```powershell
@@ -151,7 +183,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\05-gfx803-rocblas.ps1
   Он удалит 6.4, поставит 6.2.4, переведёт ZLUDA на 3.9.5-rocm6, поставит ядра 6.2.4 и **оставит torch 2.7.0+cu118**.
   Вручную то же самое: `03 -HipVersion 6.2.4` → `04 -Profile safe` → `05 -HipVersion 6.2.4`.
 
-### Этап 6 — проверка и первый запуск
+### Этап 6 - проверка и первый запуск
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install\06-verify.ps1 -InstallDir C:\AI\ComfyUI-Zluda

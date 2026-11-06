@@ -310,7 +310,13 @@ if ($pathRocm) {
     if ($realHip) {
         P 'PASS' ("В PATH есть ROCm: {0}" -f ($pathRocm -join ' | ')) 'HIP SDK уже стоит - этап 3 можно пропустить'
     } else {
-        P 'WARN' ("В PATH есть ROCm/ZLUDA, но каталога нет: {0}" -f ($pathRocm -join ' | ')) 'Запись осталась от удалённой установки - убери её из PATH'
+        P 'WARN' ("В PATH есть ROCm/ZLUDA, но каталога нет: {0}" -f ($pathRocm -join ' | ')) 'Запись осталась от удалённой установки - она безвредна (каталога нет), но убери её, чтобы не путала'
+        Write-Host ''
+        Write-Host '        Как убрать (без прав админа, из пользовательского PATH):' -ForegroundColor Gray
+        Write-Host '          $p = [Environment]::GetEnvironmentVariable("PATH","User")' -ForegroundColor DarkGray
+        Write-Host '          ($p -split ";" | ? { $_ -notmatch "ROCm|ZLUDA" }) -join ";" |' -ForegroundColor DarkGray
+        Write-Host '            ForEach-Object { [Environment]::SetEnvironmentVariable("PATH", $_, "User") }' -ForegroundColor DarkGray
+        Write-Host '          # затем закрыть и открыть PowerShell заново' -ForegroundColor DarkGray
     }
 } else {
     P 'PASS' 'PATH чист от ROCm/ZLUDA' ''

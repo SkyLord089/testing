@@ -15,6 +15,9 @@
       3) TensileManifest.txt (если есть и если -WithManifest)
       4) rocblas.dll - ТОЛЬКО по флагу -WithRocblasDll (см. предупреждение)
 
+    7-Zip НЕ обязателен: если его нет, архив распакуется через python-модуль
+    py7zr (поставится автоматически). Нужен любой рабочий Python.
+
     ЧЕГО НЕ ДЕЛАЕТ:
       * не копирует .hsaco/.dat для gfx900 (Vega) - они не наши
       * не трогает rocblas64.dll и прочие dll
@@ -69,6 +72,7 @@ param(
     [switch]$WithRocblasDll,
     [switch]$WithManifest,
     [string]$Venv = '',
+    [string]$Python = '',
     [switch]$Verify
 )
 
@@ -120,11 +124,43 @@ if ($is7z) {
             if (Test-Path $p) { $sevenZip = $p; break }
         }
     }
-    if (-not $sevenZip) {
-        throw 'Нужен 7-Zip для .7z. Поставь https://www.7-zip.org/ (или перепакуй архив в .zip)'
+    if ($sevenZip) {
+        & "$sevenZip" x "$Archive" "-o$tmp" -y | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "7z вернул код $LASTEXITCODE" }
+    } else {
+        # 7-Zip нет - распаковываем через python-модуль py7zr.
+        # Ищем python: аргумент -Python, потом venv ComfyUI, потом PATH.
+        Write-Host '  7-Zip не найден - распаковываю через py7zr (python)' -ForegroundColor Yellow
+
+        $pyForExtract = $Python
+        if (-not $pyForExtract) {
+            $venvGuess = @()
+            if ($Venv) { $venvGuess += (Join-Path $Venv 'Scripts\python.exe') }
+            $venvGuess += Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path 'ComfyUI-Zluda\venv\Scripts\python.exe'
+            $venvGuess += 'C:\AI\ComfyUI-Zluda\venv\Scripts\python.exe'
+            foreach ($g in $venvGuess) { if ($g -and (Test-Path $g)) { $pyForExtract = $g; break } }
+        }
+        if (-not $pyForExtract) {
+            $c = Get-Command python -ErrorAction SilentlyContinue
+            if ($c -and $c.Source -notlike '*WindowsApps*') { $pyForExtract = $c.Source }
+        }
+        if (-not $pyForExtract) {
+            throw 'Нет ни 7-Zip, ни рабочего Python. Запусти 00a-prereq-install.ps1 (ставит Python), либо поставь 7-Zip.'
+        }
+
+        Write-Host ("  python: {0}" -f $pyForExtract) -ForegroundColor DarkGray
+        & $pyForExtract -m pip install --quiet --disable-pip-version-check py7zr
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Не удалось поставить py7zr (нет сети?). Альтернатива: поставь 7-Zip с https://www.7-zip.org/'
+        }
+
+        # py7zr распаковывает в текущий каталог - переходим в $tmp
+        Push-Location $tmp
+        try {
+            & $pyForExtract -c "import py7zr,sys; py7zr.SevenZipFile(sys.argv[1],'r').extractall(path='.')" "$Archive"
+            if ($LASTEXITCODE -ne 0) { throw "py7zr вернул код $LASTEXITCODE" }
+        } finally { Pop-Location }
     }
-    & "$sevenZip" x "$Archive" "-o$tmp" -y | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "7z вернул код $LASTEXITCODE" }
 } else {
     Expand-Archive -LiteralPath $Archive -DestinationPath $tmp -Force
 }

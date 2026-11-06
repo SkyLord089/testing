@@ -24,6 +24,11 @@
 # 0) один раз: убедиться, что скрипты в правильной кодировке
 powershell -ExecutionPolicy Bypass -File .\scripts\check-encoding.ps1
 
+# 0a) поставить предпосылки (Python 3.11.9 + 7-Zip), тихо, без админа
+powershell -ExecutionPolicy Bypass -File .\scripts\install\00a-prereq-install.ps1
+
+# !!! закрыть это окно, открыть НОВОЕ (обновится PATH) !!!
+
 # дальше — по шагам или оркестратором
 powershell -ExecutionPolicy Bypass -File .\scripts\install\00-all.ps1 -Profile target
 ```
@@ -41,6 +46,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\00-all.ps1 -Profile t
 
 | Этап | Команда | Что делает | Ручного |
 |---|---|---|---|
+| 0 | `00a-prereq-install.ps1` | ставит Python 3.11.9 и 7-Zip тихо, без админа | — |
 | 1 | `01-prereq-check.ps1` | проверяет ОС, карту, RAM/VRAM, диск, git/python/7-Zip, остатки старых ROCm | — |
 | 2 | `02-driver.ps1 -OpenPage` | открывает страницу драйвера RX 580, потом проверяет `amdhip64_6.dll` | ставим драйвер, перезагрузка |
 | 3 | `03-install-hip.ps1 -HipVersion 6.4.2` | качает установщик AMD, запускает GUI | **снять галочку PRO-драйвера**, перезагрузка |
@@ -99,6 +105,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\90-fallback-hip62.ps1
 | `scripts/verify-torch27.py` | Тест операций torch 2.7 на ZLUDA (PASS/FAIL по каждой) |
 | `scripts/comfyui-user.bat` | Лаунчер ComfyUI с настройками под gfx803 + torch 2.7 |
 | `scripts/install/00-all.ps1` | Оркестратор: этапы 1–6 с остановками на ручных шагах |
+| `scripts/install/00a-prereq-install.ps1` | Ставит Python 3.11.9 x64 и 7-Zip; идемпотентно |
 | `scripts/install/01-prereq-check.ps1` | Проверка чистой машины перед установкой |
 | `scripts/install/02-driver.ps1` | Драйвер RX 580: что стоит, что поставить, проверка после |
 | `scripts/install/03-install-hip.ps1` | Скачивание и установка HIP SDK 6.4.2 / 6.2.4 |
