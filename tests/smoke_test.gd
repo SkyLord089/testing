@@ -7,23 +7,39 @@ func _initialize() -> void:
     call_deferred("_run")
 
 func _run() -> void:
+    print("SMOKE: starting watchdog")
+    var watchdog = Timer.new()
+    watchdog.wait_time = 90.0
+    watchdog.one_shot = true
+    watchdog.timeout.connect(func():
+        push_error("SMOKE TEST: watchdog timeout")
+        quit(1)
+    )
+    root.add_child(watchdog)
+    watchdog.start()
+    print("SMOKE: loading main scene")
     var packed = load("res://scenes/main.tscn") as PackedScene
     _check(packed != null, "Main scene loads")
     if packed == null:
         _finish()
         return
+    print("SMOKE: instancing game and generating Akina")
     var game = packed.instantiate()
     root.add_child(game)
+    print("SMOKE: Akina generated")
     await process_frame
     _check(game.road.points.size() > 400, "Akina has a continuous sampled centre line")
     _check(game.road.road_length > 2500.0, "Akina length is plausible")
     _check(game.car.wheels.size() == 4, "Vehicle has four physical wheels")
     _check(game.hud.menu.visible, "Main menu is visible")
+    print("SMOKE: generating Irohazaka")
     game._on_route_selected("irohazaka")
     await process_frame
+    print("SMOKE: Irohazaka generated")
     _check(game.current_route == "irohazaka", "Route switching selects Irohazaka")
     _check(game.road.points.size() > 540, "Irohazaka generates successfully")
     _check(game.road.road_length > 2800.0, "Irohazaka length is plausible")
+    print("SMOKE: starting countdown")
     game.start_run()
     for i in range(295):
         await physics_frame
@@ -54,6 +70,7 @@ func _run() -> void:
     _check(game.state == "menu" and game.hud.menu.visible, "Results can return to main menu")
     game.queue_free()
     await process_frame
+    watchdog.stop()
     _finish()
 
 func _check(condition: bool, description: String) -> void:

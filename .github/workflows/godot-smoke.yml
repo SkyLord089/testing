@@ -7,12 +7,12 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   smoke-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 6
     steps:
       - name: Check out project
         uses: actions/checkout@v4
@@ -28,4 +28,20 @@ jobs:
         run: godot --headless --editor --path . --quit
 
       - name: Run end-to-end smoke test
-        run: godot --headless --path . --script res://tests/smoke_test.gd --fixed-fps 90
+        run: |
+          set -o pipefail
+          timeout 150s godot --headless --path . --script res://tests/smoke_test.gd --fixed-fps 90 2>&1 | tee smoke.log
+
+      - name: Publish failure diagnostics
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo 'Godot smoke test failed. Diagnostic log:'
+            echo '```text'
+            tail -n 160 smoke.log
+            echo '```'
+          } > /tmp/godot-comment.md
+          jq -Rs '{body: .}' /tmp/godot-comment.md > /tmp/godot-comment.json
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" --input /tmp/godot-comment.json
