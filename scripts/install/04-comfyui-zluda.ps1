@@ -34,8 +34,8 @@
 param(
     # по умолчанию - рядом с китом, то есть на том же диске (C: часто занят)
     [string]$InstallDir = '',
-    [ValidateSet('target', 'safe')]
-    [string]$Profile = 'target',
+    [ValidateSet('rocm5', 'target', 'safe')]
+    [string]$Profile = 'rocm5',
     [string]$PythonExe = '',
     [string]$ZludaArchive = '',
     [switch]$SkipRequirements,
@@ -63,7 +63,29 @@ function Header([string]$t) {
 }
 function Step([string]$t) { Write-Host "`n>>> $t" -ForegroundColor White }
 
+# ВАЖНО, как выбирается DLL HIP.
+# ZLUDA линкуется на ГОЛОЕ имя "dylib=amdhip64" (hip_runtime-sys/build.rs), а
+# HIP SDK 6.x ставит файл в bin\ как amdhip64_6.dll
+# (CMakeLists.txt: RUNTIME_OUTPUT_NAME "amdhip64_${HIP_VERSION_MAJOR}").
+# Значит голое имя amdhip64.dll в bin\ SDK НЕ находится и резолвится по
+# системному порядку поиска: System32 (драйверная копия) идёт раньше PATH.
+#
+# Проверено на RX 580 / драйвер 31.0.21925.1001:
+#   SDK  bin\amdhip64_6.dll   (10.0.3652.0) -> hipInit = 100, устройств нет
+#   System32\amdhip64.dll      (10.0.3584.0) -> hipInit = 0, 1 устройство
+#                                              "Radeon RX 580 Series"
+# То есть работать будет ДРАЙВЕРНАЯ копия. Поэтому:
+#   * не добавляем bin\ SDK в PATH в лаунчере - это может перебить её;
+#   * сборку rocm5 берём по умолчанию: у неё API v5 (hipGetDeviceProperties
+#     без суффикса R0600), она и рассчитана на связку с драйверной DLL.
 $zluda = @{
+    # основной путь для gfx803 на драйвере 31.0.21925.x
+    'rocm5' = @{
+        Url  = 'https://github.com/lshqqytiger/ZLUDA/releases/download/rel.854c58e1565c3597e17046d7cc2b1eab96fcdf55/ZLUDA-windows-rocm5-amd64.zip'
+        File = 'ZLUDA-windows-rocm5-amd64.zip'
+        Name = 'ZLUDA 3.9.6 rocm5 (драйверная amdhip64.dll из System32)'
+    }
+    # HIP 6.4 из SDK: на этой машине hipInit не проходит, оставлено для опытов
     'target' = @{
         Url  = 'https://github.com/lshqqytiger/ZLUDA/releases/download/rel.854c58e1565c3597e17046d7cc2b1eab96fcdf55/ZLUDA-windows-amd64.zip'
         File = 'ZLUDA-windows-amd64.zip'

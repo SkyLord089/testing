@@ -73,6 +73,70 @@ function Fail([string]$what, [string]$note = '') {
     if ($note) { Write-Host ("       $note") -ForegroundColor DarkGray }
 }
 
+function Info2([string]$t) {
+    Write-Host ("       {0}" -f $t) -ForegroundColor DarkGray
+}
+
+# Прямой опрос HIP по указанному файлу DLL: hipInit -> hipGetDeviceCount ->
+# имя устройства. Возвращает имя устройства или $null.
+# Нужен потому, что hipInfo.exe из SDK грузит не ту DLL (см. раздел 1).
+function Test-HipDevice([string]$dllPath) {
+    if (-not ('HipVerify.Native' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace HipVerify
+{
+    public static class Native
+    {
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
+        public static extern IntPtr LoadLibraryA(string p);
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
+        public static extern IntPtr GetProcAddress(IntPtr h, string n);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool FreeLibrary(IntPtr h);
+    }
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int HipInit(uint flags);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int HipGetDeviceCount(IntPtr count);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int HipGetDeviceProperties(IntPtr prop, int id);
+}
+'@ -ErrorAction Stop
+    }
+    $h = [HipVerify.Native]::LoadLibraryA($dllPath)
+    if ($h -eq [IntPtr]::Zero) { return $null }
+    try {
+        $pInit = [HipVerify.Native]::GetProcAddress($h, 'hipInit')
+        $pCnt = [HipVerify.Native]::GetProcAddress($h, 'hipGetDeviceCount')
+        if ($pInit -eq [IntPtr]::Zero -or $pCnt -eq [IntPtr]::Zero) { return $null }
+        $fInit = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($pInit, [HipVerify.HipInit])
+        if ($fInit.Invoke([uint32]0) -ne 0) { return $null }
+        $fCnt = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($pCnt, [HipVerify.HipGetDeviceCount])
+        $ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+        [Runtime.InteropServices.Marshal]::WriteInt32($ptr, 0)
+        $rc = $fCnt.Invoke($ptr)
+        $n = [Runtime.InteropServices.Marshal]::ReadInt32($ptr)
+        [Runtime.InteropServices.Marshal]::FreeHGlobal($ptr)
+        if ($rc -ne 0 -or $n -le 0) { return $null }
+        $pProp = [HipVerify.Native]::GetProcAddress($h, 'hipGetDevicePropertiesR0600')
+        if ($pProp -eq [IntPtr]::Zero) { $pProp = [HipVerify.Native]::GetProcAddress($h, 'hipGetDeviceProperties') }
+        if ($pProp -eq [IntPtr]::Zero) { return "устройств: $n" }
+        $fProp = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($pProp, [HipVerify.HipGetDeviceProperties])
+        $pp = [Runtime.InteropServices.Marshal]::AllocHGlobal(2048)
+        $r2 = $fProp.Invoke($pp, 0)
+        $nm = if ($r2 -eq 0) { [Runtime.InteropServices.Marshal]::PtrToStringAnsi($pp) } else { "" }
+        [Runtime.InteropServices.Marshal]::FreeHGlobal($pp)
+        if ($nm) { return $nm }
+        return "устройств: $n"
+    } catch {
+        return $null
+    } finally {
+        [void][HipVerify.Native]::FreeLibrary($h)
+    }
+}
+
 Header 'ЭТАП 6: ПРОВЕРКА УСТАНОВКИ'
 
 # ---------- 1. HIP ----------
@@ -96,14 +160,41 @@ if (Test-Path $hipRoot) {
 
 if ($hipDir) {
     Ok "HIP SDK каталог: $hipDir"
+    # ВАЖНО: hipInfo.exe из bin\ SDK на этой конфигурации ВСЕГДА скажет
+    # "no ROCm-capable device" - он грузит amdhip64_6.dll из bin, а та карту
+    # не перечисляет (hipInit = 100). Рабочий путь другой: голое имя
+    # amdhip64.dll резолвится в драйверную копию из System32, и вот она
+    # устройство видит (hipInit = 0, "Radeon RX 580 Series").
+    #
+    # Поэтому hipInfo проверяем информационно, а НАСТОЯЩИЙ критерий - прямой
+    # опрос драйверной DLL, как это делает ZLUDA. Подробности: этап 7.
     $verFile = Join-Path $hipDir 'bin\hipInfo.exe'
     if (Test-Path $verFile) {
         $out = & $verFile 2>&1 | Out-String
-        if ($out -match 'gfx803') { Ok 'hipInfo: gfx803 обнаружен' } else { Fail 'hipInfo: gfx803 НЕ обнаружен' 'Драйвер не отдаёт Polaris в HIP. См. docs\01-diagnosis.md#1 - начни с отката драйвера на 25.8.1 / 24.9.1.' }
-        if ($out -match 'RX\s*580') { Ok 'hipInfo: Radeon RX 580 в списке устройств' } else { Warn 'hipInfo: строка "RX 580" не найдена' 'Возможно, имя другое (RX 570/590). Не критично, если gfx803 есть.' }
-        if ($out -match 'no ROCm-capable device') { Fail 'hipInfo: "no ROCm-capable device"' 'Драйвер/HIP_VISIBLE_DEVICES. См. docs\01-diagnosis.md#1' }
+        if ($out -match 'no ROCm-capable device') {
+            Info2 'hipInfo из SDK: "no ROCm-capable device" - это ОЖИДАЕМО на этой сборке'
+            Info2 'Он грузит amdhip64_6.dll из bin, а она карту не видит. Проверяем драйверную копию.'
+        } elseif ($out -match 'gfx803') {
+            Ok 'hipInfo (SDK): gfx803 обнаружен'
+        }
+        if ($out -match 'RX\s*580') { Ok 'hipInfo (SDK): Radeon RX 580 в списке' }
     } else {
         Warn 'hipInfo.exe не найден' 'HIP SDK установлен неполно (без Core) - переустанови с компонентом HIP SDK Core'
+    }
+
+    # ---- реальная проверка: драйверная amdhip64.dll из System32 ----
+    $sysHip = Join-Path $env:SystemRoot 'System32\amdhip64.dll'
+    if (Test-Path $sysHip) {
+        $sysVer = (Get-Item $sysHip).VersionInfo.FileVersion
+        Info2 ("драйверная копия: {0} ({1})" -f $sysHip, $sysVer)
+        $gpuName = Test-HipDevice $sysHip
+        if ($gpuName) {
+            Ok ("HIP видит устройство: {0}" -f $gpuName)
+        } else {
+            Fail 'HIP не видит устройство даже через драйверную DLL' 'Ни ZLUDA, ни torch не заработают. Этап 7 покажет подробности.'
+        }
+    } else {
+        Fail ("нет {0}" -f $sysHip) 'Драйвер AMD не установил HIP runtime. Этап 2: обнови драйвер.'
     }
 } else {
     Fail 'HIP SDK не найден в C:\Program Files\AMD\ROCm' 'Этап 3: scripts\install\03-install-hip.ps1'

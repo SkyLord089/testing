@@ -21,6 +21,14 @@ set "ZLUDA_COMGR_LOG_LEVEL=1"
 rem --- кэш скомпилированных ядер (смените путь при необходимости)
 if not defined ZLUDA_CACHE_DIR set "ZLUDA_CACHE_DIR=%~dp0zluda-cache"
 
+rem --- PATH: bin HIP SDK na etoj mashine NE nuzhen.
+rem     Rabotaet drajvernaya kopiya System32\amdhip64.dll (sistema
+rem     nachodit eyo ranshe, chem lyuboj put iz PATH).
+rem     amdhip64_6.dll iz bin daet hipInit = 100 i ne ispolzuetsya.
+rem     Poetomu put k bin NAMERENNO ne dobavlyaem.
+rem set "PATH=C:\Program Files\AMD\ROCm\6.4\bin;%PATH%"
+
+
 rem --- MIOpen: поменьше шума и поиск без зависаний
 set "MIOPEN_FIND_MODE=2"
 set "MIOPEN_LOG_LEVEL=3"
