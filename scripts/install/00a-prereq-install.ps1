@@ -37,6 +37,25 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Безопасный запуск внешней программы с захватом stdout и без падения на stderr.
+# Причина: в PowerShell 5.1 перенаправление stderr нативной команды
+# (cmd 2>$null) при $ErrorActionPreference = 'Stop' превращается в
+# NativeCommandError и обрывает скрипт, хотя программа просто что-то вывела
+# в stderr. Именно на этом падал этап 4: "import torch" в пустом venv пишет
+# traceback в stderr, и проверка "torch уже стоит" убивала установку.
+function Invoke-Capture([string]$exe, [string[]]$argv) {
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $exe @argv 2>&1
+        $txt = ($out | ForEach-Object { "$_" }) -join "`n"
+        return @{ Code = $LASTEXITCODE; Text = $txt }
+    } finally {
+        $ErrorActionPreference = $old
+    }
+}
+
 $ProgressPreference = 'SilentlyContinue'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -109,7 +128,8 @@ if (-not $SkipPython) {
     foreach ($c in $cands) {
         if ($c -and (Test-Path $c) -and $c -notlike '*WindowsApps*') {
             try {
-                $v = (& $c -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null | Out-String).Trim()
+                $probe = Invoke-Capture $c @('-c', "import sys; print('%d.%d' % sys.version_info[:2])")
+                $v = if ($probe.Code -eq 0) { $probe.Text.Trim() } else { '' }
                 if ($v -match '^3\.(10|11|12)$') { $found = [PSCustomObject]@{ Path = $c; Version = $v }; break }
             } catch {}
         }

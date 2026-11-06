@@ -30,6 +30,25 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+
+# Безопасный запуск внешней программы с захватом stdout и без падения на stderr.
+# Причина: в PowerShell 5.1 перенаправление stderr нативной команды
+# (cmd 2>$null) при $ErrorActionPreference = 'Stop' превращается в
+# NativeCommandError и обрывает скрипт, хотя программа просто что-то вывела
+# в stderr. Именно на этом падал этап 4: "import torch" в пустом venv пишет
+# traceback в stderr, и проверка "torch уже стоит" убивала установку.
+function Invoke-Capture([string]$exe, [string[]]$argv) {
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $exe @argv 2>&1
+        $txt = ($out | ForEach-Object { "$_" }) -join "`n"
+        return @{ Code = $LASTEXITCODE; Text = $txt }
+    } finally {
+        $ErrorActionPreference = $old
+    }
+}
+
 $ProgressPreference = 'SilentlyContinue'
 
 if (-not $OutFile) {

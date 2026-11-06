@@ -32,6 +32,25 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+
+# Безопасный запуск внешней программы с захватом stdout и без падения на stderr.
+# Причина: в PowerShell 5.1 перенаправление stderr нативной команды
+# (cmd 2>$null) при $ErrorActionPreference = 'Stop' превращается в
+# NativeCommandError и обрывает скрипт, хотя программа просто что-то вывела
+# в stderr. Именно на этом падал этап 4: "import torch" в пустом venv пишет
+# traceback в stderr, и проверка "torch уже стоит" убивала установку.
+function Invoke-Capture([string]$exe, [string[]]$argv) {
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $exe @argv 2>&1
+        $txt = ($out | ForEach-Object { "$_" }) -join "`n"
+        return @{ Code = $LASTEXITCODE; Text = $txt }
+    } finally {
+        $ErrorActionPreference = $old
+    }
+}
+
 $script:verdict = @()
 
 # диск, где лежит сам репозиторий с китом
@@ -225,9 +244,11 @@ function Find-RealPython {
         if (-not (Test-Path $c)) { continue }
         if ($c -like '*\WindowsApps\*') { continue }   # заглушка Store
         try {
-            $v = (& $c -c "import sys; print('%d.%d.%d' % sys.version_info[:3])" 2>$null | Out-String).Trim()
-            if ($LASTEXITCODE -eq 0 -and $v -match '^\d+\.\d+\.\d+$') {
-                $bits = (& $c -c "import struct; print(struct.calcsize('P')*8)" 2>$null | Out-String).Trim()
+            $probe = Invoke-Capture $c @('-c', "import sys; print('%d.%d.%d' % sys.version_info[:3])")
+            $v = if ($probe.Code -eq 0) { $probe.Text.Trim() } else { '' }
+            if ($probe.Code -eq 0 -and $v -match '^\d+\.\d+\.\d+$') {
+                $probeB = Invoke-Capture $c @('-c', "import struct; print(struct.calcsize('P')*8)")
+                $bits = if ($probeB.Code -eq 0) { $probeB.Text.Trim() } else { '' }
                 return [PSCustomObject]@{ Path = $c; Version = $v; Bits = $bits }
             }
         } catch {}
@@ -237,10 +258,13 @@ function Find-RealPython {
     $py = Get-Command py -ErrorAction SilentlyContinue
     if ($py) {
         try {
-            $v = (& py -3 -c "import sys; print('%d.%d.%d' % sys.version_info[:3])" 2>$null | Out-String).Trim()
-            $p = (& py -3 -c "import sys; print(sys.executable)" 2>$null | Out-String).Trim()
+            $probe = Invoke-Capture 'py' @('-3', '-c', "import sys; print('%d.%d.%d' % sys.version_info[:3])")
+            $v = if ($probe.Code -eq 0) { $probe.Text.Trim() } else { '' }
+            $probeP = Invoke-Capture 'py' @('-3', '-c', "import sys; print(sys.executable)")
+            $p = if ($probeP.Code -eq 0) { $probeP.Text.Trim() } else { '' }
             if ($v -match '^\d+\.\d+\.\d+$' -and $p -and $p -notlike '*WindowsApps*') {
-                $bits = (& py -3 -c "import struct; print(struct.calcsize('P')*8)" 2>$null | Out-String).Trim()
+                $probeB = Invoke-Capture 'py' @('-3', '-c', "import struct; print(struct.calcsize('P')*8)")
+                $bits = if ($probeB.Code -eq 0) { $probeB.Text.Trim() } else { '' }
                 return [PSCustomObject]@{ Path = $p; Version = $v; Bits = $bits }
             }
         } catch {}

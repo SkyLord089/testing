@@ -44,6 +44,25 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Безопасный запуск внешней программы с захватом stdout и без падения на stderr.
+# Причина: в PowerShell 5.1 перенаправление stderr нативной команды
+# (cmd 2>$null) при $ErrorActionPreference = 'Stop' превращается в
+# NativeCommandError и обрывает скрипт, хотя программа просто что-то вывела
+# в stderr. Именно на этом падал этап 4: "import torch" в пустом venv пишет
+# traceback в stderr, и проверка "torch уже стоит" убивала установку.
+function Invoke-Capture([string]$exe, [string[]]$argv) {
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $exe @argv 2>&1
+        $txt = ($out | ForEach-Object { "$_" }) -join "`n"
+        return @{ Code = $LASTEXITCODE; Text = $txt }
+    } finally {
+        $ErrorActionPreference = $old
+    }
+}
+
 $ProgressPreference = 'SilentlyContinue'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -157,15 +176,20 @@ Write-Host ("  pip: " + (& $venvPy -m pip --version)) -ForegroundColor Green
 
 # ---- torch ----
 Step 'PyTorch 2.7.0 + cu118 (~2.7 ГБ, это долго)'
-$torchVersion = & $venvPy -c "import torch;print(torch.__version__)" 2>$null
-if ($torchVersion -match '^2\.7\.0\+cu118') {
-    Write-Host "  Уже установлен: $torchVersion" -ForegroundColor DarkGray
+$probe = Invoke-Capture $venvPy @('-c', 'import torch;print(torch.__version__)')
+if ($probe.Code -eq 0 -and $probe.Text -match '^2\.7\.0\+cu118') {
+    Write-Host ("  Уже установлен: {0}" -f $probe.Text.Trim()) -ForegroundColor DarkGray
 } else {
     & $venvPy -m pip uninstall torch torchvision torchaudio -y --quiet
     & $venvPy -m pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu118 --cache-dir "$pipCache"
     if ($LASTEXITCODE -ne 0) { throw 'Установка torch не удалась. Проверь сеть/прокси.' }
 }
-Write-Host ("  torch: " + (& $venvPy -c "import torch;print(torch.__version__, torch.version.cuda)")) -ForegroundColor Green
+$torchInfo = Invoke-Capture $venvPy @('-c', 'import torch;print(torch.__version__, torch.version.cuda)')
+if ($torchInfo.Code -eq 0) {
+    Write-Host ("  torch: " + $torchInfo.Text.Trim()) -ForegroundColor Green
+} else {
+    throw ("torch установлен, но не импортируется:`n" + $torchInfo.Text)
+}
 
 # ---- зависимости ----
 if (-not $SkipRequirements) {
