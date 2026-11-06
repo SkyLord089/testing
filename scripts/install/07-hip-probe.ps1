@@ -242,8 +242,11 @@ foreach ($d in $cand) {
     Ok ("amdhip64.dll: {0}" -f $dllPath)
     if (-not $script:firstHipDllPath) { $script:firstHipDllPath = $dllPath }
 
-    # PATH: библиотеке нужны соседние DLL (rocblas\library и т.п.)
-    $env:PATH = "$binDir;$binDir\rocblas\library;$env:PATH"
+    # ВАЖНО: PATH здесь НЕ трогаем.
+    # Раньше тут bin\ и bin\rocblas\library добавлялись в PATH до вызова
+    # hipInit - и это искажало картину: по голому имени amdhip64.dll начинал
+    # находиться файл из SDK вместо драйверного. Для загрузки по полному пути
+    # PATH не нужен вовсе (зависимости ищутся рядом с DLL и в System32).
 
     $verStr = (Get-Item $dllPath).VersionInfo.FileVersion
     if (-not $verStr) { $verStr = (Get-Item $dllPath).VersionInfo.ProductVersion }
@@ -302,16 +305,25 @@ foreach ($d in $cand) {
 
         # дочерний процесс: свой hipInit уже отработал (call_once), в этом
         # процессе второй заход ничего нового не даст
-        $probeLine = "import ctypes,sys; h=ctypes.CDLL(r'{0}'); sys.exit(h.hipInit(0))" -f $dllPath
-        $logOut = $null
-        try {
-            $logOut = & powershell -NoProfile -Command $probeLine 2>&1
-        } catch {
-            $logOut = @("не удалось запустить дочерний процесс: $($_.Exception.Message)")
+        # Дочерний процесс должен быть python, а не powershell: 'import' -
+        # это синтаксис python, в PowerShell такой команды нет.
+        $pyExe = $null
+        $pyCmd = Get-Command python -ErrorAction SilentlyContinue
+        if ($pyCmd) { $pyExe = $pyCmd.Source }
+        if (-not $pyExe) {
+            $pyExe = "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe"
+            if (-not (Test-Path $pyExe)) { $pyExe = $null }
         }
-        Info ("exit code дочернего процесса: {0}" -f $LASTEXITCODE)
-        if ($logOut) {
-            foreach ($ln in ($logOut | Select-Object -First 8)) { Info ("  $ln") }
+        if ($pyExe) {
+            $pyFile = Join-Path $env:TEMP 'hip-probe-child.py'
+            $pyBody = "import ctypes, sys`r`nh = ctypes.CDLL(r'" + $dllPath + "')`r`nsys.exit(h.hipInit(0))`r`n"
+            Set-Content -Path $pyFile -Value $pyBody -Encoding ASCII
+            $logOut = $null
+            try { $logOut = & $pyExe $pyFile 2>&1 } catch { $logOut = @("$($_.Exception.Message)") }
+            Info ("python: {0}, exit code {1}" -f $pyExe, $LASTEXITCODE)
+            if ($logOut) { foreach ($ln in ($logOut | Select-Object -First 6)) { Info ("  $ln") } }
+        } else {
+            Info 'python не найден - дочерний процесс с логом пропущен.'
         }
 
         if (Test-Path $logFile) {
@@ -464,7 +476,51 @@ if ($bare -eq [IntPtr]::Zero) {
         try { $rcBare = $fInit.Invoke([uint32]0) } catch { }
         if ($rcBare -eq 0) {
             Ok 'hipInit(0) на этом модуле = 0'
-            Info 'Значит путь через драйверную DLL рабочий - hipInit проходит.'
+            Info 'Путь через драйверную DLL рабочий: hipInit проходит.'
+            Write-Host ''
+
+            # Полная цепочка ZLUDA: hipInit -> hipGetDeviceCount -> свойства.
+            # Именно её проходит zluda/src/impl/mod.rs::init() при старте.
+            Info 'Полная цепочка ZLUDA на этом модуле:'
+            $cntPtr = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+            [Runtime.InteropServices.Marshal]::WriteInt32($cntPtr, 0)
+            $fCount = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($bc, [HipProbe.HipGetDeviceCount])
+            $rcCnt = -1
+            $nDev = 0
+            try {
+                $rcCnt = $fCount.Invoke($cntPtr)
+                $nDev = [Runtime.InteropServices.Marshal]::ReadInt32($cntPtr)
+            } catch { $rcCnt = -1 }
+            [Runtime.InteropServices.Marshal]::FreeHGlobal($cntPtr)
+
+            if ($rcCnt -eq 0 -and $nDev -gt 0) {
+                Ok ("hipGetDeviceCount = 0, устройств = {0}" -f $nDev)
+                Info 'Это ровно то, чего требует ZLUDA. Устройство видно ДРАЙВЕРНОЙ копией HIP.'
+                Info 'Вывод: сборка ZLUDA windows-rocm5-amd64 - рабочий путь на этой машине.'
+
+                # имя устройства через R0600, если он есть в драйверной копии
+                $dp = [HipProbe.Native]::GetProcAddress($bare, 'hipGetDevicePropertiesR0600')
+                if ($dp -eq [IntPtr]::Zero) {
+                    $dp = [HipProbe.Native]::GetProcAddress($bare, 'hipGetDeviceProperties')
+                }
+                if ($dp -ne [IntPtr]::Zero) {
+                    $pp = [Runtime.InteropServices.Marshal]::AllocHGlobal(2048)
+                    $fProp2 = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($dp, [HipProbe.HipGetDeviceProperties])
+                    $r2 = -1
+                    try { $r2 = $fProp2.Invoke($pp, 0) } catch { }
+                    if ($r2 -eq 0) {
+                        $nm = [Runtime.InteropServices.Marshal]::PtrToStringAnsi($pp)
+                        if ($nm) { Ok ("устройство 0: {0}" -f $nm) }
+                    } else {
+                        Warn ("чтение свойств устройства = {0} [{1}]" -f $r2, (Get-HipErrorText $r2)) 'Не критично: torch берёт свойства через другие вызовы.'
+                    }
+                    [Runtime.InteropServices.Marshal]::FreeHGlobal($pp)
+                }
+            } elseif ($rcCnt -eq 0) {
+                Fail ("hipGetDeviceCount = 0, но устройств = {0}" -f $nDev) 'hipInit прошёл, а список пуст. ZLUDA получит пустой набор устройств.'
+            } else {
+                Fail ("hipGetDeviceCount = {0} [{1}]" -f $rcCnt, (Get-HipErrorText $rcCnt)) 'hipInit прошёл, но перечисление устройств падает. ZLUDA не стартует.'
+            }
         } else {
             Fail ("hipInit(0) на этом модуле = {0} [{1}]" -f $rcBare, (Get-HipErrorText $rcBare)) 'Если и здесь 100 - дело не в выборе сборки ZLUDA и не в имени файла, а в драйвере/ROCr.'
         }
