@@ -57,6 +57,9 @@ func _run() -> void:
     for i in range(180):
         await physics_frame
     Input.action_release("throttle")
+    print("SMOKE DEBUG: speed=", game.car.speed_kph(), " engine_force=", game.car.engine_force, " brake=", game.car.brake, " throttle=", game.car.throttle_input, " rpm=", game.car.engine_rpm, " sleeping=", game.car.sleeping, " position=", game.car.global_position)
+    for wheel in game.car.wheels:
+        print("SMOKE WHEEL: ", wheel.name, " contact=", wheel.is_in_contact(), " skid=", wheel.get_skidinfo(), " rpm=", wheel.get_rpm(), " brake=", wheel.brake)
     _check(game.car.speed_kph() > 5.0, "Physical vehicle accelerates under throttle")
     _check(game.car.global_position.is_finite(), "Vehicle remains stable while driving")
     game.pause_run()
