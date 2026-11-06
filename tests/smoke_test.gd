@@ -52,6 +52,13 @@ func _run() -> void:
     _check(game.state == "driving", "Countdown enters driving state")
     _check(game.race.active, "Race timer starts")
     _check(game.car.global_position.is_finite(), "Vehicle transform remains finite")
+    print("SMOKE: applying throttle")
+    Input.action_press("throttle")
+    for i in range(180):
+        await physics_frame
+    Input.action_release("throttle")
+    _check(game.car.speed_kph() > 5.0, "Physical vehicle accelerates under throttle")
+    _check(game.car.global_position.is_finite(), "Vehicle remains stable while driving")
     game.pause_run()
     var paused_time = game.race.elapsed
     for i in range(20):

@@ -31,6 +31,11 @@ jobs:
         run: |
           set -o pipefail
           timeout 150s godot --headless --path . --script res://tests/smoke_test.gd --fixed-fps 90 2>&1 | tee smoke.log
+          if grep -E 'SCRIPT ERROR|ERROR:|FAIL:' smoke.log; then
+            echo 'Godot reported an error in the smoke log.'
+            exit 1
+          fi
+          test "$(grep -c '^PASS:' smoke.log)" -ge 21
 
       - name: Publish failure diagnostics
         if: failure()
