@@ -53,16 +53,28 @@ $ProgressPreference = 'SilentlyContinue'
 # ---- таблица версий ----
 $known = @{
     '6.4.2' = @{
-        Url  = 'https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-25.Q3-Win10-Win11-For-HIP.exe'
-        File = 'AMD-Software-PRO-Edition-25.Q3-Win10-Win11-For-HIP.exe'
-        Dir  = 'C:\Program Files\AMD\ROCm\6.4'
+        # 25.Q3 = ROCm 6.4.2. Перебираем варианты имени: в 2026 AMD
+        # перешла на схему "<квартал>-Win11-For-HIP.exe" без Win10.
+        Urls = @(
+            'https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-25.Q3-Win10-Win11-For-HIP.exe',
+            'https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-25.Q3-Win11-For-HIP.exe'
+        )
+        File   = 'AMD-Software-PRO-Edition-25.Q3-Win10-Win11-For-HIP.exe'
+        Dir    = 'C:\Program Files\AMD\ROCm\6.4'
         SizeMB = 1700
+        Page   = 'https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html'
     }
     '6.2.4' = @{
-        Url  = 'https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q4-Win10-Win11-For-HIP.exe'
-        File = 'AMD-Software-PRO-Edition-24.Q4-Win10-Win11-For-HIP.exe'
-        Dir  = 'C:\Program Files\AMD\ROCm\6.2'
+        # 24.Q4 = ROCm 6.2.4. Это последняя версия, для которой есть
+        # ГОТОВЫЕ ядра gfx803 - отсюда профиль safe.
+        Urls = @(
+            'https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q4-Win10-Win11-For-HIP.exe',
+            'https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q4-Win11-For-HIP.exe'
+        )
+        File   = 'AMD-Software-PRO-Edition-24.Q4-Win10-Win11-For-HIP.exe'
+        Dir    = 'C:\Program Files\AMD\ROCm\6.2'
         SizeMB = 1600
+        Page   = 'https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html'
     }
 }
 
@@ -103,15 +115,42 @@ if (-not $SkipDownload -and -not $InstallerPath) {
         }
     }
     if (-not (Test-Path $target)) {
-        Write-Host "  Скачиваю: $($info.Url)" -ForegroundColor White
         Write-Host ("  Ожидаемый размер ~{0} МБ. Это может занять 10-30 минут." -f $info.SizeMB) -ForegroundColor DarkGray
-        try {
-            # curl.exe есть в Windows 10/11 из коробки и лучше показывает прогресс
-            & "$env:SystemRoot\system32\curl.exe" -L --ssl-no-revoke -o $target $info.Url
-            if ($LASTEXITCODE -ne 0) { throw "curl вернул код $LASTEXITCODE" }
-        } catch {
-            Write-Host "  curl не сработал ($_), пробую Invoke-WebRequest..." -ForegroundColor Yellow
-            Invoke-WebRequest -Uri $info.Url -OutFile $target -UseBasicParsing
+        $ok = $false
+        foreach ($u in $info.Urls) {
+            Write-Host ("  Скачиваю: {0}" -f $u) -ForegroundColor White
+            # -f: 404 должен быть ошибкой, а не пустым файлом
+            & "$env:SystemRoot\system32\curl.exe" -L --ssl-no-revoke -f -o $target $u
+            $rc = $LASTEXITCODE
+            if ($rc -eq 0 -and (Test-Path $target)) {
+                $mb = [math]::Round((Get-Item $target).Length / 1MB)
+                if ($mb -ge 800) { $ok = $true; break }
+                Write-Host ("  Файл всего {0} МБ - похоже на страницу-заглушку, пробую дальше" -f $mb) -ForegroundColor Yellow
+                Remove-Item $target -Force -ErrorAction SilentlyContinue
+            } else {
+                Write-Host ("  Не вышло (curl код {0}), пробую следующий вариант" -f $rc) -ForegroundColor DarkYellow
+                Remove-Item $target -Force -ErrorAction SilentlyContinue
+            }
+        }
+        if (-not $ok) {
+            # последняя попытка - Invoke-WebRequest (другой TLS-стек)
+            try {
+                Write-Host '  Последняя попытка через Invoke-WebRequest...' -ForegroundColor Yellow
+                Invoke-WebRequest -Uri $info.Urls[0] -OutFile $target -UseBasicParsing
+                if ((Test-Path $target) -and ((Get-Item $target).Length / 1MB) -ge 800) { $ok = $true }
+            } catch {
+                Write-Host ("  Invoke-WebRequest тоже не смог: {0}" -f $_.Exception.Message) -ForegroundColor Red
+            }
+        }
+        if (-not $ok) {
+            Remove-Item $target -Force -ErrorAction SilentlyContinue
+            Write-Host ''
+            Write-Host '  СКАЧАТЬ НЕ УДАЛОСЬ. Что делать:' -ForegroundColor Red
+            Write-Host ("    1. Открой страницу и скачай вручную: {0}" -f $info.Page) -ForegroundColor Yellow
+            Write-Host ("    2. Нужен файл: {0}" -f $info.File) -ForegroundColor Yellow
+            Write-Host ("    3. Положи его в: {0}" -f $DownloadDir) -ForegroundColor Yellow
+            Write-Host ("    4. Запусти снова с -SkipDownload: .\03-install-hip.ps1 -HipVersion $HipVersion -SkipDownload") -ForegroundColor Yellow
+            throw 'Установщик HIP не скачан'
         }
     }
 }
