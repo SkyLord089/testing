@@ -36,7 +36,22 @@ $launcher = Join-Path $InstallRoot 'run-comfyui.bat'
 
 Write-Host ""; Write-Host '== Files' -ForegroundColor Cyan
 if (Test-Path -LiteralPath $venvPy)   { Ok "venv python: $venvPy" } else { Fail "venv python not found at $venvPy - run .\Install-ComfyUI-RX580.ps1" }
-if (Test-Path -LiteralPath $zludaExe) { Ok "ZLUDA: $zludaExe" }        else { Fail "zluda.exe not found at $zludaExe - run .\Install-ComfyUI-RX580.ps1" }
+if (Test-Path -LiteralPath $zludaExe) { Ok "ZLUDA: $zludaExe" }
+else {
+    Fail "zluda.exe not found at $zludaExe - run .\Install-ComfyUI-RX580.ps1"
+    $zDir = Join-Path $InstallRoot 'zluda'
+    if (Test-Path -LiteralPath $zDir) {
+        $files = @(Get-ChildItem -LiteralPath $zDir -Recurse -File -ErrorAction SilentlyContinue)
+        if ($files.Count -gt 0) {
+            Info ("zluda dir contains {0} file(s):" -f $files.Count)
+            $files | Sort-Object FullName | Select-Object -First 20 | ForEach-Object {
+                Info ("    {0,10} B  {1}" -f $_.Length, $_.FullName)
+            }
+        } else {
+            Info 'zluda dir exists but is EMPTY - the ZLUDA step did not install anything. Re-run .\Install-ComfyUI-RX580.ps1 (torch download is cached by pip).'
+        }
+    }
+}
 if (Test-Path -LiteralPath (Join-Path $comfyDir 'main.py')) { Ok 'ComfyUI main.py present' } else { Fail "ComfyUI not found at $comfyDir" }
 if (Test-Path -LiteralPath $launcher) { Ok "launcher: $launcher" }     else { Warn2 "run-comfyui.bat missing at $launcher" }
 

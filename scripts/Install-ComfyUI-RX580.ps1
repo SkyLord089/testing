@@ -30,7 +30,8 @@ param(
     # ZLUDA v3.9.5 - last release shipping both rocm5 and rocm6 Windows builds
     [string]$ZludaTag      = 'rel.5e717459179dc272b7d7d23391f0fad66c7459cf',
     [switch]$SkipRocmCheck,
-    [switch]$SkipZludaPatch
+    [switch]$SkipZludaPatch,
+    [switch]$KeepRocm6Nvcuda
 )
 
 $ErrorActionPreference = 'Stop'
@@ -184,22 +185,56 @@ foreach ($pair in @(@($rocm6Zip, $rocm6Dir), @($rocm5Zip, $rocm5Dir))) {
     if (Test-Path -LiteralPath $pair[1]) { Remove-Item -LiteralPath $pair[1] -Recurse -Force }
     Expand-Archive -LiteralPath $pair[0] -DestinationPath $pair[1] -Force
 }
-$zludaExe = Get-ChildItem -LiteralPath $rocm6Dir -Recurse -Filter 'zluda.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $zludaExe) { Die 'zluda.exe not found inside the rocm6 package - unexpected layout, aborting.' }
-$zludaSrcDir = Split-Path $zludaExe.FullName -Parent
+
+# --- layout-agnostic payload assembly ---
+# The rocm6/rocm5 zips do NOT necessarily use the classic flat "everything next to
+# zluda.exe" layout. So: index every file in both trees, merge the .dll/.exe payload
+# (rocm6 preferred, rocm5 as fallback), then HARD-CHECK the required set and dump the
+# archives' layout if something is missing. (A previous version of this step assumed a
+# flat layout and silently installed an EMPTY zluda folder - do not regress.)
+$idx5 = @(Get-ChildItem -LiteralPath $rocm5Dir -Recurse -File -ErrorAction SilentlyContinue)
+$idx6 = @(Get-ChildItem -LiteralPath $rocm6Dir -Recurse -File -ErrorAction SilentlyContinue)
+if ($idx5.Count -eq 0 -and $idx6.Count -eq 0) { Die 'Both ZLUDA archives expanded to nothing - corrupted download?' }
+Info ("extracted: {0} file(s) (rocm6), {1} file(s) (rocm5)" -f $idx6.Count, $idx5.Count)
+
+function Show-Tree([string]$root, $idx) {
+    Info ("--- archive layout: {0}" -f $root)
+    $idx | Sort-Object FullName | ForEach-Object {
+        $rel = $_.FullName.Substring($root.Length).TrimStart('\')
+        Info ("    {0,10} B  {1}" -f $_.Length, $rel)
+    }
+}
+
+$payload = @{}
+foreach ($f in $idx5) { if (($f.Extension.ToLower() -in '.dll', '.exe') -and $f.Length -gt 0) { $payload[$f.Name] = $f.FullName } }
+foreach ($f in $idx6) { if (($f.Extension.ToLower() -in '.dll', '.exe') -and $f.Length -gt 0) { $payload[$f.Name] = $f.FullName } }
+$required = @('zluda.exe', 'nvcuda.dll', 'cublas.dll', 'cusparse.dll', 'nvrtc.dll')
+$missing = @($required | Where-Object { -not $payload.ContainsKey($_) })
+if ($missing.Count -gt 0) {
+    Warn2 ("missing from both ZLUDA packages: {0}" -f ($missing -join ', '))
+    Show-Tree $rocm6Dir $idx6
+    Show-Tree $rocm5Dir $idx5
+    Die 'Unexpected ZLUDA package layout (full listing above). Extracted trees are kept under tools\ for inspection.'
+}
 if (-not (Test-Path -LiteralPath $zludaDir)) { New-Item -ItemType Directory -Force -Path $zludaDir | Out-Null }
-Copy-Item -LiteralPath (Join-Path $zludaSrcDir '*') -Destination $zludaDir -Recurse -Force
-Info ("ZLUDA rocm6 extracted to {0}" -f $zludaDir)
+foreach ($k in ($payload.Keys | Sort-Object)) {
+    Copy-Item -LiteralPath $payload[$k] -Destination (Join-Path $zludaDir $k) -Force
+}
+Info ("ZLUDA payload: {0} libraries merged into {1} (rocm6 preferred, rocm5 fallback)" -f $payload.Count, $zludaDir)
 
 # advanced-lvl-up: for HIP SDK 6.x, replace nvcuda.dll with the one from the rocm5 build
-$nv6 = Join-Path $zludaDir 'nvcuda.dll'
-$nv5 = Get-ChildItem -LiteralPath $rocm5Dir -Recurse -Filter 'nvcuda.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($nv5) {
-    if (Test-Path -LiteralPath $nv6) { Copy-Item -LiteralPath $nv6 -Destination ($nv6 + '.zluda-rocm6.orig') -Force }
-    Copy-Item -LiteralPath $nv5.FullName -Destination $nv6 -Force
-    Info 'nvcuda.dll swapped for the rocm5 build (required for SDK 6.x per the gfx803 patch author)'
+if (-not $KeepRocm6Nvcuda) {
+    $nv5 = $idx5 | Where-Object { $_.Name -ieq 'nvcuda.dll' } | Select-Object -First 1
+    if ($nv5) {
+        $nv6target = Join-Path $zludaDir 'nvcuda.dll'
+        if (Test-Path -LiteralPath $nv6target) { Copy-Item -LiteralPath $nv6target -Destination ($nv6target + '.zluda-rocm6.orig') -Force }
+        Copy-Item -LiteralPath $nv5.FullName -Destination $nv6target -Force
+        Info 'nvcuda.dll swapped for the rocm5 build (required for SDK 6.x per the gfx803 patch author)'
+    } else {
+        Warn2 'nvcuda.dll not found in the rocm5 package - keeping the rocm6 one.'
+    }
 } else {
-    Warn2 'nvcuda.dll not found in the rocm5 package - leaving the rocm6 one in place.'
+    Info 'keeping the rocm6 nvcuda.dll (-KeepRocm6Nvcuda)'
 }
 
 # ---------- 7. patch torch\lib ----------

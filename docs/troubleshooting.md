@@ -23,6 +23,15 @@
 4. Антивирус не забанил `zluda.exe` / `nvcuda.dll`? (ZLUDA — DLL-инжектор, эвристика его не любит.) Добавьте папку `RX580-ComfyUI` в исключения.
 5. Драйвер свежий? AMD Adrenalin → Проверка обновлений. ZLUDA/HIP требуют AMD Adrenalin ≥ 23.x по факту.
 
+**`zluda` папка пустая / `[ERROR] ZLUDA DLL missing: ...\zluda\cublas.dll` / «zluda.exe not found»**
+Причина (v1 скрипта): ZLUDA-архивы не обязаны иметь классическую плоскую раскладку, а установщик
+копировал только папку «где лежит zluda.exe», молча оставляя `zluda\` пустым. Исправлено: payload
+собирается из обоих архивов по всему дереву (rocm6 в приоритете, rocm5 как fallback) с обязательной
+проверкой `zluda.exe / nvcuda.dll / cublas.dll / cusparse.dll / nvrtc.dll`.
+Если такое повторится — скрипт сам напечатает полный рекурсивный листинг обоих архивов;
+пришлите этот вывод. Распакованные деревья остаются в `<InstallRoot>\tools\zluda-rocm6` и `zluda-rocm5`
+(можно смотреть `tar -tf` по зипам там же). Переустановка быстрая: torch 2.9 ГБ берётся из pip-кэша.
+
 **`hipErrorNoBinaryForGpu` / `no binary image is available for the device`**
 rocBLAS не может найти ядра под gfx803. Скрипт `Patch-RocBLAS-gfx803.ps1` либо не запускался (нет прав/ошибка скачивания),
 либо библиотека заменена не в том ROCm. Запустите с явным `-RocmVersion 6.4`, проверьте маркер-файл, перезагрузите ПК.
