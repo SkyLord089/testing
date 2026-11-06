@@ -49,21 +49,24 @@ docs/
 
 ## Быстрый старт (Windows 11, PowerShell)
 
+По умолчанию всё ставится на `%USERPROFILE%\RX580-ComfyUI` (диск C:).
+Чтобы поставить **на D:**, добавьте `-InstallRoot 'D:\RX580-ComfyUI'` в шаги 1, 3 и 4.
+
 ```powershell
 git clone https://github.com/SkyLord089/testing.git
 cd testing\scripts
 
-# 1. Предстартовая проверка (ничего не меняет)
-.\Test-Prerequisites.ps1
+# 1. Предстартовая проверка (ничего не меняет); для D:: добавьте -InstallRoot D:\RX580-ComfyUI
+.\Test-Prerequisites.ps1 -InstallRoot D:\RX580-ComfyUI
 
 # 2. Патч rocBLAS под gfx803 — НУЖНЫ ПРАВА АДМИНИСТРАТОРА, HIP SDK 6.4 должен быть уже установлен
-.\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.4
+.\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.4   # HIP SDK всегда останется на C: (он в Program Files)
 
-# 3. Установка ComfyUI + torch 2.7.0+cu118 + ZLUDA и патч torch\lib
-.\Install-ComfyUI-RX580.ps1
+# 3. Установка ComfyUI + torch 2.7.0+cu118 + ZLUDA и патч torch\lib — сюда же уйдёт venv, модели, output
+.\Install-ComfyUI-RX580.ps1 -InstallRoot D:\RX580-ComfyUI
 
-# 4. Проверка
-.\Verify-Setup.ps1
+# 4. Проверка (укажите тот же InstallRoot)
+.\Verify-Setup.ps1 -InstallRoot D:\RX580-ComfyUI
 ```
 
 Подробности, откаты и решение типичных проблем — в [docs/install_guide.md](docs/install_guide.md)

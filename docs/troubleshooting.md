@@ -1,5 +1,9 @@
 # Troubleshooting / типичные ошибки
 
+> Везде ниже `%USERPROFILE%\RX580-ComfyUI` — это InstallRoot по умолчанию.
+> Если ставили на D: (`-InstallRoot D:\RX580-ComfyUI`), подставляйте `D:\RX580-ComfyUI`.
+
+
 ## Установка и запуск
 
 **`python` открывает Microsoft Store**

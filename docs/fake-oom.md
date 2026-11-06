@@ -72,8 +72,8 @@ ComfyUI with: --disable-cuda-malloc"* (`main.py: cuda_malloc_warning`).
 5. `--lowvram` / `--novram` — если 8 ГБ реально впритык (уже не fake OOM, а честный).
 6. **Полный откат на torch 2.2.1+cu118** (то, что пинует ComfyUI-Zluda — самый скучный и проверенный вариант):
    ```powershell
-   cd $env:USERPROFILE\RX580-ComfyUI\testing\scripts
-   .\Install-ComfyUI-RX580.ps1 -TorchVersion 2.2.1 -VisionVersion 0.17.1 -AudioVersion 2.2.1
+   # из папки клона testing\scripts (если ставили не на C: — пути ваши)
+   .\Install-ComfyUI-RX580.ps1 -InstallRoot D:\RX580-ComfyUI -TorchVersion 2.2.1 -VisionVersion 0.17.1 -AudioVersion 2.2.1
    ```
 
 ## Диагностика

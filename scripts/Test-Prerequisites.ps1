@@ -2,11 +2,14 @@
 <#
 .SYNOPSIS
   Read-only preflight check for the RX 580 + ComfyUI setup. Changes nothing.
+.PARAMETER InstallRoot
+  Target install root (same as in Install-ComfyUI-RX580.ps1). Used only to check
+  free space on the right drive, e.g. -InstallRoot 'D:\RX580-ComfyUI'.
 .EXAMPLE
-  .\Test-Prerequisites.ps1
+  .\Test-Prerequisites.ps1 -InstallRoot D:\RX580-ComfyUI
 #>
 [CmdletBinding()]
-param()
+param([string]$InstallRoot)
 
 $ErrorActionPreference = 'Continue'
 $script:Fails = 0
@@ -116,12 +119,20 @@ try {
 
 Section 'Disk space'
 try {
-    $drive = Get-PSDrive -Name (($env:SystemDrive).TrimEnd(':'))
+    $targetDrive = $null
+    if ($InstallRoot) {
+        $qualifier = Split-Path -Qualifier $InstallRoot -ErrorAction SilentlyContinue
+        if ($qualifier -match '^[A-Za-z]:') { $targetDrive = $qualifier.TrimEnd(':').ToUpper() }
+        else { Warn ("Could not parse a drive letter from '{0}' - checking system drive instead" -f $InstallRoot) }
+    }
+    if (-not $targetDrive) { $targetDrive = ($env:SystemDrive).TrimEnd(':') }
+    $drive = Get-PSDrive -Name $targetDrive -ErrorAction Stop
     $freeGB = [math]::Round($drive.Free / 1GB, 1)
-    Info ("Free on {0}: {1} GB" -f $env:SystemDrive, $freeGB)
-    if ($freeGB -lt 25) { Warn 'Less than 25 GB free - torch (~2.5 GB) + models + ComfyUI want more headroom' }
+    $where = $(if ($InstallRoot) { $InstallRoot } else { 'default %USERPROFILE%\RX580-ComfyUI' })
+    Info ("Target: {0}  |  free on {1}:\ : {2} GB" -f $where, $targetDrive, $freeGB)
+    if ($freeGB -lt 25) { Warn ("Less than 25 GB free on {0}: - torch (~2.5 GB) + models + ComfyUI want more headroom" -f $targetDrive) }
     else { Ok 'Enough free space for install + a couple of SD 1.5 checkpoints' }
-} catch { Warn "Could not query disk: $($_.Exception.Message)" }
+} catch { Warn "Could not query the target drive: $($_.Exception.Message)" }
 
 Section 'Summary'
 Write-Host ("  FAIL: {0}   WARN: {1}" -f $script:Fails, $script:Warns)

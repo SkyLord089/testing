@@ -13,7 +13,7 @@
 - Python **3.11** с python.org <https://www.python.org/downloads/windows/> — отмечайте **"Add Python to PATH"**.
   НЕ ставьте питон из Microsoft Store. 3.10–3.12 тоже подойдут.
 - Visual C++ Redistributable x64 — <https://aka.ms/vs/17/release/vc_redist.x64.exe> (обычно уже есть).
-- ~25 ГБ свободного места и **pagefile ≥ 16 ГБ** (Система → Дополнительные параметры → Быстродействие →
+- ~25 ГБ свободного места **на целевом диске** (по умолчанию — C:, можно целиком поставить на D:, см. раздел «Установка на диск D:» ниже) и **pagefile ≥ 16 ГБ** (Система → Дополнительные параметры → Быстродействие →
   Виртуальная память). На 8 ГБ VRAM без большого pagefile ComfyUI падает на VAE.
 - Клонируйте этот репозиторий: `git clone https://github.com/SkyLord089/testing.git`
 
@@ -22,6 +22,7 @@
 ```powershell
 cd testing\scripts
 .\Test-Prerequisites.ps1
+# для установки на D:: .\Test-Prerequisites.ps1 -InstallRoot D:\RX580-ComfyUI
 ```
 
 Скрипт **ничего не меняет**, только печатает отчёт: ОС, видеокарта(ы), драйвер, Python/Git,
@@ -62,6 +63,7 @@ cd testing\scripts
 
 ```powershell
 .\Install-ComfyUI-RX580.ps1
+# установка на D:: .\Install-ComfyUI-RX580.ps1 -InstallRoot D:\RX580-ComfyUI
 ```
 
 Параметры (все опциональны):
@@ -95,6 +97,7 @@ cd testing\scripts
 
 ```powershell
 .\Verify-Setup.ps1
+# для установки на D:: .\Verify-Setup.ps1 -InstallRoot D:\RX580-ComfyUI
 ```
 
 Ожидаемый вывод (пример):
@@ -110,9 +113,11 @@ rocBLAS patch marker: found (...)
 
 ```cmd
 %USERPROFILE%\RX580-ComfyUI\run-comfyui.bat
+REM если ставили на D::  D:\RX580-ComfyUI\run-comfyui.bat
 ```
 
-Либо из папки: `…\RX580-ComfyUI\zluda\zluda.exe -- …\ComfyUI\venv\Scripts\python.exe main.py --force-fp16`.
+Либо из папки: `…\RX580-ComfyUI\zluda\zluda.exe -- …\ComfyUI\venv\Scripts\python.exe main.py --force-fp16`
+(где `…` — ваш InstallRoot, например `D:\RX580-ComfyUI`).
 Откроется `http://127.0.0.1:8188`.
 
 Первый запуск — **10–30 минут компиляции ядер**, это норма (см. architecture.md).
@@ -132,18 +137,51 @@ rocBLAS patch marker: found (...)
 Для старта на RX 580 берите **SD 1.5** (`sd_xl` — только lowvram; FLUX — только GGUF Q3/Q4).
 Хороший тест — SD 1.5, 512×512, 20–25 шагов, Euler a.
 
+## Установка на диск D: (вместо C:)
+
+Всё, кроме HIP SDK, штатно переносится на любой диск **одной опцией** `-InstallRoot`:
+
+```powershell
+.\Test-Prerequisites.ps1 -InstallRoot D:\RX580-ComfyUI
+.\Install-ComfyUI-RX580.ps1 -InstallRoot D:\RX580-ComfyUI
+.\Verify-Setup.ps1 -InstallRoot D:\RX580-ComfyUI
+# запуск: D:\RX580-ComfyUI\run-comfyui.bat
+```
+
+Что окажется на D: (и очень кстати для тяжёлых SDXL/FLUX-чекпоинтов, они по 6–12 ГБ):
+
+- `D:\RX580-ComfyUI\ComfyUI` — сам ComfyUI, venv (включая torch ~2.5 ГБ)
+- `D:\RX580-ComfyUI\zluda` — ZLUDA и её DLL
+- `D:\RX580-ComfyUI\ComfyUI\models` — модели, `input`, `output`, `temp`
+- `D:\RX580-ComfyUI\tools` — скачанные зипы ZLUDA и `patch-manifest.txt`
+
+Что **останется на C:** (это нормально и не обходится):
+
+- **HIP SDK** — ставится AMD, всегда в `C:\Program Files\AMD\ROCm\6.4`, патч rocBLAS тоже применяется там (шаг 2); на скорость/расположение ComfyUI это не влияет
+- сам **Python** и **Git** — ставятся с python.org / git-scm.com куда вы скажете (для минимизации C: можно поставить их тоже на D:, но чаще они занимают < 500 МБ)
+- **pagefile** — Система → Виртуальная память: можно перенести/разделить на D:, на RX 580 с 8 ГБ VRAM это даже полезнее (держите суммарно ≥ 16 ГБ)
+- `%TEMP%` — временные мелкие файлы (~7 МБ для патча), переносить смысла нет
+
+Нюансы:
+
+- Диск D: должен быть NTFS. Проверить свободно ≥ 25 ГБ: `.\Test-Prerequisites.ps1 -InstallRoot D:\RX580-ComfyUI`.
+- `run-comfyui.bat` содержит абсолютные пути. Если потом перевезёте папку в другое место —
+  просто поправьте две строки (`ZLUDA_DIR` и `COMFY_DIR`) в `run-comfyui.bat`, переустанавливать не нужно.
+- `git clone testing.git` можно держать где угодно (например, `D:\tools\testing`) — на итоговую установку
+  влияют только флаги `-InstallRoot`, и скрипты не завязаны на то, откуда они запущены.
+
 ## 7. Полный откат
 
 ```powershell
-# Удалить всё ComfyUI/ZLUDA
-rmdir /s /q "%USERPROFILE%\RX580-ComfyUI"
+# Удалить всё ComfyUI/ZLUDA (подставьте свой InstallRoot; пример для D:)
+rmdir /s /q "D:\RX580-ComfyUI"
 
 # Вернуть rocBLAS (админ)
 cd testing\scripts
 .\Restore-RocBLAS.ps1 -RocmVersion 6.4
 
 # Патч torch\lib откатывается вручную: *.orig → исходные имена
-# (список затронутых файлов — в …\RX580-ComfyUI\tools\patch-manifest.txt)
+# (список затронутых файлов — в <InstallRoot>\tools\patch-manifest.txt)
 ```
 
 HIP SDK с системы не удаляем — он ставился штатным деинсталлятором AMD и патч rocBLAS откатывается шагом выше.
