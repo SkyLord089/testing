@@ -77,17 +77,44 @@ function Info([string]$t) {
 }
 
 # ---------- типы для P/Invoke ----------
-# Отдельный заход: Add-Type может ругаться, если тип уже объявлен в сессии.
+# Одним куском исходника (-TypeDefinition), а не -MemberDefinition:
+# так делегаты объявлены на уровне namespace и не нужно ссылаться на
+# вложенные типы через '+'. Плюс это одна компиляция вместо двух.
+#
+# Почему делегаты объявлены явно, а не через [Func[int,int]]:
+# PowerShell не умеет передать в GetDelegateForFunctionPointer открытый
+# generic-тип - падает с "The specified Type must not be a generic type
+# definition". Сигнатуры приходится описывать самому.
 if (-not ('HipProbe.Native' -as [type])) {
-    Add-Type -Namespace 'HipProbe' -Name 'Native' -MemberDefinition @'
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
-    public static extern IntPtr LoadLibraryA(string lpFileName);
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
 
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
-    public static extern IntPtr GetProcAddress(IntPtr hModule, string lpProcName);
+namespace HipProbe
+{
+    public static class Native
+    {
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
+        public static extern IntPtr LoadLibraryA(string lpFileName);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    public static extern bool FreeLibrary(IntPtr hModule);
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
+        public static extern IntPtr GetProcAddress(IntPtr hModule, string lpProcName);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool FreeLibrary(IntPtr hModule);
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int HipInit(uint flags);
+
+    // count передаём указателем: так не зависим от обработки out-параметров
+    // в PowerShell.
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int HipGetDeviceCount(IntPtr count);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int HipGetDeviceProperties(IntPtr prop, int deviceId);
+}
 '@ -ErrorAction Stop
 }
 
@@ -217,8 +244,10 @@ foreach ($d in $cand) {
     else { Warn 'экспорта hipGetDeviceProperties (без R0600) нет' 'Сборка ZLUDA windows-rocm5-amd64 упадёт при загрузке с WinError 127. Взять nvcuda от rocm5 на этой HIP не получится.' }
 
     # ---------- hipInit ----------
-    $fnHipInit = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($pInit, [Func[int, int]])
-    $rc = $fnHipInit.Invoke(0)
+    $fnHipInit = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($pInit, [HipProbe.HipInit])
+    $rc = -1
+    try { $rc = $fnHipInit.Invoke([uint32]0) }
+    catch { Fail ("hipInit: вызов упал - {0}" -f $_.Exception.Message); continue }
     if ($rc -eq 0) {
         Ok 'hipInit(0) = 0'
     } else {
@@ -227,15 +256,26 @@ foreach ($d in $cand) {
     }
 
     # ---------- hipGetDeviceCount ----------
+    $fnCount = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($pCount, [HipProbe.HipGetDeviceCount])
     $pCountPtr = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
     [Runtime.InteropServices.Marshal]::WriteInt32($pCountPtr, 0)
-    $fnCount = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($pCount, [Func[IntPtr, int]])
-    $rc = $fnCount.Invoke($pCountPtr)
-    $devCount = [Runtime.InteropServices.Marshal]::ReadInt32($pCountPtr)
+    $devCount = 0
+    $rc = -1
+    $callFailed = $false
+    try {
+        $rc = $fnCount.Invoke($pCountPtr)
+        $devCount = [Runtime.InteropServices.Marshal]::ReadInt32($pCountPtr)
+    } catch {
+        $rc = -1
+        $callFailed = $true
+        Fail ("hipGetDeviceCount: вызов упал - {0}" -f $_.Exception.Message)
+    }
     [Runtime.InteropServices.Marshal]::FreeHGlobal($pCountPtr)
 
     Write-Host ''
-    if ($rc -ne 0) {
+    if ($callFailed) {
+        Info 'Вызов не состоялся - это ошибка скрипта или разрядности, не ответ HIP.'
+    } elseif ($rc -ne 0) {
         Fail ("hipGetDeviceCount = {0} [{1}]" -f $rc, (Get-HipErrorText $rc))
         Info 'Это ТА ЖЕ ошибка, что в hipInfo.exe и в zluda/src/impl/mod.rs::init().'
         Info 'Значит устройство не доходит до HIP - виноват драйвер или окружение, а не torch и не подмена DLL.'
@@ -255,8 +295,9 @@ foreach ($d in $cand) {
         # между версиями менялись, поэтому имя читаем, а остальное не разбираем.
         $sz = 2048
         $propPtr = [Runtime.InteropServices.Marshal]::AllocHGlobal($sz)
-        $fnProp = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($pR0600, [Func[IntPtr, int, int]])
-        $rc2 = $fnProp.Invoke($propPtr, 0)
+        $fnProp = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($pR0600, [HipProbe.HipGetDeviceProperties])
+        $rc2 = -1
+        try { $rc2 = $fnProp.Invoke($propPtr, 0) } catch { }
         if ($rc2 -eq 0) {
             $name = [Runtime.InteropServices.Marshal]::PtrToStringAnsi($propPtr)
             if ($name) { Ok ("устройство 0: {0}" -f $name) }
