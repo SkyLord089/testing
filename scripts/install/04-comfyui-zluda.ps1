@@ -32,7 +32,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$InstallDir = 'C:\AI\ComfyUI-Zluda',
+    # по умолчанию - рядом с китом, то есть на том же диске (C: часто занят)
+    [string]$InstallDir = '',
     [ValidateSet('target', 'safe')]
     [string]$Profile = 'target',
     [string]$PythonExe = '',
@@ -46,8 +47,13 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+if (-not $InstallDir) { $InstallDir = Join-Path $repoRoot 'ComfyUI-Zluda' }
 $patchScript = Join-Path $repoRoot 'scripts\patch-torch-zluda.ps1'
 $launcher = Join-Path $repoRoot 'scripts\comfyui-user.bat'
+
+# кэши pip и HF - рядом с установкой, чтобы не забивать C:
+$cacheRoot = Join-Path (Split-Path $InstallDir -Parent) '_cache'
+if (-not (Test-Path $cacheRoot)) { New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null }
 
 function Header([string]$t) {
     Write-Host ''
@@ -119,7 +125,12 @@ if (-not (Test-Path $venvPy)) {
 } else {
     Write-Host '  venv уже существует.' -ForegroundColor DarkGray
 }
-& $venvPy -m pip install --upgrade pip --quiet
+# pip-кэш на диск установки: иначе ~3 ГБ колес осядут в C:\Users\...\AppData\Local\pip
+$pipCache = Join-Path $cacheRoot 'pip'
+if (-not (Test-Path $pipCache)) { New-Item -ItemType Directory -Path $pipCache -Force | Out-Null }
+Write-Host ("  pip cache: {0}" -f $pipCache) -ForegroundColor DarkGray
+
+& $venvPy -m pip install --upgrade pip --quiet --cache-dir "$pipCache"
 Write-Host ("  pip: " + (& $venvPy -m pip --version)) -ForegroundColor Green
 
 # ---- torch ----
@@ -129,7 +140,7 @@ if ($torchVersion -match '^2\.7\.0\+cu118') {
     Write-Host "  Уже установлен: $torchVersion" -ForegroundColor DarkGray
 } else {
     & $venvPy -m pip uninstall torch torchvision torchaudio -y --quiet
-    & $venvPy -m pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu118
+    & $venvPy -m pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu118 --cache-dir "$pipCache"
     if ($LASTEXITCODE -ne 0) { throw 'Установка torch не удалась. Проверь сеть/прокси.' }
 }
 Write-Host ("  torch: " + (& $venvPy -c "import torch;print(torch.__version__, torch.version.cuda)")) -ForegroundColor Green
@@ -139,12 +150,12 @@ if (-not $SkipRequirements) {
     Step 'requirements.txt (включая comfy-aimdo, comfy-kitchen, frontend)'
     Push-Location $InstallDir
     try {
-        & $venvPy -m pip install -r requirements.txt
+        & $venvPy -m pip install -r requirements.txt --cache-dir "$pipCache"
         if ($LASTEXITCODE -ne 0) { Write-Host '  ВНИМАНИЕ: requirements завершились с ошибкой - часть пакетов может отсутствовать' -ForegroundColor Yellow }
     } finally { Pop-Location }
 
     Step 'Фиксы версий'
-    & $venvPy -m pip install --quiet "numpy==1.26.4" "onnxruntime"
+    & $venvPy -m pip install --quiet "numpy==1.26.4" "onnxruntime" --cache-dir "$pipCache"
 }
 
 # ---- zluda ----

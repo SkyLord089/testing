@@ -28,6 +28,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-encoding.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\install\00-all.ps1 -Profile target
 ```
 
+Место на дисках: **HIP SDK всегда встаёт на `C:`** (~4 ГБ, выбора нет), всё
+остальное — ComfyUI, torch, ZLUDA, архивы, кэши — скрипты кладут рядом с китом,
+то есть на его диск. Требования: `C:` ~9 ГБ, диск ComfyUI ~35 ГБ.
+Подробно — [`docs/08-install-fresh.md` → раздел 8](docs/08-install-fresh.md#8-раскладка-по-дискам-что-можно-унести-с-c).
+
 > Если вместо таблицы проверок вы увидели `Unexpected token` и строки вида
 > `РћР¶РёРґР°РµС‚СЃСЏ` — это кодировка, а не ошибка в скрипте. Причина и лечение:
 > [`docs/08-install-fresh.md` → раздел 7](docs/08-install-fresh.md#7-кодировки-почему-скрипты-иногда-падают-с-unexpected-token).

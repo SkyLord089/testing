@@ -25,13 +25,18 @@
 param(
     [string]$Stage = 'all',
     [ValidateSet('target', 'safe')][string]$Profile = 'target',
-    [string]$InstallDir = 'C:\AI\ComfyUI-Zluda',
+    [string]$InstallDir = '',
     [string]$RocblasArchive = '',
     [switch]$NonInteractive
 )
 
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
+
+if (-not $InstallDir) {
+    $kitRoot = (Resolve-Path (Join-Path $here '..\..')).Path
+    $InstallDir = Join-Path $kitRoot 'ComfyUI-Zluda'
+}
 $hipVer = if ($Profile -eq 'target') { '6.4.2' } else { '6.2.4' }
 
 function Banner([string]$t) {
@@ -60,6 +65,11 @@ function Run([string]$script, [hashtable]$argsTbl = @{}) {
 
 Banner "УСТАНОВКА ComfyUI-ZLUDА НА RX 580  (профиль: $Profile, HIP $hipVer)"
 Write-Host @"
+  Раскладка:
+    ComfyUI + torch + ZLUDA : $InstallDir
+    Архивы (setup/ядра)     : $((Resolve-Path (Join-Path $here '..\..')).Path)\downloads
+    HIP SDK (без выбора)    : C:\Program Files\AMD\ROCm
+
   Этапы:
     1. Проверка окружения         (авто)
     2. Драйвер AMD                (ручной, скрипт открывает страницу)

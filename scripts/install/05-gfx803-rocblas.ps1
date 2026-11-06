@@ -3,37 +3,62 @@
     Этап 5: установка ядер rocBLAS для gfx803 (Polaris) - главный блокер.
 
 .DESCRIPTION
-    Работает с архивами .7z / .zip. Сначала -ListOnly, чтобы увидеть содержимое.
-    При установке:
-      * делает бэкап C:\Program Files\AMD\ROCm\<ver>\bin\rocblas,
-      * копирует все файлы с gfx803 в имени,
-      * по флагу -WithRocblasDll кладёт и rocblas.dll из архива,
-      * проверяет, что появились ядра,
-      * по флагу -Verify запускает GEMM-тест из verify-torch27.py.
+    Работает с .7z / .zip из community-сборок gfx803.
+
+    ЧТО КОПИРУЕТСЯ (проверено на rocm.gfx800-gfx900-...-5.7.1-and-6.2.4.7z):
+
+      1) файлы с 'gfx803' в имени        - 47 .hsaco + 5 .dat + 4 .co
+      2) файлы 'fallback' БЕЗ архитектуры - 46 .dat
+         ЭТО КРИТИЧНО: это индексы ядер Tensile. Без них rocBLAS не
+         находит ни одного решения, даже когда .hsaco на месте.
+         Ошибка выглядит как "Cannot read TensileLibrary" или мусор.
+      3) TensileManifest.txt (если есть и если -WithManifest)
+      4) rocblas.dll - ТОЛЬКО по флагу -WithRocblasDll (см. предупреждение)
+
+    ЧЕГО НЕ ДЕЛАЕТ:
+      * не копирует .hsaco/.dat для gfx900 (Vega) - они не наши
+      * не трогает rocblas64.dll и прочие dll
+      * не перезаписывает TensileLibrary_lazy.dat, если он уже есть от 6.4
+
+    ВАЖНО ПРО -WithRocblasDll:
+      В архиве лежит rocblas.dll версии 6.2.4 (проверяется по строкам PE).
+      Если у вас HIP SDK 6.4, эта DLL старше остального SDK и может
+      конфликтовать с amdhip64.dll 6.4. На 6.4 сначала пробуйте БЕЗ него.
+      С ним - только если без него rocBLAS падает на загрузке.
 
 .PARAMETER Archive
-    Путь к .7z (например rocm.gfx800-gfx900-for.hip.sdk.5.7.1-and-6.2.4.7z) или .zip.
+    Путь к .7z или .zip.
 
 .PARAMETER HipVersion
-    6.4.2 | 6.2.4
+    6.4.2 | 6.2.4 - в какой SDK ставить.
 
 .PARAMETER ListOnly
-    Только показать содержимое архива.
+    Только показать содержимое и классификацию файлов.
 
 .PARAMETER Clean
-    Перед установкой очистить library от всех TensileLibrary*/Kernels* (полная замена, а не поверх).
+    Перед установкой удалить все TensileLibrary*/Kernels*/.hsaco/.co/.dat
+    из library - полная замена набора, а не поверх.
 
 .PARAMETER WithRocblasDll
-    Копировать rocblas.dll из архива (по умолчанию НЕТ - родной DLL остаётся).
+    Копировать rocblas.dll из архива (с бэкапом родного).
+
+.PARAMETER WithManifest
+    Копировать TensileManifest.txt (по умолчанию да, если файл есть).
 
 .PARAMETER Venv
-    Путь к venv для -Verify.
+    Путь к venv - для -Verify.
+
+.PARAMETER Verify
+    После установки прогнать GEMM-тест.
 
 .EXAMPLE
-    .\05-gfx803-rocblas.ps1 -HipVersion 6.4.2 -Archive .\downloads\rocm.gfx800-gfx900-for.hip.sdk.5.7.1-and-6.2.4.7z -ListOnly
+    .\05-gfx803-rocblas.ps1 -Archive .\downloads\rocm.gfx800.7z -HipVersion 6.4.2 -ListOnly
 
 .EXAMPLE
-    .\05-gfx803-rocblas.ps1 -HipVersion 6.4.2 -Archive .\downloads\rocm.gfx800-gfx900-for.hip.sdk.5.7.1-and-6.2.4.7z -Verify
+    .\05-gfx803-rocblas.ps1 -Archive .\downloads\rocm.gfx800.7z -HipVersion 6.4.2 -Clean
+
+.EXAMPLE
+    .\05-gfx803-rocblas.ps1 -Archive .\downloads\rocm.gfx800.7z -HipVersion 6.2.4 -Clean -WithRocblasDll
 #>
 [CmdletBinding()]
 param(
@@ -42,6 +67,7 @@ param(
     [switch]$ListOnly,
     [switch]$Clean,
     [switch]$WithRocblasDll,
+    [switch]$WithManifest,
     [string]$Venv = '',
     [switch]$Verify
 )
@@ -58,15 +84,16 @@ $hipDirs = @{
 
 function Header([string]$t) {
     Write-Host ''
-    Write-Host ('─' * 70) -ForegroundColor DarkCyan
+    Write-Host ('-' * 70) -ForegroundColor DarkCyan
     Write-Host "  $t" -ForegroundColor Cyan
-    Write-Host ('─' * 70) -ForegroundColor DarkCyan
+    Write-Host ('-' * 70) -ForegroundColor DarkCyan
 }
 
-if (-not $hipDirs.ContainsKey($HipVersion)) { throw "HipVersion: 6.4.2 или 6.2.4" }
+if (-not $hipDirs.ContainsKey($HipVersion)) { throw 'HipVersion: 6.4.2 или 6.2.4' }
 $hipDir = $hipDirs[$HipVersion]
 $binDir = Join-Path $hipDir 'bin'
 $libraryDir = Join-Path $binDir 'rocblas\library'
+$rocDir = Join-Path $binDir 'rocblas'
 
 if (-not (Test-Path $libraryDir)) { throw "Не найден $libraryDir - HIP SDK $HipVersion установлен?" }
 if (-not (Test-Path $Archive)) { throw "Нет файла $Archive" }
@@ -75,11 +102,13 @@ $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 if (-not $isAdmin -and -not $ListOnly) { throw 'Для записи в Program Files нужны права администратора.' }
 
 Header "ЭТАП 5: ЯДРА rocBLAS gfx803  ->  HIP $HipVersion"
+Write-Host ("  Архив:   {0}" -f (Resolve-Path $Archive).Path) -ForegroundColor DarkGray
+Write-Host ("  Цель:    {0}" -f $libraryDir) -ForegroundColor DarkGray
 
-# ---- распаковка во временную папку ----
+# ---------- распаковка ----------
 $tmp = Join-Path $env:TEMP ("rocblas-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
-Write-Host "  Распаковка $Archive`n  ->  $tmp" -ForegroundColor White
+Write-Host ("  Распаковка во временный каталог: {0}" -f $tmp) -ForegroundColor White
 
 $is7z = $Archive -match '\.7z$'
 if ($is7z) {
@@ -92,7 +121,7 @@ if ($is7z) {
         }
     }
     if (-not $sevenZip) {
-        throw 'Нужен 7-Zip для .7z. Поставь https://www.7-zip.org/ или перепакуй архив в .zip'
+        throw 'Нужен 7-Zip для .7z. Поставь https://www.7-zip.org/ (или перепакуй архив в .zip)'
     }
     & "$sevenZip" x "$Archive" "-o$tmp" -y | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "7z вернул код $LASTEXITCODE" }
@@ -100,121 +129,200 @@ if ($is7z) {
     Expand-Archive -LiteralPath $Archive -DestinationPath $tmp -Force
 }
 
-$allFiles = Get-ChildItem $tmp -Recurse -File
+$allFiles = @(Get-ChildItem $tmp -Recurse -File)
 Write-Host ("  Файлов в архиве: {0}" -f $allFiles.Count) -ForegroundColor DarkGray
 
-# ---- показать структуру ----
+# ---------- классификация ----------
+# 1) наши архитектуры
+$gfx803 = @($allFiles | Where-Object { $_.Name -match 'gfx803' })
+# 2) общие индексы Tensile (fallback) - БЕЗ архитектуры в имени, но нужны
+$genericFallback = @($allFiles | Where-Object { $_.Name -match '_fallback\.dat$' -and $_.Name -notmatch 'gfx803|gfx900' })
+# 3) чужие архитектуры - не берём
+$otherArch = @($allFiles | Where-Object { $_.Name -match 'gfx(?!803)\d{3}' })
+# 4) DLL
+$dlls = @($allFiles | Where-Object { $_.Extension -eq '.dll' })
+# 5) манифест
+$manifest = @($allFiles | Where-Object { $_.Name -eq 'TensileManifest.txt' })
+
+$toCopy = @($gfx803 + $genericFallback)
+
+# ---------- показать ----------
 Header 'СОДЕРЖИМОЕ АРХИВА'
-$allFiles | Group-Object { Split-Path $_.DirectoryName -Leaf } | Sort-Object Name | ForEach-Object {
-    Write-Host ("  [{0}]  {1} файлов" -f $_.Name, $_.Count) -ForegroundColor White
-    $_.Group | Select-Object -First 12 | ForEach-Object { Write-Host ("     {0,-55} {1,10:N0}" -f $_.Name, $_.Length) -ForegroundColor DarkGray }
-    if ($_.Count -gt 12) { Write-Host ("     ... ещё {0}" -f ($_.Count - 12)) -ForegroundColor DarkGray }
+
+Write-Host ("  Всего файлов:                {0}" -f $allFiles.Count) -ForegroundColor White
+Write-Host ("  [1] gfx803 (наши):           {0}   <- копируем" -f $gfx803.Count) -ForegroundColor Green
+Write-Host ("  [2] fallback .dat (общие):   {0}   <- копируем ОБЯЗАТЕЛЬНО" -f $genericFallback.Count) -ForegroundColor Green
+Write-Host ("  [3] другие архитектуры:      {0}   <- пропускаем" -f $otherArch.Count) -ForegroundColor DarkGray
+Write-Host ("  [4] DLL в архиве:            {0}" -f $dlls.Count) -ForegroundColor Yellow
+Write-Host ("  [5] TensileManifest.txt:     {0}" -f $manifest.Count) -ForegroundColor DarkGray
+
+Write-Host ''
+Write-Host '  Наши файлы (первые 12):' -ForegroundColor White
+$gfx803 | Select-Object -First 12 | ForEach-Object { Write-Host ("     {0,-72} {1,10:N0}" -f $_.Name, $_.Length) -ForegroundColor DarkGray }
+if ($gfx803.Count -gt 12) { Write-Host ("     ... ещё {0}" -f ($gfx803.Count - 12)) -ForegroundColor DarkGray }
+
+Write-Host ''
+Write-Host '  Общие индексы Tensile (первые 6 из нужных):' -ForegroundColor White
+$genericFallback | Select-Object -First 6 | ForEach-Object { Write-Host ("     {0,-72} {1,10:N0}" -f $_.Name, $_.Length) -ForegroundColor DarkGray }
+if ($genericFallback.Count -gt 6) { Write-Host ("     ... ещё {0}" -f ($genericFallback.Count - 6)) -ForegroundColor DarkGray }
+
+if ($dlls.Count -gt 0) {
+    Write-Host ''
+    Write-Host '  DLL в архиве:' -ForegroundColor Yellow
+    foreach ($d in $dlls) {
+        Write-Host ("     {0,-72} {1,10:N0}" -f $d.Name, $d.Length) -ForegroundColor Yellow
+    }
+    Write-Host '     -> по умолчанию НЕ копируется: версия может быть старше вашего SDK.' -ForegroundColor DarkGray
+    Write-Host '     -> -WithRocblasDll, если без неё rocBLAS не грузится.' -ForegroundColor DarkGray
 }
 
-$gfxFiles = $allFiles | Where-Object { $_.Name -match 'gfx803' -or $_.FullName -match '\\gfx803\\' }
-Write-Host ''
-if ($gfxFiles) {
-    Write-Host ("  Найдено файлов gfx803: {0}" -f $gfxFiles.Count) -ForegroundColor Green
-} else {
-    Write-Host '  В архиве НЕТ файлов gfx803 - это не тот архив.' -ForegroundColor Red
-    Write-Host '  Нужен: rocm.gfx800-gfx900-for.hip.sdk.*.7z (advanced-lvl-up) или rocBLAS-HIP6.2.4.7z (likelovewant).' -ForegroundColor Red
-    if ($ListOnly) {
-        Write-Host ''
-        Write-Host '  Это не тот архив. Скачать правильный:' -ForegroundColor Yellow
-        Write-Host '    https://github.com/advanced-lvl-up/Rx470-Vega10-Rx580-gfx803-gfx900-fix-AMD-GPU/releases' -ForegroundColor Yellow
-        Remove-Item $tmp -Recurse -Force
-        return
-    }
+$gfxDats = @($gfx803 | Where-Object { $_.Extension -eq '.dat' -or $_.Extension -eq '.co' })
+if ($gfxDats.Count -eq 0) {
+    Write-Host ''
+    Write-Host '  ВНИМАНИЕ: в архиве нет .dat/.co для gfx803 - такой набор не заработает.' -ForegroundColor Red
+    if ($ListOnly) { Remove-Item $tmp -Recurse -Force; return }
 }
 
 if ($ListOnly) {
-    Write-Host ''
-    Write-Host '  ПОДСКАЗКА' -ForegroundColor Cyan
+    Header 'ПОДСКАЗКА'
     Write-Host @"
-  Дальше запусти без -ListOnly, чтобы установить:
+  Установка (с бэкапом, полная замена набора):
 
-    .\05-gfx803-rocblas.ps1 -HipVersion $HipVersion -Archive $Archive
+    .\05-gfx803-rocblas.ps1 -HipVersion $HipVersion -Archive "$Archive" -Clean
 
-  Флаги:
-    -Clean          - полностью заменить TensileLibrary*/Kernels* (рекомендую для чистой установки)
-    -WithRocblasDll - положить rocblas.dll из архива (только если HIP той же версии, что и архив!)
-    -Verify -Venv C:\AI\ComfyUI-Zluda\venv - сразу прогнать GEMM-тест
+  Если после этого rocBLAS не грузится (ошибка загрузки DLL, а не ядер):
+
+    .\05-gfx803-rocblas.ps1 -HipVersion $HipVersion -Archive "$Archive" -Clean -WithRocblasDll
+
+  Проверка GEMM:
+
+    .\05-gfx803-rocblas.ps1 -HipVersion $HipVersion -Archive "$Archive" -Verify -Venv <путь к venv>
+
+  Помни: rocblas.dll в архиве - версии 6.2.4. На HIP 6.4 сначала пробуй без неё.
 "@ -ForegroundColor Gray
     Remove-Item $tmp -Recurse -Force
     return
 }
 
-# ---- бэкап ----
+# ---------- бэкап ----------
 Header 'БЭКАП И УСТАНОВКА'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$rocDir = Join-Path $binDir 'rocblas'
 $bak = "$rocDir.bak-$stamp"
 Copy-Item $rocDir $bak -Recurse -Force
-Write-Host "  Бэкап: $bak" -ForegroundColor Green
+$bakSizeMB = [math]::Round(((Get-ChildItem $bak -Recurse -File | Measure-Object Length -Sum).Sum / 1MB), 1)
+Write-Host ("  Бэкап: {0}  ({1} МБ)" -f $bak, $bakSizeMB) -ForegroundColor Green
+Write-Host '  Откат: Rename-Item (новый rocblas) -NewName rocblas.broken; Rename-Item (бэкап) -NewName rocblas' -ForegroundColor DarkGray
 
 if ($Clean) {
-    $old = Get-ChildItem $libraryDir -File | Where-Object { $_.Name -match 'TensileLibrary|Kernels|\.hsaco$|\.co$' }
-    Write-Host ("  -Clean: удаляю {0} старых файлов ядер" -f $old.Count) -ForegroundColor Yellow
+    $old = @(Get-ChildItem $libraryDir -File | Where-Object { $_.Name -match 'TensileLibrary|Kernels|^rocblas-bench' -or $_.Extension -in '.dat', '.hsaco', '.co' })
+    Write-Host ("  -Clean: удаляю {0} файлов старых ядер" -f $old.Count) -ForegroundColor Yellow
     $old | Remove-Item -Force
 }
 
-# ---- копирование ----
+# ---------- копирование ----------
 $copied = 0
-foreach ($f in $gfxFiles) {
+$skippedLazy = 0
+foreach ($f in $toCopy) {
+    # TensileLibrary_lazy.dat - общий для всех архитектур; не перезаписываем чужой от 6.4
+    if ($f.Name -eq 'TensileLibrary_lazy.dat') {
+        $existing = Join-Path $libraryDir $f.Name
+        if (Test-Path $existing) {
+            $skippedLazy++
+            Write-Host ("  [skip] {0} - уже есть ({1:N0} байт), не перезаписываю" -f $f.Name, (Get-Item $existing).Length) -ForegroundColor DarkYellow
+            continue
+        }
+    }
     Copy-Item $f.FullName (Join-Path $libraryDir $f.Name) -Force
     $copied++
 }
-Write-Host ("  Скопировано файлов gfx803: {0}" -f $copied) -ForegroundColor Green
+Write-Host ("  Скопировано: {0} файлов" -f $copied) -ForegroundColor Green
+if ($skippedLazy -gt 0) { Write-Host ("  Пропущено (уже было): {0}" -f $skippedLazy) -ForegroundColor DarkGray }
 
-# прочие полезные файлы (TensileLibrary.dat общего вида) - по желанию
-$generic = $allFiles | Where-Object { $_.Name -match '^TensileLibrary(_lazy)?\.(dat|yaml)$' }
-if ($generic) {
-    Write-Host ("  Общие TensileLibrary: {0} - НЕ копирую (могут конфликтовать с 6.4)" -f $generic.Count) -ForegroundColor DarkGray
+if ($WithManifest -and $manifest.Count -gt 0) {
+    $m = $manifest[0]
+    Copy-Item $m.FullName (Join-Path $libraryDir 'TensileManifest.txt') -Force
+    Write-Host '  TensileManifest.txt скопирован' -ForegroundColor Green
 }
 
 if ($WithRocblasDll) {
-    $dll = $allFiles | Where-Object { $_.Name -eq 'rocblas.dll' } | Select-Object -First 1
+    $dll = $dlls | Where-Object { $_.Name -eq 'rocblas.dll' } | Select-Object -First 1
     if ($dll) {
         $orig = Join-Path $binDir 'rocblas.dll'
         if (Test-Path $orig) { Copy-Item $orig (Join-Path $binDir "rocblas.dll.bak-$stamp") -Force }
         Copy-Item $dll.FullName $orig -Force
-        Write-Host "  rocblas.dll из архива установлен (бэкап рядом)." -ForegroundColor Yellow
-        Write-Host "  ВНИМАНИЕ: версия DLL из архива должна соответствовать версии HIP SDK!" -ForegroundColor Red
+        Write-Host ("  rocblas.dll из архива установлен ({0:N0} байт, бэкап рядом)" -f $dll.Length) -ForegroundColor Yellow
+        Write-Host '  ВНИМАНИЕ: это DLL от 6.2.4. Проверь, что rocBLAS грузится.' -ForegroundColor Red
+    } else {
+        Write-Host '  rocblas.dll в архиве не найдена - пропускаю' -ForegroundColor Yellow
     }
 }
 
 Remove-Item $tmp -Recurse -Force
 
-# ---- проверка ----
+# ---------- проверка ----------
 Header 'ПРОВЕРКА'
-$now = Get-ChildItem $libraryDir -File | Where-Object Name -match 'gfx803'
-$color = 'Red'
-if ($now.Count -gt 0) { $color = 'Green' }
-Write-Host ("  В {0} файлов с gfx803: {1}" -f $libraryDir, $now.Count) -ForegroundColor $color
-$now | Select-Object -First 20 | ForEach-Object { Write-Host ("     {0,-55} {1,12:N0}" -f $_.Name, $_.Length) -ForegroundColor DarkGray }
+$nowGfx = @(Get-ChildItem $libraryDir -File | Where-Object Name -match 'gfx803')
+$nowFallback = @(Get-ChildItem $libraryDir -File | Where-Object { $_.Name -match '_fallback\.dat$' -and $_.Name -notmatch 'gfx803|gfx900' })
 
-$archs = Get-ChildItem $libraryDir -File | ForEach-Object { if ($_.Name -match '(gfx[0-9a-f]{4})') { $matches[1] } } | Sort-Object -Unique
+$color = 'Red'
+if ($nowGfx.Count -gt 0) { $color = 'Green' }
+Write-Host ("  Файлов с gfx803 в library:            {0}" -f $nowGfx.Count) -ForegroundColor $color
+
+$color2 = 'Red'
+if ($nowFallback.Count -gt 0) { $color2 = 'Green' }
+Write-Host ("  Общих fallback .dat (индексы ядер):  {0}" -f $nowFallback.Count) -ForegroundColor $color2
+
+if ($nowGfx.Count -eq 0) {
+    Write-Host ''
+    Write-Host '  ПРОБЛЕМА: ядра gfx803 не появились. Скопируй вручную из архива:' -ForegroundColor Red
+    Write-Host ('    x файлов в {0}' -f $libraryDir) -ForegroundColor Red
+}
+if ($nowFallback.Count -eq 0) {
+    Write-Host ''
+    Write-Host '  ПРОБЛЕМА: нет ни одного *_fallback.dat' -ForegroundColor Red
+    Write-Host '  Без них rocBLAS не найдёт ядра, даже если .hsaco на месте.' -ForegroundColor Red
+    Write-Host '  Возьми другой архив (в правильном их 46).' -ForegroundColor Red
+}
+
+$archs = @(Get-ChildItem $libraryDir -File | ForEach-Object { if ($_.Name -match '(gfx[0-9a-f]{4})') { $matches[1] } } | Sort-Object -Unique)
 Write-Host ("  Архитектуры в library: {0}" -f ($archs -join ', ')) -ForegroundColor DarkGray
 
 Write-Host ''
-Write-Host 'ВАЖНО: перезагрузись, чтобы rocBLAS подхватил новые ядра (DLL держится процессом).' -ForegroundColor Yellow
+Write-Host '  ВАЖНО: закрой все процессы, которые держат rocBLAS (ComfyUI, python),' -ForegroundColor Yellow
+Write-Host '  иначе DLL останется старой в памяти. Новый набор подхватится после перезапуска.' -ForegroundColor Yellow
 
-if ($Verify -and $Venv) {
+# ---------- GEMM ----------
+if ($Verify) {
     Header 'GEMM-ТЕСТ'
-    $py = Join-Path $Venv 'Scripts\python.exe'
-    $verify = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path 'scripts\verify-torch27.py'
-    if ((Test-Path $py) -and (Test-Path $verify)) {
-        & $py $verify --sections env,gemm
+    if (-not $Venv) {
+        $guess = @()
+        $guess += Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path 'ComfyUI-Zluda\venv'
+        $guess += 'C:\AI\ComfyUI-Zluda\venv'
+        foreach ($g in $guess) { if (Test-Path (Join-Path $g 'Scripts\python.exe')) { $Venv = $g; break } }
+    }
+    if (-not $Venv) {
+        Write-Host '  Не нашёл venv. Укажи -Venv "D:\Apps\rx-580-comfyui\ComfyUI-Zluda\venv"' -ForegroundColor Yellow
     } else {
-        Write-Host "  Не найден python ($py) или verify-скрипт ($verify)" -ForegroundColor Yellow
+        $py = Join-Path $Venv 'Scripts\python.exe'
+        $verifyScript = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path 'scripts\verify-torch27.py'
+        Write-Host ("  venv: {0}" -f $Venv) -ForegroundColor DarkGray
+        if ((Test-Path $py) -and (Test-Path $verifyScript)) {
+            # HIP в PATH
+            $env:PATH = "$binDir;$libraryDir;$env:PATH"
+            & $py $verifyScript --sections env,gemm
+        } else {
+            Write-Host '  Нет python в venv или нет verify-torch27.py' -ForegroundColor Yellow
+        }
     }
 } else {
     Write-Host ''
-    Write-Host 'Проверить GEMM вручную:' -ForegroundColor Green
-    Write-Host '  C:\AI\ComfyUI-Zluda\venv\Scripts\python.exe scripts\verify-torch27.py --sections env,gemm' -ForegroundColor Green
+    Write-Host '  Проверить GEMM вручную:' -ForegroundColor Green
+    Write-Host '    .\scripts\install\06-verify.ps1 -InstallDir <путь к ComfyUI-Zluda>' -ForegroundColor Green
 }
 
 Write-Host ''
-Write-Host 'Если ошибка "Cannot read TensileLibrary ... gfx803" осталась:' -ForegroundColor Yellow
-Write-Host '  -> ядра не подошли к версии rocBLAS. Варианты: -Clean, другой архив,' -ForegroundColor Gray
-Write-Host '    или fallback на HIP 6.2.4 (там ядра родные). См. docs\05-gfx803-rocblas.md' -ForegroundColor Gray
+Write-Host '  Если ошибка "Cannot read TensileLibrary" осталась:' -ForegroundColor Yellow
+Write-Host '    1) проверь, что fallback .dat скопированы (см. проверку выше)' -ForegroundColor Gray
+Write-Host '    2) -Clean и повтори' -ForegroundColor Gray
+Write-Host '    3) другой архив' -ForegroundColor Gray
+Write-Host '    4) fallback на HIP 6.2.4: .\90-fallback-hip62.ps1 (там ядра родные)' -ForegroundColor Gray

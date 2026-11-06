@@ -26,12 +26,19 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$InstallDir = 'C:\AI\ComfyUI-Zluda',
+    [string]$InstallDir = '',
     [string]$HipVersion = '',
     [switch]$SkipGemm
 )
 
 $ErrorActionPreference = 'Continue'
+
+# по умолчанию - рядом с китом
+if (-not $InstallDir) {
+    $kitRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+    $InstallDir = Join-Path $kitRoot 'ComfyUI-Zluda'
+}
+
 $script:fails = 0
 $script:warns = 0
 

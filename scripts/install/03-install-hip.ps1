@@ -16,7 +16,15 @@
     6.4.2 (по умолчанию) или 6.2.4 (fallback для Polaris).
 
 .PARAMETER DownloadDir
-    Куда качать установщик.
+    Куда качать установщик (по умолчанию <кит>\downloads, то есть на диск кита, а не C:).
+
+.NOTES
+    Установщик HIP ВСЕГДА ставит SDK в C:\Program Files\AMD\ROCm - выбора нет.
+    Но он распаковывает пакеты в C:\AMD (около 3 ГБ) на время установки и убирает
+    их потом. Плюс сам .exe (1.7 ГБ) мы качаем на диск кита.
+    Итого на C: нужно ~4 ГБ свободных, а не 9.
+    В GUI установщика поле "Install location" меняет путь только для
+    компонента драйвера, не для HIP SDK.
 
 .PARAMETER Silent
     Тихая установка (без GUI).
@@ -75,6 +83,10 @@ if (-not $isAdmin) { throw 'Нужны права администратора. 
 
 if (-not $DownloadDir) { $DownloadDir = Join-Path $PSScriptRoot '..\..\downloads' }
 if (-not (Test-Path $DownloadDir)) { New-Item -ItemType Directory -Path $DownloadDir -Force | Out-Null }
+
+Write-Host ("  Установщик качаем в: {0}" -f $DownloadDir) -ForegroundColor DarkGray
+Write-Host '  Сам SDK встанет в C:\Program Files\AMD\ROCm (выбора нет),' -ForegroundColor DarkGray
+Write-Host '  временно распакуется в C:\AMD (~3 ГБ) и уберётся после установки.' -ForegroundColor DarkGray
 
 Header "ЭТАП 3: HIP SDK $HipVersion"
 

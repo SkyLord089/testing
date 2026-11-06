@@ -37,8 +37,15 @@ rem set "AMD_LOG_LEVEL=3"
 rem --- аргументы ComfyUI под gfx803: минимум новых подсистем
 set "COMMANDLINE_ARGS=--auto-launch --use-quad-cross-attention --reserve-vram 0.9 --disable-async-offload --disable-pinned-memory --disable-comfy-compiler --disable-dynamic-vram"
 
-rem --- мало VRAM: добавьте --lowvram (или --novram)
+rem --- VRAM: если 4 ГБ - раскомментируйте строку ниже.
+rem     Точный объём: Диспетчер задач - Производительность - GPU - Выделенная память.
 rem set "COMMANDLINE_ARGS=%COMMANDLINE_ARGS% --lowvram"
+
+rem --- если и с --lowvram не хватает (SDXL, видео): --novram
+rem set "COMMANDLINE_ARGS=%COMMANDLINE_ARGS% --novram"
+
+rem --- кэш моделей на диск установки, а не на C:
+if not defined HF_HOME set "HF_HOME=%~dp0..\_cache\huggingface"
 
 rem --- точка входа
 set "PYTHON=%~dp0venv\Scripts\python.exe"
