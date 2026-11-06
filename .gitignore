@@ -1,0 +1,9 @@
+# local install/build artifacts - never commit these
+*.orig
+*.zluda-bak
+*.zip
+*.7z
+*.patched
+venv/
+__pycache__/
+RX580-ComfyUI/
