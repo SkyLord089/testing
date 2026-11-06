@@ -1,6 +1,6 @@
-<#
+﻿<#
 .SYNOPSIS
-    Этап 5: установка ядер rocBLAS для gfx803 (Polaris) — главный блокер.
+    Этап 5: установка ядер rocBLAS для gfx803 (Polaris) - главный блокер.
 
 .DESCRIPTION
     Работает с архивами .7z / .zip. Сначала -ListOnly, чтобы увидеть содержимое.
@@ -24,7 +24,7 @@
     Перед установкой очистить library от всех TensileLibrary*/Kernels* (полная замена, а не поверх).
 
 .PARAMETER WithRocblasDll
-    Копировать rocblas.dll из архива (по умолчанию НЕТ — родной DLL остаётся).
+    Копировать rocblas.dll из архива (по умолчанию НЕТ - родной DLL остаётся).
 
 .PARAMETER Venv
     Путь к venv для -Verify.
@@ -68,18 +68,18 @@ $hipDir = $hipDirs[$HipVersion]
 $binDir = Join-Path $hipDir 'bin'
 $libraryDir = Join-Path $binDir 'rocblas\library'
 
-if (-not (Test-Path $libraryDir)) { throw "Не найден $libraryDir — HIP SDK $HipVersion установлен?" }
+if (-not (Test-Path $libraryDir)) { throw "Не найден $libraryDir - HIP SDK $HipVersion установлен?" }
 if (-not (Test-Path $Archive)) { throw "Нет файла $Archive" }
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin -and -not $ListOnly) { throw 'Для записи в Program Files нужны права администратора.' }
 
-Header "ЭТАП 5: ЯДРА rocBLAS gfx803  →  HIP $HipVersion"
+Header "ЭТАП 5: ЯДРА rocBLAS gfx803  ->  HIP $HipVersion"
 
 # ---- распаковка во временную папку ----
 $tmp = Join-Path $env:TEMP ("rocblas-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
-Write-Host "  Распаковка $Archive`n  →  $tmp" -ForegroundColor White
+Write-Host "  Распаковка $Archive`n  ->  $tmp" -ForegroundColor White
 
 $is7z = $Archive -match '\.7z$'
 if ($is7z) {
@@ -116,7 +116,7 @@ Write-Host ''
 if ($gfxFiles) {
     Write-Host ("  Найдено файлов gfx803: {0}" -f $gfxFiles.Count) -ForegroundColor Green
 } else {
-    Write-Host '  В архиве НЕТ файлов gfx803 — это не тот архив.' -ForegroundColor Red
+    Write-Host '  В архиве НЕТ файлов gfx803 - это не тот архив.' -ForegroundColor Red
     Write-Host '  Нужен: rocm.gfx800-gfx900-for.hip.sdk.*.7z (advanced-lvl-up) или rocBLAS-HIP6.2.4.7z (likelovewant).' -ForegroundColor Red
     if ($ListOnly) {
         Write-Host ''
@@ -136,9 +136,9 @@ if ($ListOnly) {
     .\05-gfx803-rocblas.ps1 -HipVersion $HipVersion -Archive $Archive
 
   Флаги:
-    -Clean          — полностью заменить TensileLibrary*/Kernels* (рекомендую для чистой установки)
-    -WithRocblasDll — положить rocblas.dll из архива (только если HIP той же версии, что и архив!)
-    -Verify -Venv C:\AI\ComfyUI-Zluda\venv — сразу прогнать GEMM-тест
+    -Clean          - полностью заменить TensileLibrary*/Kernels* (рекомендую для чистой установки)
+    -WithRocblasDll - положить rocblas.dll из архива (только если HIP той же версии, что и архив!)
+    -Verify -Venv C:\AI\ComfyUI-Zluda\venv - сразу прогнать GEMM-тест
 "@ -ForegroundColor Gray
     Remove-Item $tmp -Recurse -Force
     return
@@ -166,10 +166,10 @@ foreach ($f in $gfxFiles) {
 }
 Write-Host ("  Скопировано файлов gfx803: {0}" -f $copied) -ForegroundColor Green
 
-# прочие полезные файлы (TensileLibrary.dat общего вида) — по желанию
+# прочие полезные файлы (TensileLibrary.dat общего вида) - по желанию
 $generic = $allFiles | Where-Object { $_.Name -match '^TensileLibrary(_lazy)?\.(dat|yaml)$' }
 if ($generic) {
-    Write-Host ("  Общие TensileLibrary: {0} — НЕ копирую (могут конфликтовать с 6.4)" -f $generic.Count) -ForegroundColor DarkGray
+    Write-Host ("  Общие TensileLibrary: {0} - НЕ копирую (могут конфликтовать с 6.4)" -f $generic.Count) -ForegroundColor DarkGray
 }
 
 if ($WithRocblasDll) {
@@ -216,5 +216,5 @@ if ($Verify -and $Venv) {
 
 Write-Host ''
 Write-Host 'Если ошибка "Cannot read TensileLibrary ... gfx803" осталась:' -ForegroundColor Yellow
-Write-Host '  → ядра не подошли к версии rocBLAS. Варианты: -Clean, другой архив,' -ForegroundColor Gray
+Write-Host '  -> ядра не подошли к версии rocBLAS. Варианты: -Clean, другой архив,' -ForegroundColor Gray
 Write-Host '    или fallback на HIP 6.2.4 (там ядра родные). См. docs\05-gfx803-rocblas.md' -ForegroundColor Gray

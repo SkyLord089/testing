@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Этап 4: ComfyUI-Zluda + venv + torch 2.7+cu118 + ZLUDA + подмена DLL.
 
@@ -106,7 +106,7 @@ if (-not (Test-Path (Join-Path $InstallDir 'main.py'))) {
     & git clone --depth 1 https://github.com/patientx/ComfyUI-Zluda $InstallDir
     if ($LASTEXITCODE -ne 0) { throw 'git clone не удался (нет git или сети)' }
 } else {
-    Write-Host '  Уже есть main.py — пропускаю clone.' -ForegroundColor DarkGray
+    Write-Host '  Уже есть main.py - пропускаю clone.' -ForegroundColor DarkGray
 }
 
 # ---- venv ----
@@ -140,7 +140,7 @@ if (-not $SkipRequirements) {
     Push-Location $InstallDir
     try {
         & $venvPy -m pip install -r requirements.txt
-        if ($LASTEXITCODE -ne 0) { Write-Host '  ВНИМАНИЕ: requirements завершились с ошибкой — часть пакетов может отсутствовать' -ForegroundColor Yellow }
+        if ($LASTEXITCODE -ne 0) { Write-Host '  ВНИМАНИЕ: requirements завершились с ошибкой - часть пакетов может отсутствовать' -ForegroundColor Yellow }
     } finally { Pop-Location }
 
     Step 'Фиксы версий'
@@ -165,7 +165,7 @@ if (Test-Path $zludaDir) {
 New-Item -ItemType Directory -Path $zludaDir -Force | Out-Null
 Write-Host "  Распаковка в $zludaDir" -ForegroundColor White
 Expand-Archive -LiteralPath $zipPath -DestinationPath $zludaDir -Force
-# в архиве верхняя папка zluda\ — разворачиваем, если так
+# в архиве верхняя папка zluda\ - разворачиваем, если так
 if ((Test-Path (Join-Path $zludaDir 'zluda')) -and -not (Test-Path (Join-Path $zludaDir 'cublas.dll'))) {
     Get-ChildItem (Join-Path $zludaDir 'zluda') -Force | Move-Item -Destination $zludaDir -Force
     Remove-Item (Join-Path $zludaDir 'zluda') -Recurse -Force -ErrorAction SilentlyContinue
@@ -199,7 +199,7 @@ if ((Test-Path $czSrc) -and (Test-Path $czDst)) {
         Write-Host '  Уже актуален.' -ForegroundColor DarkGray
     }
 } else {
-    Write-Host '  customzluda\zluda.py не найден — пропускаю' -ForegroundColor Yellow
+    Write-Host '  customzluda\zluda.py не найден - пропускаю' -ForegroundColor Yellow
 }
 
 # ---- лаунчер ----
@@ -210,7 +210,7 @@ if (Test-Path $launcher) {
     Copy-Item $launcher $dst -Force
     Write-Host "  Скопирован: $dst" -ForegroundColor Green
 } else {
-    Write-Host "  Лаунчер не найден в репозитории ($launcher) — пропускаю" -ForegroundColor Yellow
+    Write-Host "  Лаунчер не найден в репозитории ($launcher) - пропускаю" -ForegroundColor Yellow
 }
 
 # ---- проверка ----
@@ -237,13 +237,13 @@ if torch.cuda.is_available():
 } catch { Write-Host "  Ошибка: $_" -ForegroundColor Red } finally { Pop-Location }
 
 Write-Host ''
-Write-Host 'Следующий шаг — ядра rocBLAS для gfx803:' -ForegroundColor Green
+Write-Host 'Следующий шаг - ядра rocBLAS для gfx803:' -ForegroundColor Green
 Write-Host '  powershell -ExecutionPolicy Bypass -File .\scripts\install\05-gfx803-rocblas.ps1 -HipVersion 6.4.2 -Archive .\downloads\rocm.gfx800-gfx900-for.hip.sdk.5.7.1-and-6.2.4.7z -ListOnly' -ForegroundColor Green
 Write-Host ''
 Write-Host 'Если torch.cuda.is_available() = False:' -ForegroundColor Yellow
-Write-Host '  • проверь, что HIP SDK есть в PATH (bin и bin\rocblas\library):' -ForegroundColor Gray
+Write-Host '  * проверь, что HIP SDK есть в PATH (bin и bin\rocblas\library):' -ForegroundColor Gray
 Write-Host '    C:\Program Files\AMD\ROCm\6.4\bin' -ForegroundColor Gray
-Write-Host '  • запусти проверку: .\scripts\install\06-verify.ps1' -ForegroundColor Gray
+Write-Host '  * запусти проверку: .\scripts\install\06-verify.ps1' -ForegroundColor Gray
 Write-Host ''
 Write-Host 'torch.cuda.is_available() = True ещё НЕ значит, что GEMM работает:' -ForegroundColor DarkGray
 Write-Host 'без ядер gfx803 первый же matmul упадёт (TensileLibrary).' -ForegroundColor DarkGray

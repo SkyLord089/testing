@@ -1,9 +1,9 @@
-<#
+﻿<#
 .SYNOPSIS
     План Б: перевести уже установленную систему с HIP 6.4 на 6.2.4 (где ядра gfx803 родные).
 
 .DESCRIPTION
-    Когда на этапе 5 с HIP 6.4 не удалось подружить Tensile-ядра с Polaris —
+    Когда на этапе 5 с HIP 6.4 не удалось подружить Tensile-ядра с Polaris -
     не тратим дни на сборку rocBLAS, а быстро получаем рабочую систему:
 
       1. грубо проверяет, что установлено;
@@ -13,7 +13,7 @@
       5. ставит ядра gfx803 (родные 6.2.4);
       6. проверяет.
 
-    torch остаётся 2.7.0+cu118 — это важно, цель «2.7» сохраняется.
+    torch остаётся 2.7.0+cu118 - это важно, цель "2.7" сохраняется.
 
 .PARAMETER InstallDir
     ComfyUI-Zluda.
@@ -48,7 +48,7 @@ function Banner([string]$t) {
 function Pause-Here([string]$what) {
     if ($NonInteractive) { return }
     Write-Host ''
-    Write-Host "  ⟳ $what" -ForegroundColor Yellow
+    Write-Host "  >> $what" -ForegroundColor Yellow
     Read-Host '    Нажми Enter, когда готово'
 }
 
@@ -59,14 +59,14 @@ if (-not $isAdmin) { throw 'Нужны права администратора.'
 
 Write-Host @"
   Почему это работает:
-    • HIP 6.2.4 — последняя версия, для которой существуют ГОТОВЫЕ
+    * HIP 6.2.4 - последняя версия, для которой существуют ГОТОВЫЕ
       Tensile-ядра gfx803 (и официальные community-сборки).
-    • ZLUDA 3.9.5 (rocm6) официально собирается под 6.2.
-    • torch 2.7.0+cu118 остаётся — цель по torch не меняется.
-    • DISABLE_ADDMM_CUDA_LT=1 всё так же обязателен (cublasLt-путь в torch 2.7).
+    * ZLUDA 3.9.5 (rocm6) официально собирается под 6.2.
+    * torch 2.7.0+cu118 остаётся - цель по torch не меняется.
+    * DISABLE_ADDMM_CUDA_LT=1 всё так же обязателен (cublasLt-путь в torch 2.7).
 
-  Что теряем: саму «шестёрку-четыре» (HIP 6.4). Если позже появится
-  рабочий набор ядер под 6.4 — вернёмся (05 + 04 -Profile target).
+  Что теряем: саму "шестёрку-четыре" (HIP 6.4). Если позже появится
+  рабочий набор ядер под 6.4 - вернёмся (05 + 04 -Profile target).
 "@ -ForegroundColor Gray
 
 # ---- проверки ----
@@ -96,7 +96,7 @@ if ((Test-Path $hip64) -and -not $KeepHip64) {
             Write-Host '  Запусти его вручную (Programs and Features) и вернись.' -ForegroundColor Yellow
             Pause-Here 'HIP 6.4 удалён?'
         } else {
-            Write-Host '  Не нашёл деинсталлятор. Удали "AMD HIP SDK" через Параметры → Приложения.' -ForegroundColor Yellow
+            Write-Host '  Не нашёл деинсталлятор. Удали "AMD HIP SDK" через Параметры -> Приложения.' -ForegroundColor Yellow
             Pause-Here 'HIP 6.4 удалён?'
         }
     } else {
@@ -111,7 +111,7 @@ if (-not (Test-Path $hip62)) {
     & powershell -ExecutionPolicy Bypass -File (Join-Path $here '03-install-hip.ps1') -HipVersion 6.2.4
     Pause-Here 'HIP 6.2.4 установлен, перезагрузись и проверь hipInfo (gfx803).'
 } else {
-    Write-Host '  HIP 6.2 уже установлен — пропускаю.' -ForegroundColor DarkGray
+    Write-Host '  HIP 6.2 уже установлен - пропускаю.' -ForegroundColor DarkGray
 }
 
 # ---- ZLUDA 3.9.5 rocm6 + патч ----
@@ -128,12 +128,12 @@ if ($RocblasArchive) {
     & powershell -ExecutionPolicy Bypass -File (Join-Path $here '05-gfx803-rocblas.ps1') `
         -Archive $RocblasArchive -HipVersion 6.2.4 -Clean
 } else {
-    Banner 'Ядра gfx803 — нужен архив'
+    Banner 'Ядра gfx803 - нужен архив'
     Write-Host @"
   Скачай один из вариантов под 6.2.4:
 
     https://github.com/advanced-lvl-up/Rx470-Vega10-Rx580-gfx803-gfx900-fix-AMD-GPU/releases/download/v1.0.0/rocm.gfx800-gfx900-for.hip.sdk.5.7.1-and-6.2.4.7z
-        (в имени файла написано 5.7.1-and-6.2.4 — внутри есть сборка под 6.2.4)
+        (в имени файла написано 5.7.1-and-6.2.4 - внутри есть сборка под 6.2.4)
 
     https://github.com/likelovewant/ROCmLibs-for-gfx1103-AMD780M-APU/releases/download/v0.6.2.4/rocBLAS-HIP6.2.4.7z
         (много архитектур в одном архиве; нужен gfx803)

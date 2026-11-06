@@ -1,9 +1,42 @@
-# Windows-скрипты и launcher'ы — всегда CRLF, иначе cmd.exe ломается на многострочных блоках
-*.bat  text eol=crlf
-*.cmd  text eol=crlf
-*.ps1  text eol=crlf
-*.psm1 text eol=crlf
+# =============================================================================
+#  Кодировки и переводы строк — это НЕ косметика, а работоспособность.
+#
+#  Windows PowerShell 5.1 читает .ps1 без BOM как ANSI (у нас CP1251).
+#  Файл в UTF-8 без BOM превращается в "РћР¶РёРґР°РµС‚СЃСЏ" и падает
+#  с Unexpected token на каждой русской строке.
+#
+#  cmd.exe читает .bat в кодировке консоли (CP866) и НЕ понимает BOM:
+#  BOM в .bat ломает первую строку.
+#
+#  Поэтому:
+#    *.ps1  ->  UTF-8 С BOM (BOM лежит прямо в файле) + CRLF
+#    *.bat  ->  CP866 БЕЗ BOM + CRLF, git не трогает содержимое
+#    *.py   ->  UTF-8 без BOM + LF
+#    *.md   ->  UTF-8 без BOM + LF
+#
+#  Чего здесь СОЗНАТЕЛЬНО нет:
+#    working-tree-encoding — старый git на нём падает, а BOM может срезать.
+#    text=auto для .bat   — git перекодирует байты и сломает CP866.
+#
+#  Если правите .ps1 в VS Code: в правом нижнем углу должно быть
+#  "UTF-8 with BOM", иначе ошибка вернётся. Проверка: scripts\check-encoding.ps1
+# =============================================================================
 
-# Документация и питон — LF
-*.md  text eol=lf
-*.py  text eol=lf
+# --- PowerShell: UTF-8 с BOM (BOM в blob), CRLF ---
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+
+# --- cmd: CP866 без BOM, CRLF; содержимое не конвертируется ---
+*.bat   -text
+*.cmd   -text
+
+# --- документация и python: LF ---
+*.py    text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+
+# --- бинарники ---
+*.7z    binary
+*.zip   binary
+*.exe   binary
+*.dll   binary

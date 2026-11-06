@@ -1,47 +1,50 @@
 @echo off
 rem ===========================================================================
-rem  ComfyUI-Zluda launcher –¥–ª—è RX 580 (gfx803) + HIP SDK 6.4 + torch 2.7+cu118
-rem  –ö–ª–∞–¥—ë—Ç—Å—è –≤ –∫–æ—Ä–µ–Ω—å ComfyUI-Zluda (—Ä—è–¥–æ–º —Å main.py –∏ venv\).
-rem  –ü—Ä–∞–≤—å—Ç–µ —Ç–æ–ª—å–∫–æ —ç—Ç–æ—Ç —Ñ–∞–π–ª ‚Äî —à—Ç–∞—Ç–Ω—ã–µ comfyui.bat/comfyui-n.bat –ø–µ—Ä–µ–∑–∞–ø–∏—à—É—Ç—Å—è
-rem  –ø—Ä–∏ –æ–±–Ω–æ–≤–ª–µ–Ω–∏–∏ —Ä–µ–ø–æ–∑–∏—Ç–æ—Ä–∏—è.
+rem  ComfyUI-Zluda launcher §´Ô RX 580 (gfx803) + HIP SDK 6.4 + torch 2.7+cu118
+rem  ä´†§Ò‚·Ô ¢ ™Æ‡•≠Ï ComfyUI-Zluda (‡Ô§Æ¨ · main.py ® venv\).
+rem  è‡†¢Ï‚• ‚Æ´Ï™Æ Ì‚Æ‚ ‰†©´: Ë‚†‚≠Î• comfyui.bat/comfyui-n.bat Ø•‡•ß†Ø®Ë„‚·Ô
+rem  Ø‡® Æ°≠Æ¢´•≠®® ‡•ØÆß®‚Æ‡®Ô.
+rem
+rem  äéÑàêéÇäÄ: ‰†©´ ·ÆÂ‡†≠Ò≠ ¢ CP866 °•ß BOM. çÖ Ø•‡•·ÆÂ‡†≠Ô©‚• •£Æ ¢ UTF-8
+rem  ® ≠• §Æ°†¢´Ô©‚• BOM - cmd.exe Ø‡ÆÁ®‚†•‚ ‚†™Æ• ™†™ ¨„·Æ‡.
 rem ===========================================================================
 setlocal EnableDelayedExpansion
 
 cd /d "%~dp0"
 
-rem --- torch 2.7 –Ω–∞ ZLUDA: –±–µ–∑ —ç—Ç–æ–≥–æ addmm —Å bias —É—Ö–æ–¥–∏—Ç –≤ cublasLt -> NOT_SUPPORTED
+rem --- torch 2.7 ≠† ZLUDA: °•ß Ì‚Æ£Æ addmm · bias „ÂÆ§®‚ ¢ cublasLt -> NOT_SUPPORTED
 set "DISABLE_ADDMM_CUDA_LT=1"
 
-rem --- —á—Ç–æ–±—ã –≤–∏–¥–µ—Ç—å –∫–æ–º–ø–∏–ª—è—Ü–∏—é —è–¥–µ—Ä, –∞ –Ω–µ ¬´—Ç–∏—à–∏–Ω—É¬ª
+rem --- Á‚Æ°Î ¢®§•‚Ï ™Æ¨Ø®´ÔÊ®Ó Ô§•‡, † ≠• ‚®Ë®≠„
 set "ZLUDA_COMGR_LOG_LEVEL=1"
 
-rem --- –∫—ç—à —Å–∫–æ–º–ø–∏–ª–∏—Ä–æ–≤–∞–Ω–Ω—ã—Ö —è–¥–µ—Ä. –°–º–µ–Ω–∏—Ç–µ –ø—É—Ç—å –ø—Ä–∏ –Ω–µ–æ–±—Ö–æ–¥–∏–º–æ—Å—Ç–∏.
+rem --- ™ÌË ·™Æ¨Ø®´®‡Æ¢†≠≠ÎÂ Ô§•‡ (·¨•≠®‚• Ø„‚Ï Ø‡® ≠•Æ°ÂÆ§®¨Æ·‚®)
 if not defined ZLUDA_CACHE_DIR set "ZLUDA_CACHE_DIR=%~dp0zluda-cache"
 
-rem --- MIOpen: –ø–æ–º–µ–Ω—å—à–µ —à—É–º–∞ –∏ –ø–æ–∏—Å–∫ –±–µ–∑ –∑–∞–≤–∏—Å–∞–Ω–∏–π (–µ—Å–ª–∏ cudnn –≤—ã–∫–ª—é—á–µ–Ω, –Ω–µ –º–µ—à–∞–µ—Ç)
+rem --- MIOpen: ØÆ¨•≠ÏË• Ë„¨† ® ØÆ®·™ °•ß ß†¢®·†≠®©
 set "MIOPEN_FIND_MODE=2"
 set "MIOPEN_LOG_LEVEL=3"
 
-rem --- –Ω–µ –±—É—Ñ–µ—Ä–∏–∑–æ–≤–∞—Ç—å –≤—ã–≤–æ–¥ –ø–∏—Ç–æ–Ω–∞ (–∏–Ω–∞—á–µ –ª–æ–≥–∏ ¬´–∑–∞–ª–∏–ø–∞—é—Ç¬ª)
+rem --- ≠• °„‰•‡®ßÆ¢†‚Ï ¢Î¢Æ§ Ø®‚Æ≠†
 set "PYTHONUNBUFFERED=1"
 
-rem --- —ç–∫—Å–ø–µ—Ä–∏–º–µ–Ω—Ç–∞–ª—å–Ω—ã–µ –ø–µ—Ä–µ–∫–ª—é—á–∞—Ç–µ–ª–∏ (—Ä–∞—Å–∫–æ–º–º–µ–Ω—Ç–∏—Ä–æ–≤–∞—Ç—å –ø–æ –æ–¥–Ω–æ–º—É –ø—Ä–∏ –æ—Ç–ª–∞–¥–∫–µ):
+rem --- Ì™·Ø•‡®¨•≠‚†´Ï≠Î• Ø•‡•™´ÓÁ†‚•´® (‡†·™Æ¨¨•≠‚®‡Æ¢†‚Ï ØÆ Æ§≠Æ¨„ Ø‡® Æ‚´†§™•):
 rem set "ZLUDA_WAVE64_SLOW_MODE=1"
 rem set "TORCHDYNAMO_DISABLE=1"
 rem set "TORCHINDUCTOR_DISABLE=1"
 rem set "AMD_LOG_LEVEL=3"
 
-rem --- –∞—Ä–≥—É–º–µ–Ω—Ç—ã ComfyUI –ø–æ–¥ gfx803: –º–∏–Ω–∏–º—É–º –Ω–æ–≤—ã—Ö –ø–æ–¥—Å–∏—Å—Ç–µ–º
+rem --- †‡£„¨•≠‚Î ComfyUI ØÆ§ gfx803: ¨®≠®¨„¨ ≠Æ¢ÎÂ ØÆ§·®·‚•¨
 set "COMMANDLINE_ARGS=--auto-launch --use-quad-cross-attention --reserve-vram 0.9 --disable-async-offload --disable-pinned-memory --disable-comfy-compiler --disable-dynamic-vram"
 
-rem --- 8 –ì–ë VRAM: –µ—Å–ª–∏ –ª–æ–≤–∏—Ç–µ OOM –Ω–∞ SDXL ‚Äî –¥–æ–±–∞–≤—å—Ç–µ --lowvram (–∏–ª–∏ --novram)
+rem --- ¨†´Æ VRAM: §Æ°†¢Ï‚• --lowvram (®´® --novram)
 rem set "COMMANDLINE_ARGS=%COMMANDLINE_ARGS% --lowvram"
 
-rem --- —Ç–æ—á–∫–∞ –≤—Ö–æ–¥–∞: python –∏–∑ venv
+rem --- ‚ÆÁ™† ¢ÂÆ§†
 set "PYTHON=%~dp0venv\Scripts\python.exe"
 if not exist "%PYTHON%" (
-    echo [ERROR] –ù–µ –Ω–∞–π–¥–µ–Ω %PYTHON%
-    echo         –ó–∞–ø—É—Å—Ç–∏—Ç–µ install-n.bat / install-for-older-amd.bat, –ª–∏–±–æ –ø–æ–ø—Ä–∞–≤—å—Ç–µ PYTHON –≤ —ç—Ç–æ–º —Ñ–∞–π–ª–µ.
+    echo [ERROR] Ne najden %PYTHON%
+    echo         Zapustite scripts\install\04-comfyui-zluda.ps1 ili popravte PYTHON v etom fajle.
     pause
     exit /b 1
 )
@@ -58,13 +61,13 @@ echo.
 if exist "%~dp0zluda\zluda.exe" (
     "%~dp0zluda\zluda.exe" -- "%PYTHON%" main.py %COMMANDLINE_ARGS%
 ) else (
-    echo [WARN] zluda\zluda.exe –Ω–µ –Ω–∞–π–¥–µ–Ω ‚Äî –∑–∞–ø—É—Å–∫–∞—é python –Ω–∞–ø—Ä—è–º—É—é
-    echo        (—Ç–æ–≥–¥–∞ nvcuda.dll –¥–æ–ª–∂–Ω–∞ –ª–µ–∂–∞—Ç—å –≤ venv\Scripts)
+    echo [WARN] zluda\zluda.exe ne najden - zapuskayu python napryamuyu
+    echo        (togda nvcuda.dll dolzhna lezhat v venv\Scripts)
     "%PYTHON%" main.py %COMMANDLINE_ARGS%
 )
 
 set "RC=%ERRORLEVEL%"
 echo.
-echo ComfyUI –∑–∞–≤–µ—Ä—à–∏–ª—Å—è —Å –∫–æ–¥–æ–º %RC%
+echo ComfyUI zavershilsya s kodom %RC%
 pause
 exit /b %RC%

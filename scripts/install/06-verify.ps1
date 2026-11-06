@@ -1,10 +1,10 @@
-<#
+﻿<#
 .SYNOPSIS
     Этап 6: сквозная проверка уже установленной системы (без запуска ComfyUI).
 
 .DESCRIPTION
     Проверяет по порядку:
-      1. HIP SDK: каталог, hipInfo → gfx803 / RX 580
+      1. HIP SDK: каталог, hipInfo -> gfx803 / RX 580
       2. rocBLAS: наличие файлов *gfx803* в library
       3. venv + torch 2.7.0+cu118
       4. torch\lib: какие DLL подменены на ZLUDA, какие остались оригинальными
@@ -92,11 +92,11 @@ if ($hipDir) {
     $verFile = Join-Path $hipDir 'bin\hipInfo.exe'
     if (Test-Path $verFile) {
         $out = & $verFile 2>&1 | Out-String
-        if ($out -match 'gfx803') { Ok 'hipInfo: gfx803 обнаружен' } else { Fail 'hipInfo: gfx803 НЕ обнаружен' 'Драйвер не отдаёт Polaris в HIP. См. docs\01-diagnosis.md#1 — начни с отката драйвера на 25.8.1 / 24.9.1.' }
+        if ($out -match 'gfx803') { Ok 'hipInfo: gfx803 обнаружен' } else { Fail 'hipInfo: gfx803 НЕ обнаружен' 'Драйвер не отдаёт Polaris в HIP. См. docs\01-diagnosis.md#1 - начни с отката драйвера на 25.8.1 / 24.9.1.' }
         if ($out -match 'RX\s*580') { Ok 'hipInfo: Radeon RX 580 в списке устройств' } else { Warn 'hipInfo: строка "RX 580" не найдена' 'Возможно, имя другое (RX 570/590). Не критично, если gfx803 есть.' }
         if ($out -match 'no ROCm-capable device') { Fail 'hipInfo: "no ROCm-capable device"' 'Драйвер/HIP_VISIBLE_DEVICES. См. docs\01-diagnosis.md#1' }
     } else {
-        Warn 'hipInfo.exe не найден' 'HIP SDK установлен неполно (без Core) — переустанови с компонентом HIP SDK Core'
+        Warn 'hipInfo.exe не найден' 'HIP SDK установлен неполно (без Core) - переустанови с компонентом HIP SDK Core'
     }
 } else {
     Fail 'HIP SDK не найден в C:\Program Files\AMD\ROCm' 'Этап 3: scripts\install\03-install-hip.ps1'
@@ -163,12 +163,12 @@ if (Test-Path $torchLib) {
         $p = Join-Path $torchLib $n
         if (-not (Test-Path $p)) { Fail "$n отсутствует" 'Перезапусти 04-comfyui-zluda.ps1'; continue }
         $mb = [math]::Round((Get-Item $p).Length / 1MB, 1)
-        if ($mb -le $zludaMap[$n]) { Ok ("{0}: {1} МБ — ZLUDA" -f $n, $mb) }
-        else { Fail ("{0}: {1} МБ — ОРИГИНАЛ, не подменён" -f $n, $mb) 'Перезапусти 04-comfyui-zluda.ps1 (или patch-torch-zluda.ps1)' }
+        if ($mb -le $zludaMap[$n]) { Ok ("{0}: {1} МБ - ZLUDA" -f $n, $mb) }
+        else { Fail ("{0}: {1} МБ - ОРИГИНАЛ, не подменён" -f $n, $mb) 'Перезапусти 04-comfyui-zluda.ps1 (или patch-torch-zluda.ps1)' }
     }
     $lt = @(Get-ChildItem $torchLib -File -Filter '*cublasLt*')
     if ($lt.Count -eq 0) {
-        Ok 'cublasLt: отсутствует — ок для gfx803'
+        Ok 'cublasLt: отсутствует - ок для gfx803'
     } else {
         $bigLt = @($lt | Where-Object { $_.Length -gt 5MB })
         if ($bigLt.Count -eq $lt.Count) { Ok ('cublasLt: только оригинал ({0} шт.)' -f $lt.Count) 'Так и должно быть: ZLUDA-cublasLt на gfx803 ломает addmm' }
@@ -177,7 +177,7 @@ if (Test-Path $torchLib) {
     $nc = Join-Path $torchLib 'nvrtc_cuda.dll'
     if (Test-Path $nc) {
         $mb = [math]::Round((Get-Item $nc).Length / 1MB, 1)
-        if ($mb -ge 5) { Ok ("nvrtc_cuda.dll: {0} МБ — оригинал" -f $mb) } else { Warn ("nvrtc_cuda.dll: {0} МБ — похоже на ZLUDA-шим" -f $mb) 'Ожидалась копия оригинального nvrtc. Перезапусти patch-torch-zluda.ps1 после восстановления.' }
+        if ($mb -ge 5) { Ok ("nvrtc_cuda.dll: {0} МБ - оригинал" -f $mb) } else { Warn ("nvrtc_cuda.dll: {0} МБ - похоже на ZLUDA-шим" -f $mb) 'Ожидалась копия оригинального nvrtc. Перезапусти patch-torch-zluda.ps1 после восстановления.' }
     } else {
         Warn 'nvrtc_cuda.dll отсутствует' 'Не критично, если torch не грузит его; иначе создай копию оригинального nvrtc64_112_0.dll'
     }
@@ -198,7 +198,7 @@ if ((Test-Path $czDst) -and (Test-Path $czSrc)) {
 } elseif (Test-Path $czDst) {
     Ok 'comfy\zluda.py на месте'
 } else {
-    Fail 'Нет comfy\zluda.py' 'Без него ComfyUI не сделает ZLUDA-настройки. Скопируй comfy\customzluda\zluda.py → comfy\zluda.py'
+    Fail 'Нет comfy\zluda.py' 'Без него ComfyUI не сделает ZLUDA-настройки. Скопируй comfy\customzluda\zluda.py -> comfy\zluda.py'
 }
 
 # ---------- 6. torch.cuda ----------
@@ -262,7 +262,7 @@ print("MM_FP32_ERR=%.3e" % rel(c, a @ b))
 ah = a.half().to(dev); bh = b.half().to(dev)
 ch = (ah @ bh).float().cpu()
 print("MM_FP16_ERR=%.3e" % rel(ch, (a @ b)))
-# 3) addmm с bias — ровно та ветка, что сломана в torch>=2.4 на Windows
+# 3) addmm с bias - ровно та ветка, что сломана в torch>=2.4 на Windows
 x = torch.randn(512, 512)
 w = torch.randn(512, 512)
 bias = torch.randn(512)
@@ -278,7 +278,7 @@ print("OK")
     Write-Host $gemmOut.Trim() -ForegroundColor DarkGray
     if ($gemmOut -match 'MM_FP32_ERR=([\d.e+-]+)') {
         $e = [double]$matches[1]
-        if ($e -lt 1e-4) { Ok ("mm fp32: относительная ошибка {0:E2}" -f $e) } else { Fail ("mm fp32: ошибка {0:E2} — мусор вместо вычислений" -f $e) 'Ядра gfx803 не подходят к версии rocBLAS. Этап 5 с -Clean, либо fallback на HIP 6.2.4.' }
+        if ($e -lt 1e-4) { Ok ("mm fp32: относительная ошибка {0:E2}" -f $e) } else { Fail ("mm fp32: ошибка {0:E2} - мусор вместо вычислений" -f $e) 'Ядра gfx803 не подходят к версии rocBLAS. Этап 5 с -Clean, либо fallback на HIP 6.2.4.' }
     } elseif ($gemmOut -match 'SKIP') {
         Warn 'GEMM пропущен: нет CUDA-устройства' ''
     } else {
@@ -290,7 +290,7 @@ print("OK")
     }
     if ($gemmOut -match 'ADDMM_ERR=([\d.e+-]+)') {
         $e = [double]$matches[1]
-        if ($e -lt 1e-4) { Ok ("addmm c bias: ok ({0:E2}) — cublasLt обойдён" -f $e) } else { Fail ("addmm c bias: ошибка {0:E2}" -f $e) 'Скорее всего, DISABLE_ADDMM_CUDA_LT не применён: проверь, что переменная задана ДО импорта torch.' }
+        if ($e -lt 1e-4) { Ok ("addmm c bias: ok ({0:E2}) - cublasLt обойдён" -f $e) } else { Fail ("addmm c bias: ошибка {0:E2}" -f $e) 'Скорее всего, DISABLE_ADDMM_CUDA_LT не применён: проверь, что переменная задана ДО импорта torch.' }
     } elseif ($gemmOut -match 'CUBLAS_STATUS_NOT_SUPPORTED') {
         Fail 'addmm: CUBLAS_STATUS_NOT_SUPPORTED' 'cublasLt-путь. Убедись, что ZLUDA-cublasLt не лежит в torch\lib и DISABLE_ADDMM_CUDA_LT=1.'
     }
@@ -301,7 +301,7 @@ Header 'ИТОГ'
 if ($script:fails -gt 0) {
     Write-Host ("FAIL: {0}   WARN: {1}" -f $script:fails, $script:warns) -ForegroundColor Red
     Write-Host ''
-    Write-Host 'Что делать по каждому FAIL — в docs\01-diagnosis.md и docs\05-gfx803-rocblas.md.' -ForegroundColor Yellow
+    Write-Host 'Что делать по каждому FAIL - в docs\01-diagnosis.md и docs\05-gfx803-rocblas.md.' -ForegroundColor Yellow
     exit 1
 }
 Write-Host ("FAIL: 0   WARN: {0}" -f $script:warns) -ForegroundColor Green
@@ -310,5 +310,5 @@ Write-Host 'Всё критичное на месте. Запуск ComfyUI:' -F
 Write-Host "  cd $InstallDir" -ForegroundColor Green
 Write-Host '  .\comfyui-user.bat' -ForegroundColor Green
 Write-Host ''
-Write-Host 'Первый запуск компилирует ядра — 10–20 минут тишины это нормально.' -ForegroundColor DarkGray
+Write-Host 'Первый запуск компилирует ядра - 10-20 минут тишины это нормально.' -ForegroundColor DarkGray
 exit 0

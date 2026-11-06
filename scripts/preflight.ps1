@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Собирает диагностику стека ZLUDA + HIP SDK + PyTorch для RX 580 / gfx803.
 
@@ -115,7 +115,7 @@ if (Test-Path -LiteralPath $HipRoot) {
             if ($gfx803.Count -gt 0) {
                 $gfx803 | ForEach-Object { Add-Line ("      {0}  ({1:N0} байт)" -f $_.Name, $_.Length) }
             } else {
-                Add-Line '      !!! нет ни одного файла gfx803 — rocBLAS не сможет считать GEMM на Polaris'
+                Add-Line '      !!! нет ни одного файла gfx803 - rocBLAS не сможет считать GEMM на Polaris'
                 $archs = $all | ForEach-Object {
                     if ($_.Name -match '(gfx[0-9a-f]{4})') { $Matches[1] }
                 } | Sort-Object -Unique
@@ -224,9 +224,9 @@ if ($Venv -and (Test-Path (Join-Path $Venv 'Scripts\python.exe'))) {
                 Add-Line ("   {0,-26} отсутствует" -f $dll)
             }
         }
-        Add-Line '   (файлы ZLUDA в torch\lib обычно 3-6 МБ; если cublas64_11.dll ~100+ МБ — это настоящая NVIDIA-библиотека)'
+        Add-Line '   (файлы ZLUDA в torch\lib обычно 3-6 МБ; если cublas64_11.dll ~100+ МБ - это настоящая NVIDIA-библиотека)'
     } else {
-        Add-Line 'torch\lib не найден — venv не тот?'
+        Add-Line 'torch\lib не найден - venv не тот?'
     }
 
     $zludaDir = Join-Path (Split-Path $Venv -Parent) 'zluda'

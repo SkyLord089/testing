@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Аккуратно подменяет CUDA-DLL в venv\Lib\site-packages\torch\lib на DLL ZLUDA.
 
@@ -60,7 +60,7 @@ function Resolve-Venv([string]$p) {
 $Venv = Resolve-Venv $Venv
 $torchLib = Join-Path $Venv 'Lib\site-packages\torch\lib'
 if (-not (Test-Path -LiteralPath $torchLib)) {
-    throw "Не найден $torchLib — это точно venv с установленным torch?"
+    throw "Не найден $torchLib - это точно venv с установленным torch?"
 }
 Write-Host "torch\lib: $torchLib" -ForegroundColor Cyan
 
@@ -80,7 +80,7 @@ if ($IncludeCudnn)    { $map['cudnn.dll']    = 'cudnn64_9.dll' }
 if ($Restore) {
     Write-Host '=== РЕЖИМ ВОССТАНОВЛЕНИЯ ===' -ForegroundColor Yellow
     $backups = Get-ChildItem -LiteralPath $torchLib -File -Filter '*.bak-*' | Sort-Object LastWriteTime -Descending
-    if (-not $backups) { Write-Host 'Бэкапов не найдено — нечего восстанавливать.' -ForegroundColor Yellow; return }
+    if (-not $backups) { Write-Host 'Бэкапов не найдено - нечего восстанавливать.' -ForegroundColor Yellow; return }
     $groups = $backups | Group-Object { $_.Name -replace '\.bak-.*$', '' }
     foreach ($g in $groups) {
         $latest = $g.Group | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -106,11 +106,11 @@ Write-Host ''
 # ---------- sanity: это действительно ZLUDA, а не NVIDIA? ----------
 foreach ($src in $map.Keys) {
     $p = Join-Path $ZludaDir $src
-    if (-not (Test-Path $p)) { Write-Host ("  [!] нет {0} — пропускаю" -f $src) -ForegroundColor Yellow; continue }
+    if (-not (Test-Path $p)) { Write-Host ("  [!] нет {0} - пропускаю" -f $src) -ForegroundColor Yellow; continue }
     $len = (Get-Item $p).Length
-    # ZLUDA-шим'ы маленькие (единицы МБ), настоящие NVIDIA-библиотеки — десятки/сотни МБ
+    # ZLUDA-шим'ы маленькие (единицы МБ), настоящие NVIDIA-библиотеки - десятки/сотни МБ
     if ($len -gt 60MB) {
-        Write-Host ("  [!] {0} весит {1:N0} байт — похоже на настоящую NVIDIA-библиотеку, а не на ZLUDA. Прерываю." -f $src, $len) -ForegroundColor Red
+        Write-Host ("  [!] {0} весит {1:N0} байт - похоже на настоящую NVIDIA-библиотеку, а не на ZLUDA. Прерываю." -f $src, $len) -ForegroundColor Red
         return
     }
 }
@@ -126,7 +126,7 @@ if ((Test-Path $nvrtcOrig) -and -not (Test-Path $nvrtcCuda)) {
     if (-not $WhatIfOnly) { Copy-Item $nvrtcOrig $nvrtcCuda -Force }
     $nvrtcNote = 'копия оригинального nvrtc64_112_0.dll (как в install-n.bat)'
 } elseif ((Test-Path $nvrtcCuda) -and (Test-Path $nvrtcOrig)) {
-    # уже есть: если размеры совпадают — это остаток прошлой подмены, не годится
+    # уже есть: если размеры совпадают - это остаток прошлой подмены, не годится
     $lenCuda = (Get-Item $nvrtcCuda).Length
     $lenOrig = (Get-Item $nvrtcOrig).Length
     $rest = Get-ChildItem -LiteralPath $torchLib -File -Filter 'nvrtc64_112_0.dll.bak-*' |
@@ -134,9 +134,9 @@ if ((Test-Path $nvrtcOrig) -and -not (Test-Path $nvrtcCuda)) {
     if ($lenCuda -eq $lenOrig -and $lenCuda -lt 5MB) {
         if ($rest) {
             if (-not $WhatIfOnly) { Copy-Item $rest.FullName $nvrtcCuda -Force }
-            $nvrtcNote = "была ZLUDA-копия — восстановил оригинал из $($rest.Name)"
+            $nvrtcNote = "была ZLUDA-копия - восстановил оригинал из $($rest.Name)"
         } else {
-            $nvrtcNote = 'похоже на ZLUDA-копию, но бэкапа оригинала нет — проверь вручную'
+            $nvrtcNote = 'похоже на ZLUDA-копию, но бэкапа оригинала нет - проверь вручную'
         }
     } else {
         $nvrtcNote = 'уже существует, не трогаю'

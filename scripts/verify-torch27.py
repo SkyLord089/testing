@@ -11,7 +11,7 @@
   * сверяет результат с CPU-эталоном в double,
   * печатает PASS / FAIL / SKIP и (для FAIL) подсказку, куда смотреть.
 
-Код возврата: 0 — всё, что должно было пройти, прошло; 1 — есть FAIL.
+Код возврата: 0 - всё, что должно было пройти, прошло; 1 - есть FAIL.
 """
 
 from __future__ import annotations
@@ -26,6 +26,15 @@ import traceback
 # --- до импорта torch: то, что должно быть выставлено на ZLUDA ---
 os.environ.setdefault("DISABLE_ADDMM_CUDA_LT", "1")
 
+# --- консоль: кириллица в CP866/CP1251, иначе print() падает на cp65001-обёртке ---
+try:
+    if os.name == "nt":
+        # не даём print() умереть на символах, которых нет в кодировке консоли
+        sys.stdout.reconfigure(errors="replace")
+        sys.stderr.reconfigure(errors="replace")
+except Exception:
+    pass
+
 # --- цвета (не ломаемся на старых консолях) ---
 class C:
     G = "\033[92m"
@@ -37,7 +46,7 @@ class C:
 
 def c(text: str, color: str) -> str:
     if not sys.stdout.isatty() and os.name == "nt":
-        # Windows-консоль без VT — без цветов
+        # Windows-консоль без VT - без цветов
         return text
     return f"{color}{text}{C.X}"
 
@@ -46,7 +55,7 @@ RESULTS: list[tuple[str, str, str]] = []
 def report(section: str, status: str, note: str = "") -> None:
     RESULTS.append((section, status, note))
     color = {"PASS": C.G, "FAIL": C.R, "SKIP": C.Y, "WARN": C.Y}.get(status, C.B)
-    print(f"  [{c(status, color)}] {section}" + (f"  — {note}" if note else ""))
+    print(f"  [{c(status, color)}] {section}" + (f"  - {note}" if note else ""))
 
 def rel_err(gpu, cpu):
     import torch
@@ -70,7 +79,7 @@ def section_env(torch):
     print(f"  ZLUDA_WAVE64_SLOW_MODE= {os.environ.get('ZLUDA_WAVE64_SLOW_MODE')}")
 
     if not torch.cuda.is_available():
-        report("CUDA available", "FAIL", "torch.cuda.is_available() == False — см. docs/01-diagnosis.md#2")
+        report("CUDA available", "FAIL", "torch.cuda.is_available() == False - см. docs/01-diagnosis.md#2")
         return False
 
     name = torch.cuda.get_device_name(0)
@@ -86,7 +95,7 @@ def section_env(torch):
 
     is_zluda = name.endswith("[ZLUDA]")
     report("ZLUDA detected", "PASS" if is_zluda else "WARN",
-           "" if is_zluda else "имя устройства без [ZLUDA] — возможно, это настоящая NVIDIA или CPU-фоллбек")
+           "" if is_zluda else "имя устройства без [ZLUDA] - возможно, это настоящая NVIDIA или CPU-фоллбек")
     return True
 
 
@@ -115,10 +124,10 @@ def section_basic(torch):
 
 
 def section_gemm(torch):
-    print(c("\n=== GEMM (addmm/mm/bmm) — главный подозреваемый ===", C.B))
+    print(c("\n=== GEMM (addmm/mm/bmm) - главный подозреваемый ===", C.B))
     torch.manual_seed(0)
 
-    # 1) mm  fp32 — чистый cublasSgemm путь
+    # 1) mm  fp32 - чистый cublasSgemm путь
     try:
         a = torch.randn(512, 512)
         b = torch.randn(512, 512)
@@ -139,7 +148,7 @@ def section_gemm(torch):
     except Exception as ex:
         report("addmm beta=0", "FAIL", f"{type(ex).__name__}: {ex}")
 
-    # 3) addmm С bias-вектором — именно этот путь в torch 2.4+ уходит в cublasLt
+    # 3) addmm С bias-вектором - именно этот путь в torch 2.4+ уходит в cublasLt
     try:
         a = torch.randn(256, 512)
         b = torch.randn(512, 512)
@@ -147,10 +156,10 @@ def section_gemm(torch):
         out = torch.addmm(bias.cuda(), a.cuda(), b.cuda()).cpu()
         e = rel_err(out, (torch.addmm(bias, a, b)).double())
         report("addmm bias (cublasLt-ветка!)", "PASS" if e < 1e-3 else "FAIL",
-               f"rel_err={e:.2e}" + ("" if e < 1e-3 else " — см. docs/06-torch27.md#1"))
+               f"rel_err={e:.2e}" + ("" if e < 1e-3 else " - см. docs/06-torch27.md#1"))
     except Exception as ex:
         report("addmm bias (cublasLt-ветка!)", "FAIL",
-               f"{type(ex).__name__}: {ex}  — вероятно CUBLAS_STATUS_NOT_SUPPORTED из cublasLt")
+               f"{type(ex).__name__}: {ex}  - вероятно CUBLAS_STATUS_NOT_SUPPORTED из cublasLt")
         traceback.print_exc()
 
     # 4) nn.Linear с bias (как в реальных моделях)
@@ -270,14 +279,14 @@ def section_memory(torch):
         props = torch.cuda.get_device_properties(0)
         print(f"  props.total_memory: {props.total_memory/2**20:.0f} MB")
         if abs(total_b - props.total_memory) > 256 * 2**20:
-            report("total vs mem_get_info", "WARN", "расхождение >256 МБ — ZLUDA/HIP по-разному считают VRAM")
+            report("total vs mem_get_info", "WARN", "расхождение >256 МБ - ZLUDA/HIP по-разному считают VRAM")
         else:
             report("total vs mem_get_info", "PASS")
     except Exception as ex:
         report("mem_get_info", "FAIL", f"{type(ex).__name__}: {ex}")
 
     try:
-        # аллокация «широкого» буфера, чтобы проверить, что большие блоки не отваливаются
+        # аллокация "широкого" буфера, чтобы проверить, что большие блоки не отваливаются
         x = torch.empty(256, 1024, 1024, dtype=torch.uint8, device="cuda")  # 256 МБ
         x.fill_(7)
         s = int(x[::4096, 0, 0].sum())
@@ -293,7 +302,7 @@ def section_timing(torch):
     try:
         a = torch.randn(2048, 2048, device="cuda", dtype=torch.float16)
         b = torch.randn(2048, 2048, device="cuda", dtype=torch.float16)
-        # прогрев (тут ZLUDA компилирует ядра — может быть долго!)
+        # прогрев (тут ZLUDA компилирует ядра - может быть долго!)
         for _ in range(3):
             torch.mm(a, b)
         torch.cuda.synchronize()
@@ -304,7 +313,7 @@ def section_timing(torch):
         torch.cuda.synchronize()
         dt = (time.time() - t0) / n
         tflops = 2 * 2048**3 / dt / 1e12
-        print(f"  fp16 2048³ mm: {dt*1000:.1f} мс/итерация ≈ {tflops:.2f} TFLOP/s")
+        print(f"  fp16 2048^3 mm: {dt*1000:.1f} мс/итерация ~ {tflops:.2f} TFLOP/s")
         report("timing fp16 mm", "PASS", f"{tflops:.2f} TFLOP/s")
     except Exception as ex:
         report("timing fp16 mm", "FAIL", f"{type(ex).__name__}: {ex}")
@@ -358,15 +367,15 @@ def main() -> int:
     fails = [r for r in RESULTS if r[1] == "FAIL"]
     for section, status, note in RESULTS:
         color = {"PASS": C.G, "FAIL": C.R, "SKIP": C.Y, "WARN": C.Y}.get(status, C.B)
-        print(f"  {c(f'{status:<4}', color)} {section}" + (f"  — {note}" if note else ""))
+        print(f"  {c(f'{status:<4}', color)} {section}" + (f"  - {note}" if note else ""))
 
     print()
     if fails:
         print(c(f"Итог: {len(fails)} FAIL. Куда смотреть:", C.R))
-        print("  • FAIL на addmm bias / nn.Linear  -> docs/06-torch27.md#1 (cublasLt)")
-        print("  • FAIL на mm/bmm                  -> docs/05-gfx803-rocblas.md (rocBLAS gfx803)")
-        print("  • FAIL на conv/conv_transpose     -> cuDNN/MIOpen: держать torch.backends.cudnn.enabled = False")
-        print("  • FAIL на attention               -> docs/06-torch27.md#2 (SDPA-бэкенды)")
+        print("  * FAIL на addmm bias / nn.Linear  -> docs/06-torch27.md#1 (cublasLt)")
+        print("  * FAIL на mm/bmm                  -> docs/05-gfx803-rocblas.md (rocBLAS gfx803)")
+        print("  * FAIL на conv/conv_transpose     -> cuDNN/MIOpen: держать torch.backends.cudnn.enabled = False")
+        print("  * FAIL на attention               -> docs/06-torch27.md#2 (SDPA-бэкенды)")
         return 1
 
     print(c("Итог: всё критичное прошло.", C.G))

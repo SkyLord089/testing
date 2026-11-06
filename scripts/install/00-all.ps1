@@ -1,16 +1,16 @@
-<#
+﻿<#
 .SYNOPSIS
-    Оркестратор установки: гоняет этапы 1–6 по порядку, с остановками на ручные шаги.
+    Оркестратор установки: гоняет этапы 1-6 по порядку, с остановками на ручные шаги.
 
 .DESCRIPTION
-    Полностью автоматического «одного клика» здесь быть не может:
-    установщик AMD HIP — GUI, драйвер — тоже. Но скрипт:
+    Полностью автоматического "одного клика" здесь быть не может:
+    установщик AMD HIP - GUI, драйвер - тоже. Но скрипт:
       * проверяет, что можно начинать,
       * прогоняет то, что можно автоматизировать,
       * в нужных местах останавливается и говорит, что нажать.
 
 .PARAMETER Stage
-    1..6, или all (по умолчанию) — начнёт с первого незавершённого.
+    1..6, или all (по умолчанию) - начнёт с первого незавершённого.
 
 .PARAMETER Profile
     target (HIP 6.4.2) | safe (HIP 6.2.4)
@@ -43,7 +43,7 @@ function Banner([string]$t) {
 function Pause-Here([string]$what) {
     if ($NonInteractive) { return }
     Write-Host ''
-    Write-Host "  ⟳ $what" -ForegroundColor Yellow
+    Write-Host "  >> $what" -ForegroundColor Yellow
     Read-Host '    Нажми Enter, когда готово (или Ctrl+C для выхода)'
 }
 function Run([string]$script, [hashtable]$argsTbl = @{}) {
@@ -75,7 +75,7 @@ switch ([string]$Stage) {
     '1' {
         Banner 'ЭТАП 1'
         Run '01-prereq-check.ps1' @{ InstallDir = $InstallDir }
-        Pause-Here 'Проверь вывод выше. Если FAIL — исправь, потом продолжаем.'
+        Pause-Here 'Проверь вывод выше. Если FAIL - исправь, потом продолжаем.'
         if (-not $NonInteractive) {
             $next = Read-Host '  Продолжить к этапу 2? (y/n)'
             if ($next -notmatch '^[yYдД]') { return }
@@ -90,7 +90,7 @@ switch ([string]$Stage) {
         if ($RocblasArchive) {
             Run '05-gfx803-rocblas.ps1' @{ Archive = $RocblasArchive; HipVersion = $hipVer; Clean = $true }
         } else {
-            Write-Host '  Архив ядер rocBLAS не указан — этап 5 пропущен.' -ForegroundColor Yellow
+            Write-Host '  Архив ядер rocBLAS не указан - этап 5 пропущен.' -ForegroundColor Yellow
             Write-Host '  Запусти позже: .\05-gfx803-rocblas.ps1 -Archive <файл.7z> -HipVersion ' -NoNewline -ForegroundColor Yellow
             Write-Host $hipVer -ForegroundColor Yellow
         }

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Этап 1 установки: проверка окружения перед установкой ComfyUI-ZLUDA на RX 580.
 
@@ -63,8 +63,8 @@ P $st "$($g.Name)" "Драйвер: $($g.DriverVersion)  от $($g.DriverDate)"
     }
     $amd = $gpus | Where-Object { $_.Name -match 'Radeon|AMD' } | Select-Object -First 1
     if ($amd) {
-        if ($amd.Name -match 'RX\s*(470|480|570|580|590)') { P 'PASS' 'Polaris (gfx803) определён — это наш случай' }
-        elseif ($amd.Name -match 'Vega') { P 'WARN' 'Vega — тоже gfx9xx, инструкция применима с поправкой на arch' }
+        if ($amd.Name -match 'RX\s*(470|480|570|580|590)') { P 'PASS' 'Polaris (gfx803) определён - это наш случай' }
+        elseif ($amd.Name -match 'Vega') { P 'WARN' 'Vega - тоже gfx9xx, инструкция применима с поправкой на arch' }
         elseif ($amd.Name -match 'RX\s*(6|7|9)') { P 'WARN' 'RDNA-карта: ZLUDA этой инструкцией не нужна (есть ROCm/TheRock)' }
     } else {
         P 'FAIL' 'AMD GPU не найдена' 'Без Radeon ZLUDA работать не будет'
@@ -77,7 +77,7 @@ $os = Get-CimInstance Win32_OperatingSystem
 $ramGB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
 $st = 'WARN'; if ($ramGB -ge 16) { $st = 'PASS' }
 $note = ''
-if ($ramGB -lt 32) { $note = 'Для HIP/ZLUDA компиляции ядер 32 ГБ сильно приятнее; 8 ГБ VRAM + 16 ГБ RAM — рабочий минимум' }
+if ($ramGB -lt 32) { $note = 'Для HIP/ZLUDA компиляции ядер 32 ГБ сильно приятнее; 8 ГБ VRAM + 16 ГБ RAM - рабочий минимум' }
 P $st "RAM: $ramGB ГБ" $note
 
 try {
@@ -112,10 +112,10 @@ try {
         $pfGB = [math]::Round(($pf | Measure-Object AllocatedBaseSize -Sum).Sum / 1024, 1)
         $st = 'WARN'; if ($pfGB -ge 8) { $st = 'PASS' }
         $note = ''
-        if ($pfGB -lt 8) { $note = 'При 8 ГБ VRAM поставь 16+ ГБ подкачки (система → быстродействие → виртуальная память)' }
+        if ($pfGB -lt 8) { $note = 'При 8 ГБ VRAM поставь 16+ ГБ подкачки (система -> быстродействие -> виртуальная память)' }
         P $st "Файл подкачки: $pfGB ГБ" $note
     } else {
-        P 'WARN' 'Файл подкачки не обнаружен' 'Создай 16 ГБ — иначе VAE/модели будут падать с OOM на диске'
+        P 'WARN' 'Файл подкачки не обнаружен' 'Создай 16 ГБ - иначе VAE/модели будут падать с OOM на диске'
     }
 } catch {}
 
@@ -149,7 +149,7 @@ if ($pyCmd -or $pyLauncher) {
         $okPy = ($v -match '^3\.(10|11|12)')
         $st = 'WARN'; if ($okPy) { $st = 'PASS' }
         $note = ''
-        if (-not $okPy) { $note = 'Нужен 3.10–3.12 x64. Рекомендую 3.11.9 с python.org (НЕ из Microsoft Store)' }
+        if (-not $okPy) { $note = 'Нужен 3.10-3.12 x64. Рекомендую 3.11.9 с python.org (НЕ из Microsoft Store)' }
         P $st "Python: $v" $note
     } catch { P 'WARN' 'Python есть, но не запускается' "$_" }
 } else {
@@ -158,8 +158,8 @@ if ($pyCmd -or $pyLauncher) {
 
 $has7z = (Get-Command 7z -ErrorAction SilentlyContinue) -or (Test-Path 'C:\Program Files\7-Zip\7z.exe')
 if (-not $has7z) {
-    # встроенный tar.exe умеет .7z? нет — но умеет zip; для .7z нужен 7-Zip
-    P 'WARN' '7-Zip не найден' 'Нужен для .7z архивов (ядра rocBLAS). https://www.7-zip.org/ — либо используй .zip варианты'
+    # встроенный tar.exe умеет .7z? нет - но умеет zip; для .7z нужен 7-Zip
+    P 'WARN' '7-Zip не найден' 'Нужен для .7z архивов (ядра rocBLAS). https://www.7-zip.org/ - либо используй .zip варианты'
 } else { P 'PASS' '7-Zip найден' }
 
 # ---------- следы старых версий ----------
@@ -167,7 +167,7 @@ Header 'Следы предыдущих установок (должно быт�
 $hipRoot = 'C:\Program Files\AMD\ROCm'
 if (Test-Path $hipRoot) {
     $vers = Get-ChildItem $hipRoot -Directory | Select-Object -ExpandProperty Name
-    P 'WARN' "Найден $hipRoot : $($vers -join ', ')" 'Если это остатки старых установок — удали через "Программы и компоненты" перед установкой'
+    P 'WARN' "Найден $hipRoot : $($vers -join ', ')" 'Если это остатки старых установок - удали через "Программы и компоненты" перед установкой'
 } else {
     P 'PASS' 'HIP SDK ранее не устанавливался' ''
 }
@@ -182,7 +182,7 @@ if ($pathRocm) {
 foreach ($v in 'HIP_PATH', 'HIP_PATH_57', 'HIP_PATH_61', 'HIP_PATH_62', 'HIP_PATH_64', 'HIP_PATH_71', 'HIP_VISIBLE_DEVICES', 'CUDA_VISIBLE_DEVICES', 'ROCM_HOME', 'HIP_HOME') {
     $val = [Environment]::GetEnvironmentVariable($v, 'Machine')
     $valU = [Environment]::GetEnvironmentVariable($v, 'User')
-    if ($val -or $valU) { P 'WARN' "Переменная $v задана" "Machine='$val' User='$valU'  — старые значения мешают; удали и перезагрузись" }
+    if ($val -or $valU) { P 'WARN' "Переменная $v задана" "Machine='$val' User='$valU'  - старые значения мешают; удали и перезагрузись" }
 }
 P 'PASS' 'Проверка переменных окружения завершена' ''
 
@@ -195,7 +195,7 @@ Write-Host ("PASS: {0}   WARN: {1}   FAIL: {2}" -f @($script:verdict | Where-Obj
 if ($fails.Count -gt 0) {
     Write-Host ''
     Write-Host 'ЧТО ИСПРАВИТЬ ПЕРЕД УСТАНОВКОЙ:' -ForegroundColor Red
-    $fails | ForEach-Object { Write-Host ("  • {0} — {1}" -f $_.Item, $_.Note) -ForegroundColor Red }
+    $fails | ForEach-Object { Write-Host ("  * {0} - {1}" -f $_.Item, $_.Note) -ForegroundColor Red }
 } else {
     Write-Host ''
     Write-Host 'Можно переходить к этапу 2 (драйвер):' -ForegroundColor Green

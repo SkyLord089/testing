@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Этап 3: установка HIP SDK (по умолчанию 6.4.2) для RX 580.
 
@@ -6,10 +6,10 @@
     Скачивает официальный установщик AMD (прямая ссылка), проверяет размер и хеш,
     затем запускает установку.
 
-    ВАЖНО: по умолчанию открывается GUI — в нём нужно СНЯТЬ компонент
+    ВАЖНО: по умолчанию открывается GUI - в нём нужно СНЯТЬ компонент
     "AMD Software: PRO Edition" (нам нужен драйвер из этапа 2, а не этот).
 
-    -Silent  — установка через CLI без окна; поставит и PRO-драйвер
+    -Silent  - установка через CLI без окна; поставит и PRO-драйвер
                (после этого просто переустанови драйвер из этапа 2).
 
 .PARAMETER HipVersion
@@ -86,13 +86,13 @@ if (-not $SkipDownload -and -not $InstallerPath) {
         $sz = [math]::Round((Get-Item $target).Length / 1MB)
         Write-Host "  Уже скачан: $target ($sz МБ)" -ForegroundColor DarkGray
         if ($sz -lt 800) {
-            Write-Host '  Похоже, файл битый/недокачанный — перекачиваю.' -ForegroundColor Yellow
+            Write-Host '  Похоже, файл битый/недокачанный - перекачиваю.' -ForegroundColor Yellow
             Remove-Item $target -Force
         }
     }
     if (-not (Test-Path $target)) {
         Write-Host "  Скачиваю: $($info.Url)" -ForegroundColor White
-        Write-Host ("  Ожидаемый размер ~{0} МБ. Это может занять 10–30 минут." -f $info.SizeMB) -ForegroundColor DarkGray
+        Write-Host ("  Ожидаемый размер ~{0} МБ. Это может занять 10-30 минут." -f $info.SizeMB) -ForegroundColor DarkGray
         try {
             # curl.exe есть в Windows 10/11 из коробки и лучше показывает прогресс
             & "$env:SystemRoot\system32\curl.exe" -L --ssl-no-revoke -o $target $info.Url
@@ -119,12 +119,12 @@ Write-Host @"
   1. Откроется установщик AMD.
   2. Раскрой список компонентов.
   3. СНИМИ галочку "AMD Software: PRO Edition" (это драйвер!).
-     Драйвер у нас уже стоит из этапа 2 — второй раз не нужен,
+     Драйвер у нас уже стоит из этапа 2 - второй раз не нужен,
      иначе он откатит свежий на старый PRO.
   4. Оставь: HIP SDK Core, HIP Libraries, HIP Runtime Compiler
-     (Visual Studio Plugin, HIP Ray Tracing — не нужны, можно снять).
+     (Visual Studio Plugin, HIP Ray Tracing - не нужны, можно снять).
   5. Install location: по умолчанию (C:\Program Files\AMD\ROCm\$HipVersion).
-  6. Install → дождаться → перезагрузка.
+  6. Install -> дождаться -> перезагрузка.
 
   После перезагрузки проверить:
       & "$($info.Dir)\bin\hipInfo.exe" | Select-String 'gfx|Radeon'
@@ -133,7 +133,7 @@ Write-Host @"
 # ---- запуск ----
 Header 'ЗАПУСК'
 if ($Silent) {
-    Write-Host '  Тихая установка (поставит и PRO-драйвер — потом переустанови драйвер этапа 2).' -ForegroundColor Yellow
+    Write-Host '  Тихая установка (поставит и PRO-драйвер - потом переустанови драйвер этапа 2).' -ForegroundColor Yellow
     $log = Join-Path $DownloadDir "hip-install-$HipVersion.log"
     Write-Host "  Лог: $log"
     Start-Process -FilePath $target -ArgumentList '-install', '-log', "`"$log`"" -Wait
@@ -155,17 +155,17 @@ if (Test-Path $info.Dir) {
 
         Write-Host ''
         Write-Host @"
-  Если увидел gfx803 и "Radeon RX 580" — отлично, идём к этапу 4.
-  Если "no ROCm-capable device is detected" — драйвер не подошёл:
-        • поставь драйвер 25.8.1 (Polaris & Vega) и повтори,
-        • затем 24.9.1,
-        • проверь HIP_VISIBLE_DEVICES (пустая строка = 0 устройств),
-        • проверь, что в PATH нет второго ROCm.
+  Если увидел gfx803 и "Radeon RX 580" - отлично, идём к этапу 4.
+  Если "no ROCm-capable device is detected" - драйвер не подошёл:
+        * поставь драйвер 25.8.1 (Polaris & Vega) и повтори,
+        * затем 24.9.1,
+        * проверь HIP_VISIBLE_DEVICES (пустая строка = 0 устройств),
+        * проверь, что в PATH нет второго ROCm.
   Подробно: docs\01-diagnosis.md#1
 "@ -ForegroundColor Yellow
     }
 } else {
-    Write-Host ("  [FAIL] Каталог {0} не появился — установка не завершилась?" -f $info.Dir) -ForegroundColor Red
+    Write-Host ("  [FAIL] Каталог {0} не появился - установка не завершилась?" -f $info.Dir) -ForegroundColor Red
 }
 
 Write-Host ''
