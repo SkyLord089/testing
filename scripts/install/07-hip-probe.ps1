@@ -170,6 +170,28 @@ if (-not $anyVis) {
 }
 
 # ---------- 1. Где лежит HIP ----------
+# ---------- 0b. Копия HIP в System32 ----------
+# Драйвер AMD кладёт свой amdhip64 в System32, и ИМЕННО он грузится первым,
+# если приложение не положило свою копию рядом с exe. Версия в bin\ и версия
+# в System32 могут расходиться: тогда HIP из SDK не находит устройств, хотя
+# драйвер и OpenCL карту видят. Это ровно случай lemonade-sdk#3213.
+Header '0b. Копия HIP в System32 (её грузит драйвер)'
+
+$sys32 = Join-Path $env:SystemRoot 'System32'
+$sysDlls = Get-ChildItem $sys32 -Filter 'amdhip64*.dll' -ErrorAction SilentlyContinue
+if ($sysDlls -and $sysDlls.Count -gt 0) {
+    foreach ($sd in $sysDlls) {
+        $sv = $sd.VersionInfo.FileVersion
+        if (-not $sv) { $sv = $sd.VersionInfo.ProductVersion }
+        if (-not $sv) { $sv = '(версия не читается)' }
+        Info ("{0} - {1}, {2:0.0} МБ" -f $sd.Name, $sv, ($sd.Length / 1MB))
+    }
+    $newest = ($sysDlls | Sort-Object LastWriteTime -Descending | Select-Object -First 1)
+    Info ("самый свежий по дате: {0} ({1:yyyy-MM-dd})" -f $newest.Name, $newest.LastWriteTime)
+} else {
+    Warn 'В System32 нет amdhip64*.dll' 'Значит HIP будет грузиться из PATH - из каталога HIP SDK. Так тоже бывает, но тогда версия SDK обязана совпадать с драйвером.'
+}
+
 Header '1. HIP SDK на диске'
 
 $hipRoot = 'C:\Program Files\AMD\ROCm'
@@ -251,7 +273,47 @@ foreach ($d in $cand) {
     if ($rc -eq 0) {
         Ok 'hipInit(0) = 0'
     } else {
-        Fail ("hipInit(0) = {0} [{1}]" -f $rc, (Get-HipErrorText $rc)) 'HIP runtime не инициализируется. Дальше проверять бессмысленно.'
+        Fail ("hipInit(0) = {0} [{1}]" -f $rc, (Get-HipErrorText $rc))
+        Info 'ВАЖНО: это не "hipGetDeviceCount не нашёл карту", а отказ инициализации.'
+        Info 'Внутри hipInit вызывается hip::init() -> amd::Runtime::init() -> amd::Device::getDevices().'
+        Info 'Ошибка 100 здесь означает: список amd::Device пуст, то есть ROCr не отдал ни одного агента.'
+        Info 'Ни подмена nvcuda, ни свой rocBLAS этого не меняют - до них дело не доходит.'
+        Write-Host ''
+        Info 'Собираю лог HIP (AMD_LOG_LEVEL=3) - он покажет, на каком шаге отвалился агент:'
+
+        $logFile = Join-Path $env:TEMP 'hip-probe-log.txt'
+        $env:AMD_LOG_LEVEL = '3'
+        $env:AMD_LOG_LEVEL_FILE = $logFile
+        if (Test-Path $logFile) { Remove-Item $logFile -Force -ErrorAction SilentlyContinue }
+
+        # дочерний процесс: свой hipInit уже отработал (call_once), в этом
+        # процессе второй заход ничего нового не даст
+        $probeLine = "import ctypes,sys; h=ctypes.CDLL(r'{0}'); sys.exit(h.hipInit(0))" -f $dllPath
+        $logOut = $null
+        try {
+            $logOut = & powershell -NoProfile -Command $probeLine 2>&1
+        } catch {
+            $logOut = @("не удалось запустить дочерний процесс: $($_.Exception.Message)")
+        }
+        Info ("exit code дочернего процесса: {0}" -f $LASTEXITCODE)
+        if ($logOut) {
+            foreach ($ln in ($logOut | Select-Object -First 8)) { Info ("  $ln") }
+        }
+
+        if (Test-Path $logFile) {
+            $important = Select-String -Path $logFile -Pattern 'agent|Agent|NoDevice|hsa_|ROCr|ROCclr|unsupported|gfx|error|ERROR' -ErrorAction SilentlyContinue |
+                         Select-Object -First 25
+            if ($important) {
+                Write-Host ''
+                Info 'существенные строки лога:'
+                foreach ($ln in $important) { Info ("  " + $ln.Line.Trim()) }
+            }
+            Info ("полный лог: {0}" -f $logFile)
+        } else {
+            Warn 'лог HIP не создался' 'Переменная AMD_LOG_LEVEL_FILE не поддерживается этой сборкой. Тогда: $env:AMD_LOG_LEVEL=3 и запусти hipInfo.exe вручную.'
+        }
+        Remove-Item Env:\AMD_LOG_LEVEL -ErrorAction SilentlyContinue
+        Remove-Item Env:\AMD_LOG_LEVEL_FILE -ErrorAction SilentlyContinue
         continue
     }
 
