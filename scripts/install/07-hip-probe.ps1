@@ -102,6 +102,10 @@ namespace HipProbe
 
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool FreeLibrary(IntPtr hModule);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
+        public static extern uint GetModuleFileNameA(IntPtr hModule,
+            System.Text.StringBuilder lpFilename, uint nSize);
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -118,8 +122,10 @@ namespace HipProbe
 '@ -ErrorAction Stop
 }
 
-# hipError_t имеет размер int; держим handle и делегаты между итерациями
+# hipError_t имеет размер int; держим handle между итерациями
 $hMod = [IntPtr]::Zero
+# путь к amdhip64*.dll из HIP SDK - для сравнения с тем, что отдаёт голое имя
+$script:firstHipDllPath = $null
 
 function Get-HipErrorText([int]$code) {
     switch ($code) {
@@ -202,6 +208,13 @@ if (-not (Test-Path $hipRoot)) {
     exit 1
 }
 
+$allDirs = Get-ChildItem $hipRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+if ($allDirs) {
+    Info ("Установленные версии HIP: {0}" -f (($allDirs | Select-Object -ExpandProperty Name) -join ', '))
+} else {
+    Warn 'В каталоге HIP нет ни одной подпапки версии'
+}
+
 $cand = Get-FirstHipDir $hipRoot $HipVersion
 if ($cand.Count -eq 0) {
     Fail "В $hipRoot нет каталога версии '$HipVersion'" 'Проверь список каталогов и повтори без -HipVersion.'
@@ -227,6 +240,7 @@ foreach ($d in $cand) {
         continue
     }
     Ok ("amdhip64.dll: {0}" -f $dllPath)
+    if (-not $script:firstHipDllPath) { $script:firstHipDllPath = $dllPath }
 
     # PATH: библиотеке нужны соседние DLL (rocblas\library и т.п.)
     $env:PATH = "$binDir;$binDir\rocblas\library;$env:PATH"
@@ -390,6 +404,73 @@ foreach ($d in $cand) {
 }
 
 if ($hMod -ne [IntPtr]::Zero) { [void][HipProbe.Native]::FreeLibrary($hMod) }
+
+# ---------- 0c. Что загрузится по голому имени amdhip64 ----------
+# ZLUDA линкуется на "dylib=amdhip64" - БЕЗ суффикса версии (build.rs, одинаково
+# для сборок rocm5 и rocm6). А HIP SDK 6.x кладёт файл как amdhip64_6.dll
+# (CMakeLists.txt: RUNTIME_OUTPUT_NAME "amdhip64_${HIP_VERSION_MAJOR}"), тогда
+# как HIP 5.7 назывался просто amdhip64.dll.
+#
+# Отсюда важное: сборка ZLUDA windows-rocm5-amd64 грузит не файл из SDK, а то,
+# что система отдаст по голому имени - обычно драйверную копию. Проверяем
+# фактически, какой файл получится.
+Header '0c. Что система отдаст по голому имени amdhip64'
+
+$sdkDllForCmp = $null
+$newestHip = Get-ChildItem 'C:\Program Files\AMD\ROCm' -Directory -ErrorAction SilentlyContinue |
+             Sort-Object Name -Descending | Select-Object -First 1
+if ($newestHip) {
+    $f = Get-ChildItem (Join-Path $newestHip.FullName 'bin') -Filter 'amdhip64*.dll' -ErrorAction SilentlyContinue |
+         Select-Object -First 1
+    if ($f) { $sdkDllForCmp = $f.FullName }
+}
+
+$bare = [HipProbe.Native]::LoadLibraryA('amdhip64.dll')
+if ($bare -eq [IntPtr]::Zero) {
+    $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    Warn ("по голому имени amdhip64.dll не грузится (WinError {0})" -f $err) 'Тогда сборка ZLUDA windows-rocm5-amd64 не запустится вовсе.'
+} else {
+    $sb = New-Object System.Text.StringBuilder 520
+    [void][HipProbe.Native]::GetModuleFileNameA($bare, $sb, 520)
+    $barePath = $sb.ToString()
+    Ok ("загружен: {0}" -f $barePath)
+
+    $bareVer = (Get-Item $barePath -ErrorAction SilentlyContinue).VersionInfo.FileVersion
+    Info ("версия: {0}" -f $bareVer)
+
+    $bareDir = Split-Path $barePath -Parent
+    if ($bareDir -like '*\System32' -or $bareDir -like '*\SysWOW64') {
+        Info 'Это драйверная копия из System32, а не файл из HIP SDK.'
+        Info 'Именно её и будет использовать сборка ZLUDA windows-rocm5-amd64.'
+    } else {
+        Info 'Файл не из System32 - подсунут через PATH или лежит рядом с процессом.'
+    }
+
+    if ($sdkDllForCmp -and (Test-Path $sdkDllForCmp)) {
+        $av = (Get-Item $barePath).VersionInfo.FileVersion
+        $bv = (Get-Item $sdkDllForCmp).VersionInfo.FileVersion
+        if ($av -ne $bv) {
+            Warn ("версии расходятся: голое имя {0} против bin {1}" -f $av, $bv) 'Это разные бинарники. Сборка rocm5 работает не с тем HIP, что лежит в SDK.'
+        } else {
+            Ok ("версия совпадает с файлом в HIP SDK ({0})" -f $av)
+        }
+    }
+
+    $bp = [HipProbe.Native]::GetProcAddress($bare, 'hipInit')
+    $bc = [HipProbe.Native]::GetProcAddress($bare, 'hipGetDeviceCount')
+    if ($bp -ne [IntPtr]::Zero -and $bc -ne [IntPtr]::Zero) {
+        $fInit = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($bp, [HipProbe.HipInit])
+        $rcBare = -1
+        try { $rcBare = $fInit.Invoke([uint32]0) } catch { }
+        if ($rcBare -eq 0) {
+            Ok 'hipInit(0) на этом модуле = 0'
+            Info 'Значит путь через драйверную DLL рабочий - hipInit проходит.'
+        } else {
+            Fail ("hipInit(0) на этом модуле = {0} [{1}]" -f $rcBare, (Get-HipErrorText $rcBare)) 'Если и здесь 100 - дело не в выборе сборки ZLUDA и не в имени файла, а в драйвере/ROCr.'
+        }
+    }
+    [void][HipProbe.Native]::FreeLibrary($bare)
+}
 
 Write-Host ''
 Write-Host ('-' * 70) -ForegroundColor DarkCyan
