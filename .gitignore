@@ -1,0 +1,13 @@
+# Godot cache and imported resources
+.godot/
+# Exported builds (large artifacts)
+build/
+exports/
+*.pck
+*.zip
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+# Local test output
+tests/tmp/
