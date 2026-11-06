@@ -1,0 +1,9 @@
+# Windows-скрипты и launcher'ы — всегда CRLF, иначе cmd.exe ломается на многострочных блоках
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+
+# Документация и питон — LF
+*.md  text eol=lf
+*.py  text eol=lf
