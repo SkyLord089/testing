@@ -24,8 +24,10 @@
 |---|---|---|
 | HIP SDK **5.7.1** + ZLUDA 3.9.5 (rocm5) + патч rocBLAS + torch 2.2.1+cu118 | ✅ наиболее обкатанный путь | так работает [ComfyUI-Zluda](https://github.com/patientx/ComfyUI-Zluda) (`install-for-older-amd.bat`) |
 | HIP SDK **6.2.4** + ZLUDA 3.9.5 (rocm6, nvcuda из rocm5) + патч rocBLAS + torch 2.7.0+cu118 | ✅ рабочая, с оговорками | патч rocBLAS собран именно под 6.2.4 |
-| HIP SDK **6.4** + ZLUDA 3.9.5 (rocm6) + патч rocBLAS + torch 2.7.0+cu118 | ⚠️ экспериментально | ровно то, что вы хотели попробовать; патч собран под 6.2.4, применяется и на 6.4 |
+| HIP SDK **6.4** + ZLUDA 3.9.5 (rocm6) + патч rocBLAS + torch 2.7.0+cu118 | ⚠️ экспериментально | ровно то, что вы хотели попробовать; патч собран под 6.2.4, применяется и на 6.4. **На torch 2.3+ обязателен `--disable-cuda-malloc`** (встроен в лаунчер, иначе fake OOM) — см. [docs/fake-oom.md](docs/fake-oom.md) |
 | HIP SDK 7.x | ❌ | ZLUDA пока не поддерживает HIP SDK 7.x |
+| torch **2.2.1**+cu118 (пин ComfyUI-Zluda) | ✅ самый скучный путь | если 2.7.0+cu118 не пойдёт даже с фиксами из docs/fake-oom.md — откатывайтесь сюда |
+| torch **≥ 2.3** + ZLUDA **без** `--disable-cuda-malloc` | ❌ fake OOM | ComfyUI по умолчанию включает `backend:cudaMallocAsync` для torch≥2.0+cu*; ZLUDA его не тянет |
 | torch +cu126 / +cu128 (вместо cu118) через ZLUDA | ⚠️ не проверялось широко | можно попробовать, поменяв `-TorchIndexUrl` |
 | torch-directml | ✅ стабильный запасной вариант | работает на RX 580 через DirectX 12, без HIP и ZLUDA, заметно медленнее |
 
@@ -40,6 +42,7 @@ scripts/
   Verify-Setup.ps1           — проверка: torch видит видеокарту через ZLUDA
 docs/
   install_guide.md           — пошаговая установка (RU)
+  fake-oom.md                — почему torch 2.3+ падает с «фальшивым» OOM и как это чинится (RU)
   troubleshooting.md         — типичные ошибки и их решения (RU)
   architecture.md            — как это работает, совместимость, что ожидать от железа (RU)
 ```

@@ -43,7 +43,13 @@ rocBLAS не может найти ядра под gfx803. Скрипт `Patch-R
 4. Проверьте pagefile ≥ 16 ГБ и закрытые «тяжелые» приложения (Chrome на 6 вкладок с видео держит гигабайты ОЗУ).
 5. GGUF-кванты UNet вместо полных safetensors.
 
-**CUDA out of memory / `HIP out of memory`**
+**torch 2.3+ падает с fake OOM («Free (according to CUDA): 0 bytes»)**
+Самая частая причина на новых torch под ZLUDA — ComfyUI сам включает `backend:cudaMallocAsync` для torch≥2.0+cu*, а ZLUDA его не тянет.
+Фикс уже встроен в `run-comfyui.bat`: `--disable-cuda-malloc --disable-smart-memory` + `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False`.
+Если запускаете ComfyUI вручную — добавьте эти флаги. Полный разбор, диагностика (`Verify-Setup.ps1 -MemoryReport`)
+и лестница обходов — в [fake-oom.md](fake-oom.md).
+
+**CUDA out of memory / `HIP out of memory`** (честный, после фикса выше)
 `--lowvram`, уменьшите batch/разрешение, fp16 обязателен, GGUF-кванты, `--disable-smart-memory`
 (если версия ComfyUI его поддерживает), перезапуск после каждой OOM (память на gfx803 возвращается не всегда чисто).
 

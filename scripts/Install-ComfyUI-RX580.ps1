@@ -254,8 +254,16 @@ $lines = @(
     'if not defined ZLUDA_COMGR_LOG_LEVEL set ZLUDA_COMGR_LOG_LEVEL=0',
     'rem if you have an AMD iGPU you do NOT want used, uncomment:',
     'rem set HIP_VISIBLE_DEVICES=0',
+    'rem === fake-OOM fix for torch 2.3+ on ZLUDA (see docs/fake-oom.md) ===',
+    'rem Keep the caching allocator OUT of cudaMallocAsync mode and never VMM:',
+    'if not defined PYTORCH_CUDA_ALLOC_CONF set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False',
+    'set CUDA_MODULE_LOADING=LAZY',
+    'rem If you STILL get fake OOM, uncomment this (slow but bypasses the allocator entirely):',
+    'rem set PYTORCH_NO_CUDA_MEMORY_CACHING=1',
+    'rem If OOM is fragmentation-related, try instead:',
+    'rem set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False,max_split_size_mb:512',
     'cd /d "%COMFY_DIR%"',
-    '"%ZLUDA_DIR%\zluda.exe" -- "%COMFY_DIR%\venv\Scripts\python.exe" main.py --force-fp16 %*'
+    '"%ZLUDA_DIR%\zluda.exe" -- "%COMFY_DIR%\venv\Scripts\python.exe" main.py --force-fp16 --disable-cuda-malloc --disable-smart-memory %*'
 )
 [IO.File]::WriteAllLines($launcher, $lines)
 Info ("launcher: {0}" -f $launcher)
@@ -267,6 +275,7 @@ Write-Host '  1) (admin) .\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.4   # if not 
 Write-Host '  2) .\Verify-Setup.ps1                                     # torch sees the GPU?' -ForegroundColor Green
 Write-Host ('  3) "{0}"' -f $launcher) -ForegroundColor Green
 Write-Host '     First run compiles ZLUDA kernels: 10-30 min, be patient.' -ForegroundColor Green
+Write-Host '  3) If torch 2.3+ crashes with fake OOM, read docs/fake-oom.md (flags already baked into the launcher).' -ForegroundColor Green
 Write-Host '  4) Checkpoints go to: ' (Join-Path $comfyDir 'models\checkpoints') -ForegroundColor Green
 Write-Host '============================================================' -ForegroundColor Green
 exit 0

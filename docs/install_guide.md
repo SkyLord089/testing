@@ -117,13 +117,14 @@ rocBLAS patch marker: found (...)
 
 Первый запуск — **10–30 минут компиляции ядер**, это норма (см. architecture.md).
 
-Рекомендуемые флаги (передаются в `run-comfyui.bat` после `--`):
+Рекомендуемые флаги (уже встроены в `run-comfyui.bat`; в конец можно дописывать свои после `--`):
 
 - `--force-fp16` — **обязателен** для Polaris (быстрый fp16)
+- `--disable-cuda-malloc` — **фикс fake OOM на torch 2.3+**: ComfyUI по умолчанию включает `backend:cudaMallocAsync` для torch≥2.0+cu*, а ZLUDA его не поддерживает (см. [fake-oom.md](fake-oom.md))
+- `--disable-smart-memory` — ComfyUI не гейтит аллокации по `torch.cuda.mem_get_info()` (под ZLUDA врёт)
 - `--lowvram` — если 8 ГБ не хватает впритык
 - `--cpu-vae` или `--fp32-vae` — если VAE падает/сыплет артефакты
 - `--use-pytorch-cross-attention` — если не работает `quad` attention (он удалён в новых версиях ComfyUI)
-- `--disable-smart-memory` — исторический флаг, помогает на старых версиях ComfyUI
 
 ## 6. Модели
 

@@ -7,13 +7,17 @@
 .PARAMETER SmokeTest
   Additionally runs a tiny CUDA matmul through ZLUDA.
   NOTE: on first ever run this triggers kernel compilation for GEMM and can take MINUTES.
+.PARAMETER MemoryReport
+  Diagnoses the "fake OOM" problem: prints mem_get_info (free/total as seen by the driver),
+  torch allocator backend, allocated/reserved GiB and the allocator settings in effect.
 .EXAMPLE
-  .\Verify-Setup.ps1
+  .\Verify-Setup.ps1 -MemoryReport
 #>
 [CmdletBinding()]
 param(
     [string]$InstallRoot = (Join-Path $env:USERPROFILE 'RX580-ComfyUI'),
-    [switch]$SmokeTest
+    [switch]$SmokeTest,
+    [switch]$MemoryReport
 )
 
 $ErrorActionPreference = 'Continue'
@@ -73,6 +77,47 @@ if torch.cuda.is_available():
     }
 } else {
     Fail 'Skipping torch check - install is incomplete.'
+}
+
+if ($MemoryReport) {
+    Write-Host ""; Write-Host '== Memory report (fake-OOM diagnostics)' -ForegroundColor Cyan
+    if ((Test-Path -LiteralPath $venvPy) -and (Test-Path -LiteralPath $zludaExe)) {
+        $report = @'
+import torch, os
+print("torch=" + torch.__version__)
+print("cuda_build=" + str(torch.version.cuda))
+print("is_available=" + str(torch.cuda.is_available()))
+if torch.cuda.is_available():
+    dev = 0
+    free, total = torch.cuda.mem_get_info(dev)
+    gib = 1024 ** 3
+    print("mem_get_info: free=%.2f GiB total=%.2f GiB" % (free / gib, total / gib))
+    print("allocated=%.3f GiB" % (torch.cuda.memory_allocated(dev) / gib))
+    print("reserved=%.3f GiB" % (torch.cuda.memory_reserved(dev) / gib))
+    print("max_allocated=%.3f GiB" % (torch.cuda.max_memory_allocated(dev) / gib))
+    print("allocator_backend=" + str(torch.cuda.get_allocator_backend()))
+print("PYTORCH_CUDA_ALLOC_CONF=" + str(os.environ.get("PYTORCH_CUDA_ALLOC_CONF")))
+print("PYTORCH_NO_CUDA_MEMORY_CACHING=" + str(os.environ.get("PYTORCH_NO_CUDA_MEMORY_CACHING")))
+'@
+        $reportFile = Join-Path $env:TEMP ('memreport-' + [IO.Path]::GetRandomFileName() + '.py')
+        Set-Content -LiteralPath $reportFile -Value $report -Encoding ASCII
+        try {
+            $out = & $zludaExe -- $venvPy $reportFile 2>&1 | Out-String
+            $out -split "`r?`n" | ForEach-Object { Info $_ }
+            if ($out -match 'mem_get_info: free=0\.00 GiB') {
+                Warn2 'Driver reports 0 bytes free - classic fake-OOM signature. Run ComfyUI with --disable-cuda-malloc (see docs/fake-oom.md).'
+            }
+            if ($out -match 'allocator_backend=cudaMallocAsync') {
+                Warn2 'allocator_backend=cudaMallocAsync - this is what ComfyUI forces for torch>=2.0+cu* and what ZLUDA cannot handle. Use --disable-cuda-malloc.'
+            }
+        } catch {
+            Fail ("memory report crashed: {0}" -f $_.Exception.Message)
+        } finally {
+            Remove-Item -LiteralPath $reportFile -Force -ErrorAction SilentlyContinue
+        }
+    } else {
+        Fail 'Skipping memory report - install is incomplete.'
+    }
 }
 
 if ($SmokeTest) {
