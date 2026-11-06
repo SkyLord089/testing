@@ -8,7 +8,7 @@
     2) clone comfyanonymous/ComfyUI into <InstallRoot>\ComfyUI
     3) venv + ComfyUI requirements
     4) pip install torch (cu118 index) - pinned 2.7.0 by default
-    5) download ZLUDA v3.9.5 (rocm6 + rocm5), swap nvcuda.dll (rocm5 variant) as advised for SDK 6.x
+     5) download ZLUDA v3.9.5 (rocm6 + rocm5), merge payload; nvcuda.dll: rocm5 swap on HIP 5.7/6.2, rocm6 kept on HIP 6.4 (both switchable)
     6) patch <venv>\Lib\site-packages\torch\lib DLLs with ZLUDA builds (originals kept as *.orig)
     7) generate <InstallRoot>\run-comfyui.bat launcher
   Nothing is installed system-wide; HIP SDK itself must be installed manually beforehand.
@@ -31,7 +31,8 @@ param(
     [string]$ZludaTag      = 'rel.5e717459179dc272b7d7d23391f0fad66c7459cf',
     [switch]$SkipRocmCheck,
     [switch]$SkipZludaPatch,
-    [switch]$KeepRocm6Nvcuda
+    [switch]$KeepRocm6Nvcuda,   # always keep the rocm6 nvcuda.dll (consistent family)
+    [switch]$SwapRocm5Nvcuda    # force the advanced-lvl-up recipe (nvcuda.dll from rocm5); default for HIP 5.7/6.2
 )
 
 $ErrorActionPreference = 'Stop'
@@ -111,6 +112,13 @@ if (-not $SkipRocmCheck) {
         Die 'Install HIP SDK, then re-run this script (or pass -SkipRocmCheck to bypass).'
     }
     Info ("ROCm/HIP bin: {0}" -f $rocmBin)
+    $pathEntries = @($env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') })
+    if ($pathEntries -contains $rocmBin.TrimEnd('\')) {
+        Info 'ROCm bin is on PATH'
+    } else {
+        Warn2 'ROCm bin is NOT on PATH - amdhip64.dll and its dependencies will not load (classic cause of WinError 126/127 on import torch).'
+        Warn2 ("Fix it (user PATH): [Environment]::SetEnvironmentVariable('Path', ([Environment]::GetEnvironmentVariable('Path','User') + ';{0}'), 'User')" -f $rocmBin)
+    }
     if ($rocmBin -notmatch [regex]::Escape($RocmVersion)) {
         Warn2 ("Expected ROCm {0} but resolved {1} - make sure PATH does not shadow it with another ROCm version." -f $RocmVersion, $rocmBin)
     }
@@ -222,19 +230,27 @@ foreach ($k in ($payload.Keys | Sort-Object)) {
 }
 Info ("ZLUDA payload: {0} libraries merged into {1} (rocm6 preferred, rocm5 fallback)" -f $payload.Count, $zludaDir)
 
-# advanced-lvl-up: for HIP SDK 6.x, replace nvcuda.dll with the one from the rocm5 build
-if (-not $KeepRocm6Nvcuda) {
+# Version-aware default: the rocm5-nvcuda swap is the documented advanced-lvl-up
+# recipe for HIP SDK 5.7/6.2.4. For HIP SDK 6.4 there is no confirmed recipe,
+# so keep the consistent rocm6 family unless the user forces the swap.
+$doSwap = $SwapRocm5Nvcuda
+if (-not $SwapRocm5Nvcuda -and -not $KeepRocm6Nvcuda) {
+    $doSwap = ($RocmVersion -notmatch '^6\.4')
+}
+if ($KeepRocm6Nvcuda) {
+    Info 'keeping the rocm6 nvcuda.dll (-KeepRocm6Nvcuda)'
+} elseif ($doSwap) {
     $nv5 = $idx5 | Where-Object { $_.Name -ieq 'nvcuda.dll' } | Select-Object -First 1
     if ($nv5) {
         $nv6target = Join-Path $zludaDir 'nvcuda.dll'
         if (Test-Path -LiteralPath $nv6target) { Copy-Item -LiteralPath $nv6target -Destination ($nv6target + '.zluda-rocm6.orig') -Force }
         Copy-Item -LiteralPath $nv5.FullName -Destination $nv6target -Force
-        Info 'nvcuda.dll swapped for the rocm5 build (required for SDK 6.x per the gfx803 patch author)'
+        Info 'nvcuda.dll swapped for the rocm5 build (advanced-lvl-up recipe for HIP SDK 5.7/6.2.4)'
     } else {
         Warn2 'nvcuda.dll not found in the rocm5 package - keeping the rocm6 one.'
     }
 } else {
-    Info 'keeping the rocm6 nvcuda.dll (-KeepRocm6Nvcuda)'
+    Info 'keeping the rocm6 nvcuda.dll (default for HIP SDK 6.4; use -SwapRocm5Nvcuda for the 6.2.4 recipe)'
 }
 
 # ---------- 7. patch torch\lib ----------

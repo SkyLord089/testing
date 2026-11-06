@@ -9,6 +9,11 @@
 - **HIP SDK 6.4** — ставится **вручную**: <https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html>
   (официальный инсталлятор, нужен аккаунт AMD / согласие с EULA — поэтому скрипт его не ставит сам).
   После установки проверьте, что есть `C:\Program Files\AMD\ROCm\6.4\bin\rocblas`.
+- **Каталог `C:\Program Files\AMD\ROCm\6.4\bin` должен быть в `PATH`** (иначе `amdhip64.dll` и вся HIP-семья
+  не загрузятся — классическая причина WinError 126/127 на `import torch`). Проверить:
+  `[Environment]::GetEnvironmentVariable('Path','Machine') -split ';' | Where-Object { $_ -match 'ROCm' }`
+  и то же с `'User'`. Если пусто — добавьте каталог через Система → О системе → Дополнительные параметры →
+  Переменные среды (или одной строкой выше, с `'User'`), и **перезапустите консоль**.
 - Git — <https://git-scm.com/download/win> (при установке отметьте "Git from the command line").
 - Python **3.11** с python.org <https://www.python.org/downloads/windows/> — отмечайте **"Add Python to PATH"**.
   НЕ ставьте питон из Microsoft Store. 3.10–3.12 тоже подойдут.
@@ -75,6 +80,8 @@ cd testing\scripts
 | `-TorchVersion` | `2.7.0` | версия torch (`2.2.1` — обкатанный запасной) |
 | `-SkipRocmCheck` | — | не падать, если скрипт не нашёл HIP SDK |
 | `-SkipZludaPatch` | — | не патчить torch\lib (например, вы уже сделали это вручную) |
+| `-KeepRocm6Nvcuda` | — | всегда оставить `nvcuda.dll` из rocm6-сборки (по умолчанию так и делается на HIP 6.4) |
+| `-SwapRocm5Nvcuda` | — | заменить на `nvcuda.dll` из rocm5-сборки (поведение по умолчанию для HIP 5.7 / 6.2 по рецепту автора патча; на 6.4 — только по этому флагу) |
 
 Что происходит внутри:
 
@@ -82,7 +89,9 @@ cd testing\scripts
 2. Создаётся venv, ставятся зависимости ComfyUI.
 3. Ставится **torch 2.7.0 + cu118** (~2.5 ГБ, дольше всего): `pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu118`.
 4. Скачивается **ZLUDA v3.9.5** (rocm6 + rocm5 сборки) в `…\RX580-ComfyUI\zluda`;
-   `nvcuda.dll` в rocm6-сборке заменяется на `nvcuda.dll` из rocm5-сборки (так советует автор патча для SDK 6.x).
+   `nvcuda.dll`: для HIP 5.7 / 6.2 в rocm6-сборке заменяется на rocm5-версию (рецепт автора патча);
+   для **HIP 6.4 по умолчанию остаётся rocm6** (консистентный набор rocm6), а рецепт `-SwapRocm5Nvcuda`
+   включается вручную. Принудительно: `-KeepRocm6Nvcuda` / `-SwapRocm5Nvcuda`.
 5. В `torch\lib` оригиналы библиотек (`cublas64_11.dll`, `cusparse64_11.dll`, `cublasLt64_11.dll`, `nvrtc*.dll`)
    бэкапятся как `*.orig` и заменяются ZLUDA-версиями.
 6. В `…\RX580-ComfyUI\run-comfyui.bat` генерируется ярлык запуска с абсолютными путями.

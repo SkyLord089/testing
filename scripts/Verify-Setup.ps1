@@ -31,7 +31,8 @@ Write-Host 'RX 580 ComfyUI setup verification' -ForegroundColor White
 
 $comfyDir = Join-Path $InstallRoot 'ComfyUI'
 $venvPy   = Join-Path $comfyDir 'venv\Scripts\python.exe'
-$zludaExe = Join-Path $InstallRoot 'zluda\zluda.exe'
+$zludaDir = Join-Path $InstallRoot 'zluda'
+$zludaExe = Join-Path $zludaDir 'zluda.exe'
 $launcher = Join-Path $InstallRoot 'run-comfyui.bat'
 
 Write-Host ""; Write-Host '== Files' -ForegroundColor Cyan
@@ -95,21 +96,50 @@ if torch.cuda.is_available():
 }
 
 if ($MemoryReport) {
-    Write-Host ""; Write-Host '== Memory report (fake-OOM diagnostics)' -ForegroundColor Cyan
+    Write-Host ""; Write-Host '== Memory report (fake-OOM + WinError 126/127 diagnostics)' -ForegroundColor Cyan
     if ((Test-Path -LiteralPath $venvPy) -and (Test-Path -LiteralPath $zludaExe)) {
+        $torchLib2 = Join-Path $comfyDir 'venv\Lib\site-packages\torch\lib'
         $report = @'
-import torch, os
-print("torch=" + torch.__version__)
+import os, ctypes, sys
+
+zdir = os.environ.get("ZLUDA_DIAG_ZLUDA")
+tdir = os.environ.get("ZLUDA_DIAG_TORCHLIB")
+
+def tryload(p):
+    try:
+        ctypes.WinDLL(p)
+        print("load OK: " + p)
+    except OSError as e:
+        print("load FAIL: %s -> %s" % (p, e))
+
+if zdir:
+    for name in ("nvcuda.dll", "cublas.dll", "cusparse.dll", "nvrtc.dll"):
+        p = os.path.join(zdir, name)
+        if os.path.exists(p):
+            tryload(p)
+if tdir and os.path.isdir(tdir):
+    for name in sorted(os.listdir(tdir)):
+        low = name.lower()
+        if low.startswith(("cublas64_11", "cublaslt64_11", "cusparse64_11", "nvrtc64_")):
+            tryload(os.path.join(tdir, name))
+
+try:
+    import torch
+except Exception as e:
+    print("torch_import=FAIL %s: %s" % (type(e).__name__, e))
+    sys.exit(0)
+
+gib = 1024 ** 3
+print("torch_import=OK torch=" + torch.__version__)
 print("cuda_build=" + str(torch.version.cuda))
-print("is_available=" + str(torch.cuda.is_available()))
-if torch.cuda.is_available():
-    dev = 0
-    free, total = torch.cuda.mem_get_info(dev)
-    gib = 1024 ** 3
+avail = torch.cuda.is_available()
+print("cuda_available=" + str(avail))
+if avail:
+    free, total = torch.cuda.mem_get_info(0)
     print("mem_get_info: free=%.2f GiB total=%.2f GiB" % (free / gib, total / gib))
-    print("allocated=%.3f GiB" % (torch.cuda.memory_allocated(dev) / gib))
-    print("reserved=%.3f GiB" % (torch.cuda.memory_reserved(dev) / gib))
-    print("max_allocated=%.3f GiB" % (torch.cuda.max_memory_allocated(dev) / gib))
+    print("allocated=%.3f GiB" % (torch.cuda.memory_allocated(0) / gib))
+    print("reserved=%.3f GiB" % (torch.cuda.memory_reserved(0) / gib))
+    print("max_allocated=%.3f GiB" % (torch.cuda.max_memory_allocated(0) / gib))
     print("allocator_backend=" + str(torch.cuda.get_allocator_backend()))
 print("PYTORCH_CUDA_ALLOC_CONF=" + str(os.environ.get("PYTORCH_CUDA_ALLOC_CONF")))
 print("PYTORCH_NO_CUDA_MEMORY_CACHING=" + str(os.environ.get("PYTORCH_NO_CUDA_MEMORY_CACHING")))
@@ -117,8 +147,17 @@ print("PYTORCH_NO_CUDA_MEMORY_CACHING=" + str(os.environ.get("PYTORCH_NO_CUDA_ME
         $reportFile = Join-Path $env:TEMP ('memreport-' + [IO.Path]::GetRandomFileName() + '.py')
         Set-Content -LiteralPath $reportFile -Value $report -Encoding ASCII
         try {
+            $env:ZLUDA_DIAG_ZLUDA = $zludaDir
+            $env:ZLUDA_DIAG_TORCHLIB = $torchLib2
             $out = & $zludaExe -- $venvPy $reportFile 2>&1 | Out-String
             $out -split "`r?`n" | ForEach-Object { Info $_ }
+            if ($out -match 'torch_import=FAIL') {
+                Fail 'torch import failed. Read the load OK/FAIL lines above: 126 = DLL not found/PATH issue (add ROCm bin to PATH), 127 = entry-point mismatch (try .\Install-ComfyUI-RX580.ps1 -InstallRoot <root> -KeepRocm6Nvcuda, or -SwapRocm5Nvcuda for HIP 6.2 recipe).'
+            } elseif ($out -match 'cuda_available=False') {
+                Fail 'torch imports but CUDA is not available - see the load lines above; if all DLLs load OK, check rocBLAS patch marker and HIP SDK install.'
+            } else {
+                Ok 'torch imports fine and CUDA answers.'
+            }
             if ($out -match 'mem_get_info: free=0\.00 GiB') {
                 Warn2 'Driver reports 0 bytes free - classic fake-OOM signature. Run ComfyUI with --disable-cuda-malloc (see docs/fake-oom.md).'
             }
@@ -128,7 +167,26 @@ print("PYTORCH_NO_CUDA_MEMORY_CACHING=" + str(os.environ.get("PYTORCH_NO_CUDA_ME
         } catch {
             Fail ("memory report crashed: {0}" -f $_.Exception.Message)
         } finally {
+            $env:ZLUDA_DIAG_ZLUDA = $null
+            $env:ZLUDA_DIAG_TORCHLIB = $null
             Remove-Item -LiteralPath $reportFile -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-Host ""; Write-Host '== DLL versions' -ForegroundColor Cyan
+        $watch = @((Join-Path $zludaDir 'zluda.exe'), (Join-Path $zludaDir 'nvcuda.dll'), (Join-Path $zludaDir 'cublas.dll'), (Join-Path $zludaDir 'cusparse.dll'), (Join-Path $zludaDir 'nvrtc.dll'))
+        if (Test-Path -LiteralPath $torchLib2) {
+            $watch += @(Get-ChildItem -LiteralPath $torchLib2 -Filter 'cublas64_11.dll' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+            $watch += @(Get-ChildItem -LiteralPath $torchLib2 -Filter 'cublasLt64_11.dll' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+            $watch += @(Get-ChildItem -LiteralPath $torchLib2 -Filter 'cusparse64_11.dll' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+            $watch += @(Get-ChildItem -LiteralPath $torchLib2 -Filter 'nvrtc64_*.dll' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+        }
+        foreach ($f in $watch) {
+            try {
+                $vi = (Get-Item -LiteralPath $f).VersionInfo
+                Info ("{0,-8}  {1}" -f ($vi.FileVersion), $f)
+            } catch {
+                Info ("(no version info)  {0}" -f $f)
+            }
         }
     } else {
         Fail 'Skipping memory report - install is incomplete.'

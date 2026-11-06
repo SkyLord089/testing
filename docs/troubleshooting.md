@@ -23,6 +23,23 @@
 4. Антивирус не забанил `zluda.exe` / `nvcuda.dll`? (ZLUDA — DLL-инжектор, эвристика его не любит.) Добавьте папку `RX580-ComfyUI` в исключения.
 5. Драйвер свежий? AMD Adrenalin → Проверка обновлений. ZLUDA/HIP требуют AMD Adrenalin ≥ 23.x по факту.
 
+**`OSError: [WinError 127] The specified procedure could not be found. Error loading "...\torch\lib\cublas64_11.dll"`**
+DLL найдена, но точка входа не находится — почти всегда несовпадение "семейства" DLL. По порядку:
+1. Перезапустите установщик — свежая версия на **HIP 6.4 не подменяет** `nvcuda.dll` на rocm5-версию
+   (рецепт Advanced-lvl-up написан под HIP 6.2.4 / 5.7.1; смешение rocm5 nvcuda + rocm6 cublas на 6.4 и даёт 127):
+   `.\Install-ComfyUI-RX580.ps1 -InstallRoot D:\Apps\ComfyUI`
+   (если хотите именно рецепт патча — добавьте `-SwapRocm5Nvcuda`).
+2. Убедитесь, что `C:\Program Files\AMD\ROCm\6.4\bin` есть в PATH (иначе `amdhip64.dll` и вся HIP-семья не загрузятся):
+   `[Environment]::GetEnvironmentVariable('Path','Machine') -split ';' | ? { $_ -match 'ROCm' }`
+   и то же с `'User'`. Пусто — добавьте каталог и **перезапустите консоль**.
+3. Запустите `.\Verify-Setup.ps1 -InstallRoot D:\Apps\ComfyUI -MemoryReport`.
+   Расширенная диагностика печатает `load OK` / `load FAIL` по каждому DLL
+   (`zluda\nvcuda.dll`, `cublas.dll`, `cusparse.dll`, `nvrtc.dll`, пропатченные `cublas64_11.dll`, `cublasLt64_11.dll`,
+   `cusparse64_11.dll`, `nvrtc64_*.dll`) и версии файлов — по строке с FAIL видно, какой именно DLL и почему.
+4. Если 127 держится: поставьте **HIP SDK 6.2.4** (или 5.7.1) и перезапустите установщик — это обкатанная связка
+   (на 6.2/5.7 установщик сам оставит рецепт с rocm5 nvcuda). Крайний обкатанный вариант — HIP 5.7.1 + `-TorchVersion 2.2.1`.
+   WinError 126 = модуль/зависимость не найдена (PATH / нет `amdhip64.dll`), WinError 127 = точка входа не найдена (несовместимая пара DLL).
+
 **`zluda` папка пустая / `[ERROR] ZLUDA DLL missing: ...\zluda\cublas.dll` / «zluda.exe not found»**
 Причина (v1 скрипта): ZLUDA-архивы не обязаны иметь классическую плоскую раскладку, а установщик
 копировал только папку «где лежит zluda.exe», молча оставляя `zluda\` пустым. Исправлено: payload

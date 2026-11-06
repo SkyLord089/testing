@@ -95,6 +95,9 @@ if ($rocmBin) {
     $hipDll = Get-ChildItem -LiteralPath $rocmBin -Filter 'amdhip64.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($hipDll) { Ok 'amdhip64.dll present (HIP runtime found)' }
     else { Warn 'amdhip64.dll NOT in that bin dir - is the HIP SDK runtime component installed?' }
+    $pathEntries = @($env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') })
+    if ($pathEntries -contains $rocmBin.TrimEnd('\')) { Ok 'ROCm bin is on PATH' }
+    else { Warn "ROCm bin is NOT on PATH - 'import torch' will die with WinError 126/127. Add $rocmBin to user PATH (System Properties > Environment Variables)" }
     if (Test-Path -LiteralPath (Join-Path $rocmBin 'rocblas\gfx803.zluda-patched')) { Ok 'rocBLAS gfx803 patch marker found' }
     else { Warn 'gfx803 rocBLAS patch NOT applied yet - run .\Patch-RocBLAS-gfx803.ps1 (elevated)' }
     if ($rocmBin -notmatch '6\.4') { Warn 'This looks like a non-6.4 ROCm. HIP SDK 6.4 is what this kit targets; 6.2.4 is the fully supported fallback for the patch.' }
