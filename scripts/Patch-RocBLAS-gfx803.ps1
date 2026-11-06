@@ -2,16 +2,19 @@
 <#
 .SYNOPSIS
   Backs up and replaces HIP SDK rocBLAS with the community gfx803/gfx900 build.
-  Required because HIP SDK 6.4 ships NO rocBLAS kernels for gfx803 (RX 580).
+  Required because HIP SDK ships NO rocBLAS kernels for gfx803 (RX 580).
+  v1.0.0 targets HIP SDK 5.7.1 / 6.2.4 ONLY (6.4 confirmed broken: WinError 127).
 .DESCRIPTION
-  - Locates the ROCm/HIP bin dir (default target: 6.4; falls back to HIP_PATH / newest installed ROCm)
+  - Locates the ROCm/HIP bin dir (default target: 6.2; falls back to HIP_PATH / newest installed ROCm)
   - Makes full backups: rocblas.dll -> rocblas.dll.zluda-bak ; rocblas\library -> rocblas\library.zluda-bak
   - Downloads the advanced-lvl-up gfx803/gfx900 patch (v1.0.0) and overlays it
   - Leaves a marker file rocblas\gfx803.zluda-patched for Test-Prerequisites/Verify-Setup
   Re-run safe. Requires Administrator (auto-elevates).
 .PARAMETER RocmVersion
-  Which ROCm tree to patch. Default 6.4. The patch binary itself was built for 5.7.1 and 6.2.4;
-  6.4 works per community testing but is experimental. Use 6.2 for the most conservative path.
+  Which ROCm tree to patch. Default 6.2. The v1.0.0 patch binary was built for HIP SDK 5.7.1 and 6.2.4;
+  on 6.4 it replaces host rocblas.dll with a build LACKING the rocblas_*_64 entry points that
+  hipblas.dll 6.4 imports -> WinError 127, torch fails to load (confirmed on hardware, 2026-11-06).
+  Do NOT use 6.4. Use 6.2 (or 5.7.1).
 .PARAMETER Force
   Overwrite existing .zluda-bak backups (default keeps the original first backup).
 .EXAMPLE
@@ -21,7 +24,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$RocmVersion = '6.4',
+    [string]$RocmVersion = '6.2',
     [switch]$Force
 )
 
@@ -45,10 +48,12 @@ if (-not $isAdmin) {
 Write-Host ''
 Write-Host ("== Patching rocBLAS for gfx803 (target ROCm {0})" -f $RocmVersion) -ForegroundColor Cyan
 if ($RocmVersion -eq '6.4') {
-    Warn2 'The community patch is built for HIP SDK 5.7.1 / 6.2.4. Applying it to 6.4 is EXPERIMENTAL.'
-    Warn2 'For the most boring path, install HIP SDK 6.2.4 and run: .\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.2'
+    Warn2 'HIP SDK 6.4 is a KNOWN-BROKEN combo with this patch (2026-11-06, confirmed on hardware):'
+    Warn2 'its hipblas.dll imports rocblas_*_64 entry points that the patched (6.2.4/5.7.1-built) rocblas.dll does NOT export -> WinError 127, torch will not import.'
+    Warn2 'Use HIP SDK 6.2.4 instead: .\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.2'
+    Warn2 'Continuing with 6.4 anyway; revert with .\Restore-RocBLAS.ps1 -RocmVersion 6.4 (loses gfx803 BLAS kernels).'
 }
-if ($RocmVersion -like '7.*') { Die 'HIP SDK 7.x is NOT supported by ZLUDA. Use 6.4 / 6.2.4 / 5.7.1.' }
+if ($RocmVersion -like '7.*') { Die 'HIP SDK 7.x is NOT supported by ZLUDA. Use 6.2.4 / 5.7.1.' }
 
 # ---- locate ROCm bin ----
 $candidates = New-Object System.Collections.Generic.List[string]
@@ -76,7 +81,7 @@ if (-not $rocmBin) {
     Write-Host '   HIP SDK not found.' -ForegroundColor Red
     Write-Host '   Install it manually from AMD: https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html' -ForegroundColor Yellow
     Start-Process 'https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html' | Out-Null
-    Die 'Install HIP SDK (6.4, or 6.2.4), then re-run.'
+    Die 'Install HIP SDK (6.2.4, or 5.7.1), then re-run.'
 }
 Info ("ROCm bin: {0}" -f $rocmBin)
 $rocmFolder = Split-Path (Split-Path $rocmBin -Parent) -Leaf

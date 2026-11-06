@@ -111,7 +111,7 @@ if ($MemoryReport) {
         foreach ($p in $rocmBins) {
             if ($pathEntries -contains $p.TrimEnd('\')) { Ok "$p is on PATH" }
             else { Fail "$p NOT on PATH - bare-name DLL loads (what ComfyUI needs) will fail" }
-            foreach ($name in @('amdhip64.dll', 'hipblas.dll', 'rocblas.dll', 'hipsparse.dll', 'rocsparse.dll')) {
+            foreach ($name in @('amdhip64.dll', 'hipblas.dll', 'rocblas.dll', 'hipsparse.dll', 'rocsparse.dll', 'rocsolver.dll')) {
                 $full = Join-Path $p $name
                 if (Test-Path -LiteralPath $full) {
                     try {
@@ -124,6 +124,7 @@ if ($MemoryReport) {
                 }
             }
         }
+        Info 'note: amdhip64.dll absent from ROCm bin is normal - the AMD driver ships it in System32 (bare load OK confirms).'
         if ($rocmBins.Count -eq 0) { Warn2 'No ROCm bin directory found under Program Files (AMD\ROCm\{6.4,6.2,5.7}\bin)' }
 
         $report = @'
@@ -158,11 +159,11 @@ if tdir and os.path.isdir(tdir):
         if low.startswith(("cublas64_11", "cublaslt64_11", "cusparse64_11", "nvrtc64_")):
             tryload(os.path.join(tdir, name))
 for d in [x for x in rbins.split(";") if x]:
-    for name in ("amdhip64.dll", "hipblas.dll", "rocblas.dll", "hipsparse.dll", "rocsparse.dll"):
+    for name in ("amdhip64.dll", "hipblas.dll", "rocblas.dll", "hipsparse.dll", "rocsparse.dll", "rocsolver.dll"):
         p = os.path.join(d, name)
         if os.path.exists(p):
             tryload(p)
-for name in ("amdhip64.dll", "hipblas.dll", "rocblas.dll", "hipsparse.dll", "rocsparse.dll"):
+for name in ("amdhip64.dll", "hipblas.dll", "rocblas.dll", "hipsparse.dll", "rocsparse.dll", "rocsolver.dll"):
     trybare(name)
 
 # ---------- PE import/export consistency check ----------
@@ -303,7 +304,7 @@ if tdir and os.path.isdir(tdir):
             subjects.append(os.path.join(tdir, name))
 if rbins:
     for d in rbins.split(';'):
-        for name in ("amdhip64.dll", "hipblas.dll", "rocblas.dll", "hipsparse.dll", "rocsparse.dll"):
+        for name in ("amdhip64.dll", "hipblas.dll", "rocblas.dll", "hipsparse.dll", "rocsparse.dll", "rocsolver.dll"):
             p = os.path.join(d, name)
             if os.path.exists(p):
                 subjects.append(p)
@@ -343,7 +344,10 @@ print("PYTORCH_NO_CUDA_MEMORY_CACHING=" + str(os.environ.get("PYTORCH_NO_CUDA_ME
             $out = & $zludaExe -- $venvPy $reportFile 2>&1 | Out-String
             $out -split "`r?`n" | ForEach-Object { Info $_ }
             if ($out -match 'torch_import=FAIL') {
-                Fail 'torch import failed. Read the load OK/FAIL lines above: 126 = DLL not found/PATH issue (add ROCm bin to PATH), 127 = entry-point mismatch (try .\Install-ComfyUI-RX580.ps1 -InstallRoot <root> -KeepRocm6Nvcuda, or -SwapRocm5Nvcuda for HIP 6.2 recipe).'
+                Fail 'torch import failed. See the load OK/FAIL lines and the deps of / MISSING EXPORTS report above: 126 = module missing (PATH / incomplete HIP SDK), 127 = entry point missing (ABI mismatch - on HIP 6.4 this is the known gfx803-patch/hipblas conflict, see the next line and docs/troubleshooting.md).'
+                if (($out -match 'MISSING EXPORTS') -and ($out -match 'rocblas_[A-Za-z0-9]+_64')) {
+                    Warn2 'Root cause: hipblas.dll 6.4 imports rocblas_*_64 entry points that the community gfx803 rocblas.dll (built for HIP 6.2.4/5.7.1) does NOT export - the confirmed WinError 127 trigger. Switch to HIP SDK 6.2.4: re-patch with .\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.2, re-run installer with -RocmVersion 6.2, and keep only ROCm\6.2\bin in PATH. See docs/troubleshooting.md (WinError 127).'
+                }
             } elseif ($out -match 'cuda_available=False') {
                 Fail 'torch imports but CUDA is not available - see the load lines above; if all DLLs load OK, check rocBLAS patch marker and HIP SDK install.'
             } else {

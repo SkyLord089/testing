@@ -105,9 +105,9 @@ if ($rocmBin) {
     else { Warn "ROCm bin is NOT on PATH - 'import torch' will die with WinError 126/127. Add $rocmBin to user PATH (System Properties > Environment Variables)" }
     if (Test-Path -LiteralPath (Join-Path $rocmBin 'rocblas\gfx803.zluda-patched')) { Ok 'rocBLAS gfx803 patch marker found' }
     else { Warn 'gfx803 rocBLAS patch NOT applied yet - run .\Patch-RocBLAS-gfx803.ps1 (elevated)' }
-    if ($rocmBin -notmatch '6\.4') { Warn 'This looks like a non-6.4 ROCm. HIP SDK 6.4 is what this kit targets; 6.2.4 is the fully supported fallback for the patch.' }
+    if ($rocmBin -match '6\.4') { Warn 'HIP SDK 6.4 + the gfx803 rocBLAS patch is a CONFIRMED-BROKEN combo (hipblas 6.4 needs rocblas_*_64, the patch is built for 6.2.4/5.7.1) -> WinError 127. Move to HIP SDK 6.2.4: install it, re-patch with -RocmVersion 6.2, re-run Install-ComfyUI-RX580.ps1 -RocmVersion 6.2, and keep only ROCm\6.2\bin in PATH.' }
 } else {
-    Fail 'HIP SDK not found. Install it manually from https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html (6.4, or 6.2.4 fallback), then re-run.'
+    Fail 'HIP SDK not found. Install it manually from https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html (6.2.4, or 5.7.1 fallback), then re-run.'
 }
 
 Section 'Virtual memory (pagefile)'

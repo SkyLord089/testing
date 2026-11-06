@@ -1,22 +1,25 @@
-# RX 580 + Windows 11: запуск ComfyUI через HIP SDK 6.4 и PyTorch 2.7+cu118
+# RX 580 + Windows 11: запуск ComfyUI на AMD RX 580 (HIP SDK 6.2.4 + ZLUDA + PyTorch 2.7+cu118)
 
-Этот репозиторий — набор скриптов и документации, чтобы на **AMD Radeon RX 580 (Polaris, gfx803)** под **Windows 11** запустить **ComfyUI** с **HIP SDK 6.4** и **PyTorch 2.7.0+cu118** через слой трансляции **ZLUDA**.
+Этот репозиторий — набор скриптов и документации, чтобы на **AMD Radeon RX 580 (Polaris, gfx803)** под **Windows 11** запустить **ComfyUI** с **HIP SDK 6.2.4** и **PyTorch 2.7.0+cu118** через слой трансляции **ZLUDA**. (Запрошенный изначально HIP SDK 6.4 — тупик: см. матрицу ниже; 6.4 остаётся документированным экспериментом, не рабочим путём.)
 
 > [!IMPORTANT]
 > Честно о совместимости — прочитайте до установки:
 >
 > - **HIP SDK 6.4 официально НЕ поддерживает gfx803 (RX 580)**. AMD не выпускает для него ядра rocBLAS в 6.4.
->   Работоспособность достигается **только патчем rocBLAS** от сообщества
+>   Единственный патч — сообщественный
 >   ([advanced-lvl-up](https://github.com/advanced-lvl-up/Rx470-Vega10-Rx580-gfx803-gfx900-fix-AMD-GPU)),
->   собранным под HIP SDK 5.7.1 / 6.2.4 и работающим на 6.4 экспериментально.
+>   собранный под HIP SDK 5.7.1 / 6.2.4. **На 6.4 он не работает**: патч подменяет `rocblas.dll` целиком, а у его сборки
+>   нет точек входа `rocblas_*_64`, требуемых `hipblas.dll` из 6.4 → `WinError 127` при `import torch`
+>   (подтверждено на железе 2026-11-06). Рабочие пути — **6.2.4** или **5.7.1**.
 > - **`torch==2.7.0+cu118` — это сборка PyTorch под CUDA (NVIDIA)**. На AMD GPU она работает **только через ZLUDA**
 >   (трансляция CUDA → HIP в рантайме). Нативной ROCm-сборки PyTorch для Windows под gfx803 не существует.
 > - Native-путь «официальный PyTorch + ROCm на Windows + RX 580» — не поддерживается ни AMD, ни PyTorch.
 >   (Linux-only экспериментальные сборки gfx803: [spy1134/rocm-gfx803](https://github.com/spy1134/rocm-gfx803).)
 >
 > Короче: это **экспериментальная связка**, и она работает только при одновременном выполнении всех условий:
-> HIP SDK (5.7.1 / 6.2.4 / 6.4-experimental) + патченный rocBLAS + ZLUDA + CUDA-сборка torch + правильные DLL в `torch\lib`.
-> Официальной «магической кнопки» для gfx803 на Windows нет.
+> HIP SDK (5.7.1 / **6.2.4**) + патченный rocBLAS + ZLUDA + CUDA-сборка torch + правильные DLL в `torch\lib`.
+> На **torch 2.3+ обязателен `--disable-cuda-malloc`** (встроен в лаунчер, иначе fake OOM) — см. [docs/fake-oom.md](docs/fake-oom.md).
+> Официальной «магической кнопки» для gfx803 на Windows нет. HIP SDK 6.4 — тупик на текущий момент (см. матрицу).
 
 ## Матрица проверенных конфигураций (сообщество, 2025–2026)
 
@@ -24,7 +27,7 @@
 |---|---|---|
 | HIP SDK **5.7.1** + ZLUDA 3.9.5 (rocm5) + патч rocBLAS + torch 2.2.1+cu118 | ✅ наиболее обкатанный путь | так работает [ComfyUI-Zluda](https://github.com/patientx/ComfyUI-Zluda) (`install-for-older-amd.bat`) |
 | HIP SDK **6.2.4** + ZLUDA 3.9.5 (rocm6, nvcuda из rocm5) + патч rocBLAS + torch 2.7.0+cu118 | ✅ рабочая, с оговорками | патч rocBLAS собран именно под 6.2.4 |
-| HIP SDK **6.4** + ZLUDA 3.9.5 (rocm6) + патч rocBLAS + torch 2.7.0+cu118 | ⚠️ экспериментально | ровно то, что вы хотели попробовать; патч собран под 6.2.4, применяется и на 6.4. **На torch 2.3+ обязателен `--disable-cuda-malloc`** (встроен в лаунчер, иначе fake OOM) — см. [docs/fake-oom.md](docs/fake-oom.md) |
+| HIP SDK **6.4** + патч rocBLAS | ❌ **не работает** | патч v1.0.0 подменяет `rocblas.dll` сборкой 6.2.4/5.7.1 → `hipblas.dll` 6.4 не находит `rocblas_*_64` → `WinError 127` при `import torch` (подтверждено на железе). Используйте строку 6.2.4 |
 | HIP SDK 7.x | ❌ | ZLUDA пока не поддерживает HIP SDK 7.x |
 | torch **2.2.1**+cu118 (пин ComfyUI-Zluda) | ✅ самый скучный путь | если 2.7.0+cu118 не пойдёт даже с фиксами из docs/fake-oom.md — откатывайтесь сюда |
 | torch **≥ 2.3** + ZLUDA **без** `--disable-cuda-malloc` | ❌ fake OOM | ComfyUI по умолчанию включает `backend:cudaMallocAsync` для torch≥2.0+cu*; ZLUDA его не тянет |
@@ -59,8 +62,8 @@ cd testing\scripts
 # 1. Предстартовая проверка (ничего не меняет); для D:: добавьте -InstallRoot D:\RX580-ComfyUI
 .\Test-Prerequisites.ps1 -InstallRoot D:\RX580-ComfyUI
 
-# 2. Патч rocBLAS под gfx803 — НУЖНЫ ПРАВА АДМИНИСТРАТОРА, HIP SDK 6.4 должен быть уже установлен
-.\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.4   # HIP SDK всегда останется на C: (он в Program Files)
+# 2. Патч rocBLAS под gfx803 — НУЖНЫ ПРАВА АДМИНИСТРАТОРА, HIP SDK 6.2.4 должен быть уже установлен
+.\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.2   # HIP SDK всегда останется на C: (он в Program Files)
 
 # 3. Установка ComfyUI + torch 2.7.0+cu118 + ZLUDA и патч torch\lib — сюда же уйдёт venv, модели, output
 .\Install-ComfyUI-RX580.ps1 -InstallRoot D:\RX580-ComfyUI

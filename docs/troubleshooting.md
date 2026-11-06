@@ -23,25 +23,26 @@
 4. Антивирус не забанил `zluda.exe` / `nvcuda.dll`? (ZLUDA — DLL-инжектор, эвристика его не любит.) Добавьте папку `RX580-ComfyUI` в исключения.
 5. Драйвер свежий? AMD Adrenalin → Проверка обновлений. ZLUDA/HIP требуют AMD Adrenalin ≥ 23.x по факту.
 
-**`OSError: [WinError 127] The specified procedure could not be found. Error loading "...\torch\lib\cublas64_11.dll"`**
-Фактическая картина у нас: `nvcuda.dll`/`nvrtc.dll` грузятся, **`cublas.dll`/`cusparse.dll` и пропатченные
-`cublas64_11.dll`/`cusparse64_11.dll` — нет**, а оригиналы (`*.orig`) — грузятся. Локализует проблему в цепочке
-зависимостей **BLAS/SPARSE** (hipblas / rocblas / rocsparse из HIP SDK, вместе с rocBLAS-патчем), а не в ZLUDA как таковой.
-По порядку:
-1. Убедитесь, что `C:\Program Files\AMD\ROCm\6.4\bin` есть в PATH (машинном или пользовательском) и консоль перезапущена:
-   `[Environment]::GetEnvironmentVariable('Path','Machine') -split ';' | ? { $_ -match 'ROCm' }`
-   и то же с `'User'`. `Verify-Setup.ps1 -MemoryReport` сам печатает, найден ли каталог
-   и лежит ли он в PATH, пробует загрузить `amdhip64/hipblas/rocblas/hipsparse/rocsparse` (по полному пути и по короткому имени),
-   показывает версии файлов и делает **офлайн-разбор PE-таблиц импорта/экспорта**: печатает `DEP MISSING <dll>`
-   (модуль не найден → WinError 126) либо `MISSING EXPORTS in <dll>: <список>` (точка входа не найдена → WinError 127)
-   с полным путём виновной DLL.
-2. Если `hipblas.dll`/`rocblas.dll`/`hipsparse.dll`/`rocsparse.dll` есть в каталоге, но **не загружаются** либо PE-разбор показывает
-   `MISSING EXPORTS` — это неполная/несовместимая установка HIP SDK (не дожили BLAS/SPARSE-компоненты): переустановите HIP SDK целиком (все чекбоксы, включая rocBLAS/rocSPARSE), затем `Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.4` (админ).
-3. Если `rocblas.dll` загрузился, но ядра не под gfx803 — проверьте маркер `...\6.4\bin\rocblas\gfx803.zluda-patched` и перезагрузитесь.
-4. Если `load OK` везде, но torch всё равно падает с 127 — смешение версий: переустановите **HIP SDK 6.2.4** (обкатанный путь Advanced-lvl-up;
-   на 6.2/5.7 установщик сам оставит рецепт с rocm5 nvcuda). Крайний вариант — HIP 5.7.1 + `-TorchVersion 2.2.1`.
-   На HIP 6.4 рецепта, подтверждённого сообществом, пока нет — это экспериментальный трек.
-   WinError 126 = модуль/зависимость не найдена (PATH / нет hipblas-rocblas-rocsparse), WinError 127 = точка входа не найдена (несовместимая пара DLL).
+**`OSError: [WinError 127] The specified procedure could not be found. Error loading "...\torch\lib\cublas64_11.dll"`** — первопричина найдена и подтверждена на железе (2026-11-06).
+
+Фактическая картина (`Verify-Setup.ps1 -MemoryReport`, расширенный PE-разбор):
+- `hipblas.dll` (HIP SDK 6.4) падает с WinError 127 на загрузке: `MISSING EXPORTS in C:\Program Files\AMD\ROCm\6.4\bin\rocblas.dll (imported by hipblas.dll): rocblas_cdgmm_64, rocblas_cgeam_64, rocblas_cgemm_64, ...` — вся серия `rocblas_*_64`.
+- Сам `rocblas.dll` — подменённая патчем gfx803 сборка (advanced-lvl-up v1.0.0 под HIP SDK 5.7.1 / 6.2.4): она старше 6.x-ABI и не экспортирует `rocblas_*_64`, которых требует `hipblas.dll` 6.4.
+- Цепочка: torch → ZLUDA `cublas64_11.dll` → `rocsolver.dll` → `hipblas.dll` → ✗. Поэтому одновременно падают и `zluda\cublas.dll` / `cusparse.dll` (транзитивно, «module not found»), а все `*.orig` загружаются нормально.
+- PATH тут ни при чём (каталог 6.4\bin в машинном PATH, `amdhip64.dll` грузится, `rocblas.dll` сама загружается OK).
+
+Что делать (в порядке предпочтения):
+1. **Перейти на HIP SDK 6.2.4** — единственный рабочий путь с патчем:
+   a. Установите HIP SDK 6.2.4 (<https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html>) в `C:\Program Files\AMD\ROCm\6.2`.
+   b. В машинном и пользовательском PATH оставьте ТОЛЬКО `...\ROCm\6.2\bin` (уберите `6.4\bin`, чтобы не тенил); перезапустите консоль.
+   c. `.\Restore-RocBLAS.ps1 -RocmVersion 6.4` — откатить эксперимент с патчем на 6.4 (необязательно, но чисто).
+   d. `.\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.2` (админ) — пропатчить rocBLAS дерева 6.2.
+   e. `.\Install-ComfyUI-RX580.ps1 -RocmVersion 6.2 -InstallRoot D:\Apps\ComfyUI` — переустановить (pip возьмёт колёса из кэша; ZLUDA перезлее скачается ~13 МБ).
+   f. `.\Verify-Setup.ps1 -InstallRoot D:\Apps\ComfyUI -MemoryReport` — ожидаем `load OK: hipblas.dll`, `torch_import=OK`, `cuda_available=True`.
+2. **Или откатить 6.4 совсем**: `.\Restore-RocBLAS.ps1 -RocmVersion 6.4` — hipblas загрузится, но ядра rocBLAS под gfx803 исчезнут → BLAS-вызовы упадут с `hipErrorNoBinaryForGpu`. «Импортируется, но не считает» — не рабочий вариант.
+3. **Или HIP SDK 5.7.1 + torch 2.2.1**: `.\Install-ComfyUI-RX580.ps1 -RocmVersion 5.7 -TorchVersion 2.2.1` — самый скучный, обкатанный путь (так работает ComfyUI-Zluda).
+4. Собрать rocBLAS 6.4 с gfx803 из исходников — отдельный проект (для Windows официальных gfx803-сборок AMD не выпускает, только Linux-эксперименты spy1134/rocm-gfx803); выходит за рамки этого репозитория.
+WinError 126 = модуль/зависимость не найдена (PATH / неполный HIP SDK), WinError 127 = точка входа не найдена (несовпадение ABI — наш случай).
 
 **`zluda` папка пустая / `[ERROR] ZLUDA DLL missing: ...\zluda\cublas.dll` / «zluda.exe not found»**
 Причина (v1 скрипта): ZLUDA-архивы не обязаны иметь классическую плоскую раскладку, а установщик

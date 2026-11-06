@@ -6,8 +6,8 @@
 ComfyUI (Python)
   └─ PyTorch 2.7.0+cu118        ← CUDA-сборка, тянет cublas64_11.dll / cusparse64_11.dll / nvrtc64_*.dll из torch\lib
        └─ ZLUDA                 ← подменные cublas/cusparse/nvrtc/nvcuda (rocm6 для HIP 6.x)
-            └─ HIP runtime      ← amdhip64.dll (HIP SDK, у нас 6.4)
-                 └─ rocBLAS     ← GEMM-ядра; ванильный из HIP SDK 6.4 НЕ содержит gfx803 → подменяем патчем
+            └─ HIP runtime      ← amdhip64.dll (HIP SDK, рекомендуемая 6.2.4; 6.4 — тупик)
+                 └─ rocBLAS     ← GEMM-ядра; ванильный из HIP SDK НЕ содержит gfx803 → подменяем патчем (собран под 6.2.4/5.7.1)
                       └─ AMD драйвер (Adrenalin) + железо RX 580 (gfx803, Polaris)
 ```
 
@@ -16,11 +16,12 @@ ZLUDA перехватывает эти вызовы и переадресует
 
 ## Почему официальный HIP SDK не видит RX 580
 
-`gfx803` был снят с официальной поддержки ROCm задолго до ветки 6.x. В HIP SDK 6.4
+`gfx803` был снят с официальной поддержки ROCm задолго до ветки 6.x. В HIP SDK 6.2.4 и 6.4
 `rocblas/library` не содержит Tensile-ядер для `gfx803`, поэтому первый же большой GEMM
 падает с ошибкой «no binary for GPU» / `hipErrorNoBinaryForGpu` / молчаливым крашем.
 Патч advanced-lvl-up кладёт туда пересобранные Tensile-библиотеки для gfx803 (готовый архив
-собран под HIP SDK 5.7.1 и 6.2.4; на 6.4 работает экспериментально — проверялось сообществом).
+собран под HIP SDK 5.7.1 и 6.2.4; на 6.4 НЕ работает — сборка не экспортирует rocblas_*_64, требуемые
+hipblas.dll 6.4, `import torch` падает с WinError 127; на 6.2.4 — обкатанный путь).
 
 ## Почему torch нужен именно CUDA-сборки
 

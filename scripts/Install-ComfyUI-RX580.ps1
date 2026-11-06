@@ -17,12 +17,12 @@
 .EXAMPLE
   .\Install-ComfyUI-RX580.ps1 -TorchVersion 2.2.1   # battle-tested fallback pinned by ComfyUI-Zluda
 .EXAMPLE
-  .\Install-ComfyUI-RX580.ps1 -RocmVersion 6.2      # if you installed HIP SDK 6.2 instead of 6.4
+  .\Install-ComfyUI-RX580.ps1 -RocmVersion 6.2      # default (HIP SDK 6.2.4); 6.4 is confirmed broken (WinError 127)
 #>
 [CmdletBinding()]
 param(
     [string]$InstallRoot   = (Join-Path $env:USERPROFILE 'RX580-ComfyUI'),
-    [string]$RocmVersion   = '6.4',
+    [string]$RocmVersion   = '6.2',
     [string]$TorchIndexUrl = 'https://download.pytorch.org/whl/cu118',
     [string]$TorchVersion  = '2.7.0',
     [string]$VisionVersion = '0.22.0',
@@ -107,7 +107,7 @@ if (-not $SkipRocmCheck) {
     $rocmBin = Find-RocmBin -PreferredVersion $RocmVersion
     if (-not $rocmBin) {
         Write-Host '   HIP SDK not found. It must be installed MANUALLY from AMD:' -ForegroundColor Yellow
-        Write-Host '   https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html  (6.4, or 6.2.4)' -ForegroundColor Yellow
+        Write-Host '   https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html  (6.2.4, or 5.7.1)' -ForegroundColor Yellow
         Start-Process 'https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html' | Out-Null
         Die 'Install HIP SDK, then re-run this script (or pass -SkipRocmCheck to bypass).'
     }
@@ -322,7 +322,7 @@ Info ("launcher: {0}" -f $launcher)
 Write-Host ""
 Write-Host '============================================================' -ForegroundColor Green
 Write-Host ' DONE. Next steps:' -ForegroundColor Green
-Write-Host '  1) (admin) .\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.4   # if not done yet' -ForegroundColor Green
+Write-Host '  1) (admin) .\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.2   # if not done yet' -ForegroundColor Green
 Write-Host '  2) .\Verify-Setup.ps1                                     # torch sees the GPU?' -ForegroundColor Green
 Write-Host ('  3) "{0}"' -f $launcher) -ForegroundColor Green
 Write-Host '     First run compiles ZLUDA kernels: 10-30 min, be patient.' -ForegroundColor Green

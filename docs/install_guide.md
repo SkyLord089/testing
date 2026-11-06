@@ -1,4 +1,10 @@
-# Пошаговая установка: ComfyUI на RX 580 @ Windows 11 (HIP SDK 6.4 + torch 2.7.0+cu118)
+# Пошаговая установка: ComfyUI на RX 580 @ Windows 11 (HIP SDK 6.2.4 + torch 2.7.0+cu118)
+
+> [!WARNING]
+> **HIP SDK 6.4 — тупик** (подтверждено на железе 2026-11-06): сообщественный патч rocBLAS подменяет `rocblas.dll`
+> целиком сборкой под 6.2.4/5.7.1, а у неё нет точек входа `rocblas_*_64`, требуемых `hipblas.dll` из 6.4 →
+> `WinError 127` при `import torch`. **Ставьте HIP SDK 6.2.4** (или 5.7.1). Ниже везде 6.2.4; если вы всё же хотите
+> эксперимента 6.4 — замените `-RocmVersion 6.2` на `6.4` и будьте готовы к ошибке из раздела про WinError 127.
 
 Время: ~1–2 часа (большая часть — скачивание) + 10–30 минут первой компиляции при первом запуске.
 
@@ -6,10 +12,12 @@
 
 - Windows 11 (10 тоже подойдёт, скрипты не используют ничего 11-специфичного, кроме `tar.exe`, который есть и там).
 - AMD Adrenalin — **свежий** драйвер для Polaris (PRO не нужен). Поставьте до начала.
-- **HIP SDK 6.4** — ставится **вручную**: <https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html>
+- **HIP SDK 6.2.4** — ставится **вручную**: <https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html>
   (официальный инсталлятор, нужен аккаунт AMD / согласие с EULA — поэтому скрипт его не ставит сам).
-  После установки проверьте, что есть `C:\Program Files\AMD\ROCm\6.4\bin\rocblas`.
-- **Каталог `C:\Program Files\AMD\ROCm\6.4\bin` должен быть в `PATH`** (иначе `amdhip64.dll` и вся HIP-семья
+  После установки проверьте, что есть `C:\Program Files\AMD\ROCm\6.2\bin\rocblas`.
+  Историческая справка: с HIP 6.4 связка теперь **подтверждённо не работает** — патч rocBLAS gfx803 собран под 6.2.4/5.7.1
+  и неэкспортирует `rocblas_*_64`, нужные `hipblas.dll` 6.4 (`WinError 127`).
+- **Каталог `C:\Program Files\AMD\ROCm\6.2\bin` должен быть в `PATH`** (иначе `amdhip64.dll` и вся HIP-семья
   не загрузятся — классическая причина WinError 126/127 на `import torch`). Проверить:
   `[Environment]::GetEnvironmentVariable('Path','Machine') -split ';' | Where-Object { $_ -match 'ROCm' }`
   и то же с `'User'`. Если пусто — добавьте каталог через Система → О системе → Дополнительные параметры →
@@ -42,12 +50,12 @@ cd testing\scripts
 ## 2. Патчим rocBLAS под gfx803 (нужен админ)
 
 ```powershell
-.\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.4
+.\Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.2
 ```
 
 Что делает скрипт:
 
-1. Находит `C:\Program Files\AMD\ROCm\6.4\bin` (или ближайший установленный ROCm, если 6.4 не найден;
+1. Находит `C:\Program Files\AMD\ROCm\6.2\bin` (или ближайший установленный ROCm, если 6.2 не найден;
    при расхождении версии печатает громкое предупреждение).
 2. Делает **полные резервные копии**: `rocblas.dll` → `rocblas.dll.zluda-bak`,
    `rocblas\library` → `rocblas\library.zluda-bak`.
@@ -67,8 +75,8 @@ cd testing\scripts
 ## 3. Ставим ComfyUI + torch + ZLUDA
 
 ```powershell
-.\Install-ComfyUI-RX580.ps1
-# установка на D:: .\Install-ComfyUI-RX580.ps1 -InstallRoot D:\RX580-ComfyUI
+.\Install-ComfyUI-RX580.ps1 -RocmVersion 6.2
+# установка на D:: .\Install-ComfyUI-RX580.ps1 -RocmVersion 6.2 -InstallRoot D:\RX580-ComfyUI
 ```
 
 Параметры (все опциональны):
@@ -166,7 +174,7 @@ REM если ставили на D::  D:\RX580-ComfyUI\run-comfyui.bat
 
 Что **останется на C:** (это нормально и не обходится):
 
-- **HIP SDK** — ставится AMD, всегда в `C:\Program Files\AMD\ROCm\6.4`, патч rocBLAS тоже применяется там (шаг 2); на скорость/расположение ComfyUI это не влияет
+- **HIP SDK** — ставится AMD, обычно в `C:\Program Files\AMD\ROCm\6.2` (рекомендуемая версия; 6.4 нежизнеспособна — см. заголовок), патч rocBLAS применяется там же (шаг 2); на скорость/расположение ComfyUI это не влияет
 - сам **Python** и **Git** — ставятся с python.org / git-scm.com куда вы скажете (для минимизации C: можно поставить их тоже на D:, но чаще они занимают < 500 МБ)
 - **pagefile** — Система → Виртуальная память: можно перенести/разделить на D:, на RX 580 с 8 ГБ VRAM это даже полезнее (держите суммарно ≥ 16 ГБ)
 - `%TEMP%` — временные мелкие файлы (~7 МБ для патча), переносить смысла нет
