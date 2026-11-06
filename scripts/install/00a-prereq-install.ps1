@@ -51,22 +51,33 @@ function Header([string]$t) {
 }
 function Step([string]$t) { Write-Host "`n>>> $t" -ForegroundColor White }
 
-function Get-File([string]$url, [string]$dest) {
+function Get-File([string[]]$urls, [string]$dest) {
     if (Test-Path $dest) {
         $mb = [math]::Round((Get-Item $dest).Length / 1MB, 1)
         Write-Host ("  Уже скачан: {0} ({1} МБ)" -f $dest, $mb) -ForegroundColor DarkGray
         if ($mb -gt 0.1) { return $true }
         Remove-Item $dest -Force
     }
-    Write-Host ("  Скачиваю: {0}" -f $url) -ForegroundColor White
-    try {
-        & "$env:SystemRoot\system32\curl.exe" -L --ssl-no-revoke -o $dest $url
-        if ($LASTEXITCODE -ne 0) { throw "curl код $LASTEXITCODE" }
-    } catch {
-        Write-Host ("  curl не сработал ({0}), пробую Invoke-WebRequest" -f $_) -ForegroundColor Yellow
-        Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+    foreach ($url in $urls) {
+        Write-Host ("  Скачиваю: {0}" -f $url) -ForegroundColor White
+        try {
+            & "$env:SystemRoot\system32\curl.exe" -L --ssl-no-revoke -f -o $dest $url
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $dest)) { break }
+        } catch {}
+        try {
+            # -f у curl не сработал (404) - пробуем Invoke-WebRequest
+            if (-not (Test-Path $dest) -or (Get-Item $dest).Length -lt 100KB) {
+                Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+                if (Test-Path $dest) { break }
+            }
+        } catch {
+            Write-Host ("  не вышло: {0}" -f $_.Exception.Message) -ForegroundColor DarkYellow
+        }
     }
-    if (-not (Test-Path $dest)) { return $false }
+    if (-not (Test-Path $dest)) {
+        Write-Host '  Все источники недоступны.' -ForegroundColor Red
+        return $false
+    }
     $sz = (Get-Item $dest).Length
     if ($sz -lt 100KB) {
         Write-Host ("  Файл подозрительно мал: {0} байт - вероятно, страница-заглушка" -f $sz) -ForegroundColor Red
@@ -120,10 +131,13 @@ if (-not $SkipPython) {
     }
 
     if (-not $SkipPython) {
-        $url = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
+        $urls = @(
+            "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe",
+            "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion.exe"
+        )
         $exe = Join-Path $DownloadDir "python-$PythonVersion-amd64.exe"
 
-        if (Get-File $url $exe) {
+        if (Get-File $urls $exe) {
             Write-Host ''
             Write-Host '  Установка (тихая, в профиль пользователя, без админа):' -ForegroundColor White
             Write-Host '    InstallAllUsers=0  PrependPath=1  Include_pip=1  Include_test=0' -ForegroundColor DarkGray
@@ -189,10 +203,15 @@ if (-not $Skip7Zip) {
     if ($has7z) {
         Write-Host '  7-Zip уже есть - пропускаю.' -ForegroundColor Green
     } else {
-        $url = 'https://www.7-zip.org/a/7z2408-x64.exe'
-        $exe = Join-Path $DownloadDir '7z2408-x64.exe'
+        # 7-Zip 26.05 (окт 2026). Ссылки переехали на GitHub; старые
+        # www.7-zip.org/a/7z2408-x64.exe больше не отдаются.
+        $urls = @(
+            'https://github.com/ip7z/7zip/releases/download/26.05/7z2605-x64.exe',
+            'https://www.7-zip.org/a/7z2605-x64.exe'
+        )
+        $exe = Join-Path $DownloadDir '7z2605-x64.exe'
 
-        if (Get-File $url $exe) {
+        if (Get-File $urls $exe) {
             $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
             $dir = 'C:\Program Files\7-Zip'
             if (-not $isAdmin) { $dir = "$env:LOCALAPPDATA\Programs\7-Zip" }

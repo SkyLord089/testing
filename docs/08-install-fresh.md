@@ -72,7 +72,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\00a-prereq-install.ps
 | Что | Версия | Куда |
 |---|---|---|
 | Python | 3.11.9 x64 | `%LOCALAPPDATA%\Programs\Python\Python311` |
-| 7-Zip | 24.08 | `C:\Program Files\7-Zip` (или в профиль, если без админа) |
+| 7-Zip | 26.05 | `C:\Program Files\7-Zip` (или в профиль, если без админа) |
 
 Установщики качаются на диск кита (D:), на C: не оседают.
 
