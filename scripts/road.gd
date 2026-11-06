@@ -49,7 +49,9 @@ func start_transform(reverse: bool = false) -> Transform3D:
     var index = points.size() - 3 if reverse else 2
     var direction = tangent_at(index) * (-1.0 if reverse else 1.0)
     var origin = points[index] + Vector3.UP * 1.15
-    return Transform3D(Basis.looking_at(direction, Vector3.UP), origin)
+    # VehicleBody3D drives along its local +Z axis, so the basis must look
+    # opposite to the direction of travel.
+    return Transform3D(Basis.looking_at(-direction, Vector3.UP), origin)
 
 func nearest_index(position_3d: Vector3, around: int = -1, radius: int = 30) -> int:
     var first = 0

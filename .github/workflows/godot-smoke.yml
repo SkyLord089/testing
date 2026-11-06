@@ -36,7 +36,7 @@ jobs:
             echo 'Godot reported an error in the smoke log.'
             exit 1
           fi
-          test "$(grep -c '^PASS:' smoke.log)" -ge 21
+          test "$(grep -c '^PASS:' smoke.log)" -ge 23
 
       - name: Publish failure diagnostics
         if: failure()

@@ -38,7 +38,7 @@ func _ready() -> void:
     linear_damp = 0.035
     angular_damp = 0.35
     center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
-    center_of_mass = Vector3(0.0, -0.18, 0.12)
+    center_of_mass = Vector3(0.0, -0.18, -0.12)
     continuous_cd = true
     contact_monitor = true
     max_contacts_reported = 8
@@ -60,8 +60,8 @@ func _build_collision() -> void:
 
 func _build_wheels() -> void:
     var positions = [
-        Vector3(-0.83, -0.25, -1.32), Vector3(0.83, -0.25, -1.32),
-        Vector3(-0.83, -0.25, 1.32), Vector3(0.83, -0.25, 1.32)
+        Vector3(-0.83, -0.25, 1.32), Vector3(0.83, -0.25, 1.32),
+        Vector3(-0.83, -0.25, -1.32), Vector3(0.83, -0.25, -1.32)
     ]
     for i in range(4):
         var wheel = VehicleWheel3D.new()
@@ -91,7 +91,7 @@ func _physics_process(delta: float) -> void:
         return
     shift_cooldown = maxf(0.0, shift_cooldown - delta)
     last_impact = maxf(0.0, last_impact - delta)
-    var forward_speed = linear_velocity.dot(-global_basis.z)
+    var forward_speed = linear_velocity.dot(global_basis.z)
     var speed = linear_velocity.length()
     odometer += speed * delta
     if controls_enabled:
@@ -183,7 +183,7 @@ func _update_driveline(delta: float, forward_speed: float) -> void:
     engine_force = force * direction
     var velocity_flat = Vector3(linear_velocity.x, 0, linear_velocity.z)
     if velocity_flat.length() > 4.0:
-        var forward_flat = -global_basis.z
+        var forward_flat = global_basis.z
         forward_flat.y = 0
         drift_angle = rad_to_deg(forward_flat.normalized().angle_to(velocity_flat.normalized()))
         if drift_angle > 90.0:
@@ -258,14 +258,14 @@ func _build_visuals() -> void:
     glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
     glass.albedo_color.a = 0.88
     glass.cull_mode = BaseMaterial3D.CULL_DISABLED
-    _box(Vector3(1.76, 0.48, 4.02), Vector3(0, 0, 0.02), paint_material)
-    _box(Vector3(1.68, 0.16, 1.32), Vector3(0, 0.29, -1.28), paint_material)
-    _box(Vector3(1.70, 0.20, 0.66), Vector3(0, 0.27, 1.62), paint_material)
-    _box(Vector3(1.80, 0.20, 0.20), Vector3(0, -0.13, -2.02), trim)
-    _box(Vector3(1.80, 0.22, 0.20), Vector3(0, -0.12, 2.03), trim)
-    _box(Vector3(1.06, 0.17, 0.035), Vector3(0, 0.04, -2.135), dark)
+    _box(Vector3(1.76, 0.48, 4.02), Vector3(0, 0, -0.02), paint_material)
+    _box(Vector3(1.68, 0.16, 1.32), Vector3(0, 0.29, 1.28), paint_material)
+    _box(Vector3(1.70, 0.20, 0.66), Vector3(0, 0.27, -1.62), paint_material)
+    _box(Vector3(1.80, 0.20, 0.20), Vector3(0, -0.13, 2.02), trim)
+    _box(Vector3(1.80, 0.22, 0.20), Vector3(0, -0.12, -2.03), trim)
+    _box(Vector3(1.06, 0.17, 0.035), Vector3(0, 0.04, 2.135), dark)
     for x in [-0.91, 0.91]:
-        _box(Vector3(0.09, 0.16, 2.65), Vector3(x, -0.19, 0.16), trim)
+        _box(Vector3(0.09, 0.16, 2.65), Vector3(x, -0.19, -0.16), trim)
     _build_cabin(glass)
     # Lights and small aero details.
     var head_mat = _material(Color(0.78, 0.88, 0.91), 0.2, 0.16)
@@ -277,10 +277,11 @@ func _build_visuals() -> void:
     tail_material.emission = Color(0.95, 0.018, 0.008)
     tail_material.emission_energy_multiplier = 1.4
     for x in [-0.58, 0.58]:
-        _box(Vector3(0.48, 0.15, 0.045), Vector3(x, 0.16, -2.055), head_mat)
-        _box(Vector3(0.46, 0.15, 0.045), Vector3(x, 0.15, 2.055), tail_material)
+        _box(Vector3(0.48, 0.15, 0.045), Vector3(x, 0.16, 2.055), head_mat)
+        _box(Vector3(0.46, 0.15, 0.045), Vector3(x, 0.15, -2.055), tail_material)
         var spot = SpotLight3D.new()
-        spot.position = Vector3(x, 0.17, -1.98)
+        spot.position = Vector3(x, 0.17, 1.98)
+        spot.rotation_degrees.y = 180.0
         spot.light_color = Color(0.76, 0.86, 1.0)
         spot.light_energy = 3.8
         spot.spot_range = 52.0
@@ -290,10 +291,10 @@ func _build_visuals() -> void:
         spot.visible = false
         add_child(spot)
         headlight_nodes.append(spot)
-        _box(Vector3(0.20, 0.12, 0.27), Vector3(x * 1.57, 0.30, -0.52), paint_material)
-    _box(Vector3(1.46, 0.055, 0.27), Vector3(0, 0.48, 1.78), trim)
+        _box(Vector3(0.20, 0.12, 0.27), Vector3(x * 1.57, 0.30, 0.52), paint_material)
+    _box(Vector3(1.46, 0.055, 0.27), Vector3(0, 0.48, -1.78), trim)
     for x in [-0.55, 0.55]:
-        _box(Vector3(0.055, 0.27, 0.08), Vector3(x, 0.34, 1.74), trim)
+        _box(Vector3(0.055, 0.27, 0.08), Vector3(x, 0.34, -1.74), trim)
     var exhaust = CylinderMesh.new()
     exhaust.top_radius = 0.065
     exhaust.bottom_radius = 0.065
@@ -303,12 +304,12 @@ func _build_visuals() -> void:
     exhaust_instance.mesh = exhaust
     exhaust_instance.material_override = _material(Color(0.26, 0.28, 0.28), 0.9, 0.24)
     exhaust_instance.rotation_degrees.x = 90
-    exhaust_instance.position = Vector3(-0.56, -0.23, 2.10)
+    exhaust_instance.position = Vector3(-0.56, -0.23, -2.10)
     add_child(exhaust_instance)
     # A simple interior remains visible from the cockpit camera.
-    _box(Vector3(1.35, 0.16, 0.48), Vector3(0, 0.24, -0.55), dark)
+    _box(Vector3(1.35, 0.16, 0.48), Vector3(0, 0.24, 0.55), dark)
     for x in [-0.39, 0.39]:
-        _box(Vector3(0.42, 0.54, 0.46), Vector3(x, 0.30, 0.48), dark)
+        _box(Vector3(0.42, 0.54, 0.46), Vector3(x, 0.30, -0.48), dark)
     var steering_wheel = TorusMesh.new()
     steering_wheel.inner_radius = 0.13
     steering_wheel.outer_radius = 0.17
@@ -317,22 +318,22 @@ func _build_visuals() -> void:
     var steering_instance = MeshInstance3D.new()
     steering_instance.mesh = steering_wheel
     steering_instance.material_override = trim
-    steering_instance.position = Vector3(-0.38, 0.36, -0.34)
-    steering_instance.rotation_degrees.x = 72
+    steering_instance.position = Vector3(-0.38, 0.36, 0.34)
+    steering_instance.rotation_degrees.x = 108
     add_child(steering_instance)
 
 func _build_cabin(glass: Material) -> void:
     var st = SurfaceTool.new()
     st.begin(Mesh.PRIMITIVE_TRIANGLES)
-    var a = Vector3(-0.75, 0.22, -0.84)
-    var b = Vector3(0.75, 0.22, -0.84)
-    var c = Vector3(0.75, 0.22, 1.15)
-    var d = Vector3(-0.75, 0.22, 1.15)
-    var e = Vector3(-0.62, 0.64, -0.40)
-    var f = Vector3(0.62, 0.64, -0.40)
-    var g = Vector3(0.62, 0.64, 0.72)
-    var h = Vector3(-0.62, 0.64, 0.72)
-    var faces = [[a,b,f,e], [b,c,g,f], [c,d,h,g], [d,a,e,h], [e,f,g,h]]
+    var a = Vector3(-0.75, 0.22, 0.84)
+    var b = Vector3(0.75, 0.22, 0.84)
+    var c = Vector3(0.75, 0.22, -1.15)
+    var d = Vector3(-0.75, 0.22, -1.15)
+    var e = Vector3(-0.62, 0.64, 0.40)
+    var f = Vector3(0.62, 0.64, 0.40)
+    var g = Vector3(0.62, 0.64, -0.72)
+    var h = Vector3(-0.62, 0.64, -0.72)
+    var faces = [[e,f,b,a], [f,g,c,b], [g,h,d,c], [h,e,a,d], [h,g,f,e]]
     for face in faces:
         _visual_quad(st, face[0], face[1], face[2], face[3])
     st.generate_normals()
@@ -340,7 +341,7 @@ func _build_cabin(glass: Material) -> void:
     cabin.mesh = st.commit()
     cabin.material_override = glass
     add_child(cabin)
-    _box(Vector3(1.30, 0.075, 1.18), Vector3(0, 0.655, 0.16), paint_material)
+    _box(Vector3(1.30, 0.075, 1.18), Vector3(0, 0.655, -0.16), paint_material)
     for pair in [[a,e],[b,f],[c,g],[d,h]]:
         _beam(pair[0], pair[1], 0.065, paint_material)
     _beam(e, f, 0.06, paint_material)

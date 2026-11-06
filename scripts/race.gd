@@ -113,7 +113,8 @@ func progress() -> float:
 
 func recovery_transform() -> Transform3D:
     var index = clampi(nearest, 1, route_points.size() - 2)
-    return Transform3D(Basis.looking_at(_tangent(index), Vector3.UP), route_points[index] + Vector3.UP * 1.0)
+    # +Z is the vehicle's forward axis, hence the negated tangent.
+    return Transform3D(Basis.looking_at(-_tangent(index), Vector3.UP), route_points[index] + Vector3.UP * 1.0)
 
 func add_recovery_penalty() -> void:
     if mode == 0 and active:

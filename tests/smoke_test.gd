@@ -53,14 +53,16 @@ func _run() -> void:
     _check(game.race.active, "Race timer starts")
     _check(game.car.global_position.is_finite(), "Vehicle transform remains finite")
     print("SMOKE: applying throttle")
+    var start_position = game.car.global_position
     Input.action_press("throttle")
     for i in range(180):
         await physics_frame
     Input.action_release("throttle")
-    print("SMOKE DEBUG: speed=", game.car.speed_kph(), " engine_force=", game.car.engine_force, " brake=", game.car.brake, " throttle=", game.car.throttle_input, " rpm=", game.car.engine_rpm, " sleeping=", game.car.sleeping, " position=", game.car.global_position)
-    for wheel in game.car.wheels:
-        print("SMOKE WHEEL: ", wheel.name, " contact=", wheel.is_in_contact(), " skid=", wheel.get_skidinfo(), " rpm=", wheel.get_rpm(), " brake=", wheel.brake)
+    var travelled = game.car.global_position - start_position
+    print("SMOKE: speed kph=", game.car.speed_kph(), " travelled=", travelled)
     _check(game.car.speed_kph() > 5.0, "Physical vehicle accelerates under throttle")
+    _check(travelled.dot(game.car.global_basis.z) > 2.0, "Vehicle moves along its own forward (+Z) axis")
+    _check(travelled.dot(game.road.tangent_at(game.race.nearest)) > 2.0, "Vehicle advances along the route tangent")
     _check(game.car.global_position.is_finite(), "Vehicle remains stable while driving")
     game.pause_run()
     var paused_time = game.race.elapsed
