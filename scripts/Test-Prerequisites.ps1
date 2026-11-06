@@ -95,6 +95,11 @@ if ($rocmBin) {
     $hipDll = Get-ChildItem -LiteralPath $rocmBin -Filter 'amdhip64.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($hipDll) { Ok 'amdhip64.dll present (HIP runtime found)' }
     else { Warn 'amdhip64.dll NOT in that bin dir - is the HIP SDK runtime component installed?' }
+    foreach ($name in @('hipblas.dll', 'rocblas.dll', 'hipsparse.dll', 'rocsparse.dll')) {
+        $dll = Get-ChildItem -LiteralPath $rocmBin -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($dll) { Ok ("{0} present" -f $name) }
+        else { Warn ("{0} NOT in {1} - ZLUDA's cublas/cusparse need the HIP BLAS/SPARSE libraries; a partial HIP SDK install will fail with WinError 126/127" -f $name, $rocmBin) }
+    }
     $pathEntries = @($env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') })
     if ($pathEntries -contains $rocmBin.TrimEnd('\')) { Ok 'ROCm bin is on PATH' }
     else { Warn "ROCm bin is NOT on PATH - 'import torch' will die with WinError 126/127. Add $rocmBin to user PATH (System Properties > Environment Variables)" }

@@ -99,11 +99,39 @@ if ($MemoryReport) {
     Write-Host ""; Write-Host '== Memory report (fake-OOM + WinError 126/127 diagnostics)' -ForegroundColor Cyan
     if ((Test-Path -LiteralPath $venvPy) -and (Test-Path -LiteralPath $zludaExe)) {
         $torchLib2 = Join-Path $comfyDir 'venv\Lib\site-packages\torch\lib'
+
+        # --- Locate ROCm bin dirs and report PATH membership up front ---
+        Write-Host ""; Write-Host '== ROCm bin / PATH' -ForegroundColor Cyan
+        $rocmBins = @()
+        foreach ($rv in @('6.4', '6.2', '5.7')) {
+            $p = Join-Path $env:ProgramFiles ("AMD\ROCm\$rv\bin")
+            if (Test-Path -LiteralPath $p) { $rocmBins += $p }
+        }
+        $pathEntries = @($env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') })
+        foreach ($p in $rocmBins) {
+            if ($pathEntries -contains $p.TrimEnd('\')) { Ok "$p is on PATH" }
+            else { Fail "$p NOT on PATH - bare-name DLL loads (what ComfyUI needs) will fail" }
+            foreach ($name in @('amdhip64.dll', 'hipblas.dll', 'rocblas.dll', 'hipsparse.dll', 'rocsparse.dll')) {
+                $full = Join-Path $p $name
+                if (Test-Path -LiteralPath $full) {
+                    try {
+                        $vi = (Get-Item -LiteralPath $full).VersionInfo.FileVersion
+                        if (-not $vi) { $vi = '(no version resource)' }
+                        Info ("{0,-20}  {1}" -f $vi, $full)
+                    } catch { Info ("(no version info)  {0}" -f $full) }
+                } else {
+                    Warn2 "$name missing in $p"
+                }
+            }
+        }
+        if ($rocmBins.Count -eq 0) { Warn2 'No ROCm bin directory found under Program Files (AMD\ROCm\{6.4,6.2,5.7}\bin)' }
+
         $report = @'
 import os, ctypes, sys
 
 zdir = os.environ.get("ZLUDA_DIAG_ZLUDA")
 tdir = os.environ.get("ZLUDA_DIAG_TORCHLIB")
+rbins = os.environ.get("ZLUDA_DIAG_ROCM") or ""
 
 def tryload(p):
     try:
@@ -111,6 +139,13 @@ def tryload(p):
         print("load OK: " + p)
     except OSError as e:
         print("load FAIL: %s -> %s" % (p, e))
+
+def trybare(name):
+    try:
+        ctypes.WinDLL(name)
+        print("bare load OK: " + name)
+    except OSError as e:
+        print("bare load FAIL: %s -> %s" % (name, e))
 
 if zdir:
     for name in ("nvcuda.dll", "cublas.dll", "cusparse.dll", "nvrtc.dll"):
@@ -122,6 +157,13 @@ if tdir and os.path.isdir(tdir):
         low = name.lower()
         if low.startswith(("cublas64_11", "cublaslt64_11", "cusparse64_11", "nvrtc64_")):
             tryload(os.path.join(tdir, name))
+for d in [x for x in rbins.split(";") if x]:
+    for name in ("amdhip64.dll", "hipblas.dll", "rocblas.dll", "hipsparse.dll", "rocsparse.dll"):
+        p = os.path.join(d, name)
+        if os.path.exists(p):
+            tryload(p)
+for name in ("amdhip64.dll", "hipblas.dll", "rocblas.dll", "hipsparse.dll", "rocsparse.dll"):
+    trybare(name)
 
 try:
     import torch
@@ -169,6 +211,7 @@ print("PYTORCH_NO_CUDA_MEMORY_CACHING=" + str(os.environ.get("PYTORCH_NO_CUDA_ME
         } finally {
             $env:ZLUDA_DIAG_ZLUDA = $null
             $env:ZLUDA_DIAG_TORCHLIB = $null
+            $env:ZLUDA_DIAG_ROCM = $null
             Remove-Item -LiteralPath $reportFile -Force -ErrorAction SilentlyContinue
         }
 
@@ -182,8 +225,8 @@ print("PYTORCH_NO_CUDA_MEMORY_CACHING=" + str(os.environ.get("PYTORCH_NO_CUDA_ME
         }
         foreach ($f in $watch) {
             try {
-                $vi = (Get-Item -LiteralPath $f).VersionInfo
-                Info ("{0,-8}  {1}" -f ($vi.FileVersion), $f)
+                $fv = (Get-Item -LiteralPath $f).VersionInfo.FileVersion
+                if ($fv) { Info ("{0,-20}  {1}" -f $fv, $f) } else { Info ("(no version resource)  {0}" -f $f) }
             } catch {
                 Info ("(no version info)  {0}" -f $f)
             }
