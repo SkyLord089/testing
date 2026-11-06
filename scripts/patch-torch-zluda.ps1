@@ -6,6 +6,10 @@
     Делает бэкап оригинальных файлов (.bak-<timestamp>), проверяет разрядность,
     копирует только то, что реально есть в папке ZLUDA, и печатает итоговую таблицу.
 
+    Повторяет проверенный порядок из ComfyUI-Zluda install-n.bat:
+    ОРИГИНАЛЬНЫЙ nvrtc64_112_0.dll копируется в nvrtc_cuda.dll, и только
+    потом nvrtc64_112_0.dll подменяется на ZLUDA-версию.
+
     Специально НЕ копирует cublasLt.dll по умолчанию: в ZLUDA 3.9.6 он линкуется
     на hipblaslt.dll, которого для gfx803 нет, из-за чего torch 2.6+ падает с
     CUBLAS_STATUS_NOT_SUPPORTED / WinError 126. Включается флагом -IncludeCublasLt.
@@ -111,8 +115,37 @@ foreach ($src in $map.Keys) {
     }
 }
 
+# ---------- nvrtc_cuda.dll: копия ОРИГИНАЛА, до подмены nvrtc ----------
+# Так делает install-n.bat: torch иногда грузит nvrtc_cuda.dll, и там ожидается
+# настоящий nvrtc, а не ZLUDA-шим. Поэтому снимаем копию ДО того, как
+# nvrtc64_112_0.dll будет заменён.
+$nvrtcOrig = Join-Path $torchLib 'nvrtc64_112_0.dll'
+$nvrtcCuda = Join-Path $torchLib 'nvrtc_cuda.dll'
+$nvrtcNote = 'нет исходного nvrtc64_112_0.dll'
+if ((Test-Path $nvrtcOrig) -and -not (Test-Path $nvrtcCuda)) {
+    if (-not $WhatIfOnly) { Copy-Item $nvrtcOrig $nvrtcCuda -Force }
+    $nvrtcNote = 'копия оригинального nvrtc64_112_0.dll (как в install-n.bat)'
+} elseif ((Test-Path $nvrtcCuda) -and (Test-Path $nvrtcOrig)) {
+    # уже есть: если размеры совпадают — это остаток прошлой подмены, не годится
+    $lenCuda = (Get-Item $nvrtcCuda).Length
+    $lenOrig = (Get-Item $nvrtcOrig).Length
+    $rest = Get-ChildItem -LiteralPath $torchLib -File -Filter 'nvrtc64_112_0.dll.bak-*' |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($lenCuda -eq $lenOrig -and $lenCuda -lt 5MB) {
+        if ($rest) {
+            if (-not $WhatIfOnly) { Copy-Item $rest.FullName $nvrtcCuda -Force }
+            $nvrtcNote = "была ZLUDA-копия — восстановил оригинал из $($rest.Name)"
+        } else {
+            $nvrtcNote = 'похоже на ZLUDA-копию, но бэкапа оригинала нет — проверь вручную'
+        }
+    } else {
+        $nvrtcNote = 'уже существует, не трогаю'
+    }
+}
+
 # ---------- патч ----------
 $results = @()
+if ($nvrtcNote) { $results += [PSCustomObject]@{ File = 'nvrtc_cuda.dll'; Action = 'PRE'; Note = $nvrtcNote } }
 foreach ($src in $map.Keys) {
     $srcPath = Join-Path $ZludaDir $src
     $dstName = $map[$src]
@@ -138,18 +171,6 @@ foreach ($src in $map.Keys) {
         Copy-Item $srcPath $dstPath -Force
     }
     $results += [PSCustomObject]@{ File = $dstName; Action = 'COPIED'; Note = ("из {0} ({1:N0} байт)" -f $src, (Get-Item $srcPath).Length) }
-}
-
-# ---------- важно: nvrtc_cuda.dll ----------
-# часть сборок torch ищет ещё и nvrtc_cuda.dll; делаем копию из подменённого nvrtc64_112_0.dll
-$nvrtcPatched = Join-Path $torchLib 'nvrtc64_112_0.dll'
-$nvrtcCuda = Join-Path $torchLib 'nvrtc_cuda.dll'
-if ((Test-Path $nvrtcPatched) -and -not $WhatIfOnly) {
-    if (-not (Test-Path "$nvrtcCuda.bak-$stamp") -and (Test-Path $nvrtcCuda)) {
-        Copy-Item $nvrtcCuda "$nvrtcCuda.bak-$stamp" -Force
-    }
-    Copy-Item $nvrtcPatched $nvrtcCuda -Force
-    $results += [PSCustomObject]@{ File = 'nvrtc_cuda.dll'; Action = 'COPIED'; Note = 'копия nvrtc64_112_0.dll (ZLUDA)' }
 }
 
 # ---------- nvcuda.dll ----------

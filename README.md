@@ -14,9 +14,41 @@
 
 ---
 
-## С чего начать (сегодня, 15 минут)
+## С чего начать
 
-1. **Снять состояние системы.** PowerShell **от администратора** (или обычный — часть проверок тогда помечается `SKIP`):
+### Машина пустая? → установка с нуля
+
+Всё ставится одной последовательностью, с проверкой после каждого шага:
+
+```powershell
+# PowerShell от администратора, из корня репозитория
+powershell -ExecutionPolicy Bypass -File .\scripts\install\00-all.ps1 -Profile target
+```
+
+Или по шагам (так виднее, что происходит):
+
+| Этап | Команда | Что делает | Ручного |
+|---|---|---|---|
+| 1 | `01-prereq-check.ps1` | проверяет ОС, карту, RAM/VRAM, диск, git/python/7-Zip, остатки старых ROCm | — |
+| 2 | `02-driver.ps1 -OpenPage` | открывает страницу драйвера RX 580, потом проверяет `amdhip64_6.dll` | ставим драйвер, перезагрузка |
+| 3 | `03-install-hip.ps1 -HipVersion 6.4.2` | качает установщик AMD, запускает GUI | **снять галочку PRO-драйвера**, перезагрузка |
+| 4 | `04-comfyui-zluda.ps1 -Profile target` | clone, venv, torch 2.7.0+cu118, ZLUDA 3.9.6, подмена DLL | — |
+| 5 | `05-gfx803-rocblas.ps1 -Archive <путь.7z>` | бэкап + установка ядер gfx803 для Polaris | скачать архив |
+| 6 | `06-verify.ps1` | сквозная проверка всей цепочки (HIP → rocBLAS → DLL → torch → GEMM) | — |
+
+Подробное описание с критериями «прошло/не прошло» — [`docs/08-install-fresh.md`](docs/08-install-fresh.md).
+
+**Если на этапе 5 ядра под 6.4 не завелись** — не тратим дни: есть готовый план Б.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install\90-fallback-hip62.ps1
+```
+
+Он откатывает HIP на 6.2.4 (там ядра gfx803 родные), ставит ZLUDA 3.9.5-rocm6 и **оставляет torch 2.7.0+cu118** — цель по torch сохраняется.
+
+### Система уже стоит? → диагностика
+
+1. **Снять состояние системы.** PowerShell **от администратора**:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\scripts\preflight.ps1
@@ -49,10 +81,19 @@
 | [`docs/05-gfx803-rocblas.md`](docs/05-gfx803-rocblas.md) | Главный блокер: rocBLAS/Tensile без gfx803 в 6.4. Варианты A/B/C + сборка Tensile |
 | [`docs/06-torch27.md`](docs/06-torch27.md) | Что поменялось в torch 2.4→2.7 и как это лечится на ZLUDA |
 | [`docs/07-tracker.md`](docs/07-tracker.md) | Трекер препятствий: статусы, кто/что/почему |
+| [`docs/08-install-fresh.md`](docs/08-install-fresh.md) | **Установка с нуля**: профили, ссылки, порядок, проверки, ручной путь |
 | `scripts/preflight.ps1` | Сбор диагностики в файл |
 | `scripts/patch-torch-zluda.ps1` | Аккуратная подмена DLL в `venv\torch\lib` c бэкапом и проверками |
 | `scripts/verify-torch27.py` | Тест операций torch 2.7 на ZLUDA (PASS/FAIL по каждой) |
 | `scripts/comfyui-user.bat` | Лаунчер ComfyUI с настройками под gfx803 + torch 2.7 |
+| `scripts/install/00-all.ps1` | Оркестратор: этапы 1–6 с остановками на ручных шагах |
+| `scripts/install/01-prereq-check.ps1` | Проверка чистой машины перед установкой |
+| `scripts/install/02-driver.ps1` | Драйвер RX 580: что стоит, что поставить, проверка после |
+| `scripts/install/03-install-hip.ps1` | Скачивание и установка HIP SDK 6.4.2 / 6.2.4 |
+| `scripts/install/04-comfyui-zluda.ps1` | ComfyUI-Zluda + venv + torch 2.7.0+cu118 + ZLUDA + патч DLL |
+| `scripts/install/05-gfx803-rocblas.ps1` | Ядра rocBLAS gfx803: `-ListOnly`, бэкап, `-Clean`, проверка |
+| `scripts/install/06-verify.ps1` | Проверка установки: hipInfo, ядра gfx803, DLL, torch.cuda, GEMM/addmm |
+| `scripts/install/90-fallback-hip62.ps1` | План Б: откат на HIP 6.2.4 с сохранением torch 2.7 |
 
 ---
 

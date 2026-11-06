@@ -39,11 +39,11 @@ set DISABLE_ADDMM_CUDA_LT=1
 ```
 В ComfyUI проверка уже есть в `comfy/zluda.py` (`os.environ['DISABLE_ADDMM_CUDA_LT'] = '1'`), но **только** если импортируется `comfy.zluda` **до** первого использования torch. Убедиться, что `comfy\zluda.py` на месте и импортируется (в `comfy/model_management.py` есть `import comfy.zluda`).
 
-**Вариант 2 (надёжный).** Не дать torch вообще загрузить настоящий `cublasLt.dll`: подложить в `venv\Lib\site-packages\torch\lib\` **заглушку** `cublasLt64_12.dll` (имя, которое ищет cu118-колесо), которая на `cublasLtCreate` возвращает `CUBLAS_STATUS_NOT_SUPPORTED`, а остальные функции — no-op. Тогда torch детектит «cublasLt нет» и уходит в `cublas*`.
+**Вариант 2 (надёжный).** Не дать torch вообще загрузить настоящий `cublasLt`: подложить в `venv\Lib\site-packages\torch\lib\` **заглушку**. Имя зависит от колеса: cu118 → `cublasLt64_11.dll`, cu12x → `cublasLt64_12.dll`. Заглушка на `cublasLtCreate` возвращает `CUBLAS_STATUS_NOT_SUPPORTED`, остальные функции — no-op. Тогда torch детектит «cublasLt нет» и уходит в `cublas*`.
 
 Пример (собрать в MSVC, x64):
 ```cpp
-// cublaslt_stub.cpp  -> cublasLt64_12.dll
+// cublaslt_stub.cpp  -> cublasLt64_11.dll  (для cu118)
 extern "C" __declspec(dllexport) int cublasLtCreate(void**) { return 15; } // NOT_SUPPORTED
 ```
 > Возвращаемое значение смотрите в `cuda_types`: `CUBLAS_STATUS_NOT_SUPPORTED = 15`. Проверить, что torch действительно проверяет код возврата `cublasLtCreate` при инициализации.
