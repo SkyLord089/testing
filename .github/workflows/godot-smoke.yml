@@ -45,7 +45,9 @@ jobs:
           {
             echo 'Godot smoke test failed. Diagnostic log:'
             echo '```text'
-            tail -n 160 smoke.log
+            head -n 110 smoke.log
+            echo '--- Errors and checks ---'
+            grep -E 'SCRIPT ERROR|ERROR:|FAIL:|PASS:|SMOKE' smoke.log | head -n 180
             echo '```'
           } > /tmp/godot-comment.md
           jq -Rs '{body: .}' /tmp/godot-comment.md > /tmp/godot-comment.json
