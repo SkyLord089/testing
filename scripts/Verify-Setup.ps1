@@ -165,6 +165,154 @@ for d in [x for x in rbins.split(";") if x]:
 for name in ("amdhip64.dll", "hipblas.dll", "rocblas.dll", "hipsparse.dll", "rocsparse.dll"):
     trybare(name)
 
+# ---------- PE import/export consistency check ----------
+# Answers: which DLL (126) or which exact entry point (127) is missing,
+# without any external tools. Only reads bytes, never loads anything.
+import struct
+
+def _pe(path):
+    try:
+        with open(path, 'rb') as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    try:
+        if data[:2] != b'MZ':
+            return None
+        e_lfanew = struct.unpack_from('<I', data, 0x3C)[0]
+        if data[e_lfanew:e_lfanew + 4] != b'PE\0\0':
+            return None
+        nsec = struct.unpack_from('<H', data, e_lfanew + 6)[0]
+        opt_size = struct.unpack_from('<H', data, e_lfanew + 20)[0]
+        opt = e_lfanew + 24
+        magic = struct.unpack_from('<H', data, opt)[0]
+        plus = (magic == 0x20b)
+        dd = opt + (112 if plus else 96)
+        sec = opt + opt_size
+        secs = []
+        for i in range(nsec):
+            s = sec + i * 40
+            vs, va, rs, rp = struct.unpack_from('<IIII', data, s + 8)
+            secs.append((va, vs, rs, rp))
+        def rva2off(rva):
+            for va, vs, rs, rp in secs:
+                if va <= rva < va + max(vs, rs):
+                    return rp + (rva - va)
+            return None
+        ddir = struct.unpack_from('<32I', data, dd)
+        imp_rva, exp_rva = ddir[2], ddir[0]
+        res = {'imports': [], 'exports': set()}
+        if imp_rva:
+            off = rva2off(imp_rva)
+            for _ in range(512):
+                oft, ts, fwd, name_rva, ft = struct.unpack_from('<IIIII', data, off)
+                if oft == 0 and name_rva == 0 and ft == 0:
+                    break
+                no = rva2off(name_rva)
+                dll = data[no:data.index(b'\0', no)].decode('ascii', 'replace') if no is not None else '?'
+                funcs = []
+                thunk = rva2off(oft) if oft else None
+                if thunk:
+                    step = 8 if plus else 4
+                    fmt = '<Q' if plus else '<I'
+                    mask = 0x8000000000000000 if plus else 0x80000000
+                    for j in range(4096):
+                        ent = struct.unpack_from(fmt, data, thunk + j * step)[0]
+                        if ent == 0:
+                            break
+                        if ent & mask:
+                            funcs.append('#%d' % (ent & 0xFFFF))
+                            continue
+                        hn = rva2off(ent)
+                        if hn is None:
+                            funcs.append('<bad rva>')
+                            continue
+                        funcs.append(data[hn + 2:data.index(b'\0', hn + 2)].decode('ascii', 'replace'))
+                res['imports'].append((dll, funcs))
+                off += 20
+        if exp_rva:
+            off = rva2off(exp_rva)
+            f = struct.unpack_from('<IIHHIIIIIII', data, off)
+            nfuncs, nnames, anam = f[6], f[7], f[9]
+            noff = rva2off(anam)
+            names = set()
+            if noff is not None:
+                for i in range(nnames):
+                    nrva = struct.unpack_from('<I', data, noff + i * 4)[0]
+                    no2 = rva2off(nrva)
+                    if no2 is not None:
+                        names.add(data[no2:data.index(b'\0', no2)].decode('ascii', 'replace'))
+            res['exports'] = names
+        return res
+    except Exception:
+        return None
+
+def _search_dirs():
+    dirs = []
+    if zdir:
+        dirs.append(zdir)
+    if tdir:
+        dirs.append(tdir)
+    if rbins:
+        dirs.extend([x for x in rbins.split(';') if x])
+    windir = os.environ.get('WINDIR') or r'C:\Windows'
+    dirs.append(os.path.join(windir, 'System32'))
+    return dirs
+
+def _find(dep):
+    for d in _search_dirs():
+        p = os.path.join(d, dep)
+        if os.path.exists(p):
+            return p
+    return None
+
+def depcheck(subject):
+    info = _pe(subject)
+    if not info:
+        print("PE parse FAIL: " + subject)
+        return
+    print("deps of " + os.path.basename(subject))
+    for dep, funcs in info['imports']:
+        low = dep.lower()
+        if low.startswith(('api-ms-', 'ext-ms-')):
+            continue
+        found = _find(dep)
+        if not found:
+            print("  DEP MISSING: %s (imported by %s)" % (dep, os.path.basename(subject)))
+            continue
+        dinfo = _pe(found)
+        if not dinfo:
+            print("  dep unreadable: %s -> %s" % (dep, found))
+            continue
+        missing = [f for f in funcs if not f.startswith('#') and f not in dinfo['exports']]
+        if missing:
+            print("  MISSING EXPORTS in %s (imported by %s): %s" % (found, os.path.basename(subject), ', '.join(missing[:12])))
+        else:
+            print("  dep OK: %s (%d imports)" % (found, len(funcs)))
+
+subjects = []
+if zdir:
+    for name in ("nvcuda.dll", "cublas.dll", "cusparse.dll", "nvrtc.dll"):
+        p = os.path.join(zdir, name)
+        if os.path.exists(p):
+            subjects.append(p)
+if tdir and os.path.isdir(tdir):
+    for name in sorted(os.listdir(tdir)):
+        low = name.lower()
+        if low.startswith(("cublas64_11", "cusparse64_11", "nvrtc64_")) and not low.endswith('.orig'):
+            subjects.append(os.path.join(tdir, name))
+if rbins:
+    for d in rbins.split(';'):
+        for name in ("amdhip64.dll", "hipblas.dll", "rocblas.dll", "hipsparse.dll", "rocsparse.dll"):
+            p = os.path.join(d, name)
+            if os.path.exists(p):
+                subjects.append(p)
+for s in subjects:
+    try:
+        depcheck(s)
+    except Exception as e:
+        print("depcheck error for %s: %s" % (s, e))
+
 try:
     import torch
 except Exception as e:
@@ -191,6 +339,7 @@ print("PYTORCH_NO_CUDA_MEMORY_CACHING=" + str(os.environ.get("PYTORCH_NO_CUDA_ME
         try {
             $env:ZLUDA_DIAG_ZLUDA = $zludaDir
             $env:ZLUDA_DIAG_TORCHLIB = $torchLib2
+            $env:ZLUDA_DIAG_ROCM = ($rocmBins -join ';')
             $out = & $zludaExe -- $venvPy $reportFile 2>&1 | Out-String
             $out -split "`r?`n" | ForEach-Object { Info $_ }
             if ($out -match 'torch_import=FAIL') {

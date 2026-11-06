@@ -30,11 +30,13 @@
 По порядку:
 1. Убедитесь, что `C:\Program Files\AMD\ROCm\6.4\bin` есть в PATH (машинном или пользовательском) и консоль перезапущена:
    `[Environment]::GetEnvironmentVariable('Path','Machine') -split ';' | ? { $_ -match 'ROCm' }`
-   и то же с `'User'`. `Verify-Setup.ps1 -MemoryReport` сам печатает, найден ли каталог и лежит ли он в PATH,
-   а также пробует загрузить `amdhip64/hipblas/rocblas/hipsparse/rocsparse` (по полному пути и по короткому имени)
-   и показывает `load OK`/`load FAIL` и версии файлов.
-2. Если каталог в PATH, но `hipblas.dll`/`rocblas.dll`/`hipsparse.dll`/`rocsparse.dll` **отсутствуют** — это неполная установка HIP SDK
-   (не дожили BLAS/SPARSE-компоненты): переустановите HIP SDK целиком (все чекбоксы, включая rocBLAS/rocSPARSE), затем `Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.4` (админ).
+   и то же с `'User'`. `Verify-Setup.ps1 -MemoryReport` сам печатает, найден ли каталог
+   и лежит ли он в PATH, пробует загрузить `amdhip64/hipblas/rocblas/hipsparse/rocsparse` (по полному пути и по короткому имени),
+   показывает версии файлов и делает **офлайн-разбор PE-таблиц импорта/экспорта**: печатает `DEP MISSING <dll>`
+   (модуль не найден → WinError 126) либо `MISSING EXPORTS in <dll>: <список>` (точка входа не найдена → WinError 127)
+   с полным путём виновной DLL.
+2. Если `hipblas.dll`/`rocblas.dll`/`hipsparse.dll`/`rocsparse.dll` есть в каталоге, но **не загружаются** либо PE-разбор показывает
+   `MISSING EXPORTS` — это неполная/несовместимая установка HIP SDK (не дожили BLAS/SPARSE-компоненты): переустановите HIP SDK целиком (все чекбоксы, включая rocBLAS/rocSPARSE), затем `Patch-RocBLAS-gfx803.ps1 -RocmVersion 6.4` (админ).
 3. Если `rocblas.dll` загрузился, но ядра не под gfx803 — проверьте маркер `...\6.4\bin\rocblas\gfx803.zluda-patched` и перезагрузитесь.
 4. Если `load OK` везде, но torch всё равно падает с 127 — смешение версий: переустановите **HIP SDK 6.2.4** (обкатанный путь Advanced-lvl-up;
    на 6.2/5.7 установщик сам оставит рецепт с rocm5 nvcuda). Крайний вариант — HIP 5.7.1 + `-TorchVersion 2.2.1`.
