@@ -20,7 +20,6 @@ func _ready() -> void:
     environment.background_mode = Environment.BG_SKY
     environment.sky = sky
     environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-    environment.reflected_light_source = Environment.REFLECTED_SOURCE_SKY
     environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
     environment.tonemap_exposure = 1.05
     environment.fog_enabled = true

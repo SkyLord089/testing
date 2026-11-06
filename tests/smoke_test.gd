@@ -28,6 +28,12 @@ func _run() -> void:
     root.add_child(game)
     print("SMOKE: Akina generated")
     await process_frame
+    _check(is_instance_valid(game.road), "Game controller initializes")
+    if not is_instance_valid(game.road):
+        game.queue_free()
+        watchdog.stop()
+        _finish()
+        return
     _check(game.road.points.size() > 400, "Akina has a continuous sampled centre line")
     _check(game.road.road_length > 2500.0, "Akina length is plausible")
     _check(game.car.wheels.size() == 4, "Vehicle has four physical wheels")
