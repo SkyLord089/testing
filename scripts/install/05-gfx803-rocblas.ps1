@@ -120,9 +120,24 @@ if ($is7z) {
     $cmd7z = Get-Command 7z -ErrorAction SilentlyContinue
     if ($cmd7z) { $sevenZip = $cmd7z.Source }
     if (-not $sevenZip) {
-        foreach ($p in 'C:\Program Files\7-Zip\7z.exe', 'C:\Program Files (x86)\7-Zip\7z.exe') {
+        # Program Files - обычная установка; LOCALAPPDATA - установка без админа (00a)
+        $szPaths = @(
+            'C:\Program Files\7-Zip\7z.exe',
+            'C:\Program Files (x86)\7-Zip\7z.exe',
+            "$env:LOCALAPPDATA\Programs\7-Zip\7z.exe"
+        )
+        foreach ($p in $szPaths) {
             if (Test-Path $p) { $sevenZip = $p; break }
         }
+    }
+    if (-not $sevenZip) {
+        try {
+            $reg = Get-ItemProperty 'HKLM:\SOFTWARE\7-Zip' -ErrorAction Stop
+            if ($reg.Path) {
+                $cand = Join-Path $reg.Path '7z.exe'
+                if (Test-Path $cand) { $sevenZip = $cand }
+            }
+        } catch {}
     }
     if ($sevenZip) {
         & "$sevenZip" x "$Archive" "-o$tmp" -y | Out-Null

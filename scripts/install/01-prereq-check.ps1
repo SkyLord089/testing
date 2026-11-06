@@ -287,11 +287,41 @@ if ($pyInfo) {
     P $st 'Рабочий Python не найден' $note
 }
 
-$has7z = (Get-Command 7z -ErrorAction SilentlyContinue) -or (Test-Path 'C:\Program Files\7-Zip\7z.exe')
-if ($has7z) {
-    P 'PASS' '7-Zip найден' ''
+# 7-Zip может стоять в Program Files (обычная установка) или в профиле
+# (если 00a ставил без прав администратора)
+$szCandidates = @(
+    'C:\Program Files\7-Zip\7z.exe',
+    'C:\Program Files (x86)\7-Zip\7z.exe',
+    "$env:LOCALAPPDATA\Programs\7-Zip\7z.exe",
+    "$env:ProgramFiles\7-Zip\7z.exe"
+)
+$szPath = $null
+foreach ($c in $szCandidates) { if (Test-Path $c) { $szPath = $c; break } }
+if (-not $szPath) {
+    $c7 = Get-Command 7z -ErrorAction SilentlyContinue
+    if ($c7) { $szPath = $c7.Source }
+}
+# на всякий случай - из реестра (там ключ есть только при обычной установке)
+if (-not $szPath) {
+    try {
+        $reg = Get-ItemProperty 'HKLM:\SOFTWARE\7-Zip' -ErrorAction Stop
+        if ($reg.Path) {
+            $cand = Join-Path $reg.Path '7z.exe'
+            if (Test-Path $cand) { $szPath = $cand }
+        }
+    } catch {}
+}
+
+if ($szPath) {
+    $szVer = ''
+    try { $szVer = ((& $szPath 2>&1 | Select-String -Pattern '7-Zip' | Select-Object -First 1) -replace '\s+',' ').Trim() } catch {}
+    P 'PASS' '7-Zip найден' ("{0}  {1}" -f $szPath, $szVer)
+    $inPath = ($env:PATH -split ';') -contains (Split-Path $szPath -Parent)
+    if (-not $inPath) {
+        P 'WARN' '7-Zip не в PATH' 'Это не мешает: скрипты находят 7z.exe по известным путям. Если хочется 7z из консоли - добавь папку в PATH пользователя.'
+    }
 } else {
-    P 'WARN' '7-Zip не найден' 'Нужен для .7z архива с ядрами rocBLAS. https://www.7-zip.org/ (поставь на C:, он маленький)'
+    P 'WARN' '7-Zip не найден' 'Нужен для .7z архива с ядрами rocBLAS. Не критично: 05 распакует через py7zr. https://www.7-zip.org/'
 }
 
 # ---------- следы старых версий ----------

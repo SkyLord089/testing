@@ -239,10 +239,35 @@ if (-not $Skip7Zip) {
 # итог
 # ---------------------------------------------------------------------------
 Header 'ИТОГ'
+
+# что фактически установилось
+$pyFinal = @(
+    "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+    "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+    'C:\Python311\python.exe'
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+$szFinal = @(
+    'C:\Program Files\7-Zip\7z.exe',
+    "$env:LOCALAPPDATA\Programs\7-Zip\7z.exe"
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if ($pyFinal) { Write-Host ("  Python: {0}" -f $pyFinal) -ForegroundColor Green }
+if ($szFinal) { Write-Host ("  7-Zip:  {0}" -f $szFinal) -ForegroundColor Green }
+Write-Host ''
+
 Write-Host '  Что проверить в НОВОМ окне PowerShell:' -ForegroundColor White
 Write-Host '    python --version          -> Python 3.11.9' -ForegroundColor Gray
 Write-Host '    where python              -> путь в ...\Programs\Python\Python311\, НЕ WindowsApps' -ForegroundColor Gray
 Write-Host '    7z                        -> если ставили' -ForegroundColor Gray
+
+if ($szFinal -and $szFinal -like '*AppData*') {
+    Write-Host ''
+    Write-Host '  7-Zip поставлен в профиль пользователя (без прав админа), поэтому' -ForegroundColor DarkGray
+    Write-Host '  команда 7z в консоли может не находиться - это НЕ мешает скриптам:' -ForegroundColor DarkGray
+    Write-Host '  они ищут его по этому пути напрямую. Хочется 7z из консоли - добавь' -ForegroundColor DarkGray
+    Write-Host ("  {0} в PATH пользователя." -f (Split-Path $szFinal -Parent)) -ForegroundColor DarkGray
+}
 Write-Host ''
 Write-Host '  Затем:' -ForegroundColor Green
 Write-Host '    powershell -ExecutionPolicy Bypass -File .\scripts\install\01-prereq-check.ps1' -ForegroundColor Green
