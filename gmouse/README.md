@@ -23,7 +23,8 @@ vendor-протокол аппаратного DPI.
 
 | | Кабель (USB) | Приёмник 2.4 ГГц |
 |---|---|---|
-| PID (примеры) | `1d57:2126`, `2120`, `fa61` | `1d57:fa65`, `fa60`, `fa55` |
+| PID (примеры) | `1d57:2126`, `2120` | `1d57:fa65`, `fa60`, `fa55` |
+| Признак в `gmouse dump` | collection `0x0B/0x00` или vendor `0xFF00` с `feature>0` | vendor `0xFF00/0x01` с `out>0`, без feature |
 | Как ходят настройки | feature-репорты, Report ID = команда | input/output Report ID 4 + кадр `04 len opcode … chk` |
 | Надёжность | стабильно | ~5 % запросов теряется, нужны повторы |
 | Ограничение | — | на 8000 Гц длинные чтения не проходят |
@@ -41,6 +42,8 @@ vendor-протокол аппаратного DPI.
 .\gmouse.exe shark battery         # заряд по событиям мыши
 .\gmouse.exe shark raw             # сырые блоки 0x04/0x05/0x06/0x08/0x0A/0x0B
 .\gmouse.exe shark encoding table  # если DPI отображается неверно
+.\gmouse.exe shark scan            # перебрать все Report ID служебного интерфейса
+.\gmouse.exe shark monitor         # поток событий: батарея, кнопка DPI
 ```
 
 Что внутри:
