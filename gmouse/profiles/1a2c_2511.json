@@ -1,0 +1,10 @@
+{
+  "model": "China Resource Semico / Eastern Times DS2511 (VID_1A2C PID_2511)",
+  "pids": ["0x2511"],
+  "name_contains": "",
+  "dpi_min": 800,
+  "dpi_max": 3200,
+  "dpi_step": 400,
+  "dpi_protocol": null,
+  "notes": "Типовой 2.4 ГГц приёмник мыши. Служебный HID-интерфейс может быть доступен только для чтения."
+}

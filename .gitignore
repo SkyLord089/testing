@@ -6,3 +6,8 @@ dist/
 *.egg-info/
 mouse_report_*.json
 .pytest_cache/
+gmouse/target/
+gmouse/*.exe
+gmouse_report_*.json
+report_dump_*.txt
+*.egg-info/

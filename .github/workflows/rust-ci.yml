@@ -1,0 +1,56 @@
+name: Rust CI (Windows)
+
+on:
+  push:
+    paths:
+      - "gmouse/**"
+      - ".github/workflows/rust-ci.yml"
+  pull_request:
+    paths:
+      - "gmouse/**"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: gmouse
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Кэш cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            gmouse/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('gmouse/Cargo.toml') }}
+
+      - name: Проверка формата
+        run: cargo fmt --all -- --check
+        continue-on-error: true
+
+      - name: Сборка (release)
+        run: cargo build --release --verbose
+
+      - name: Тесты
+        run: cargo test --verbose
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+        continue-on-error: true
+
+      - name: Артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmouse-windows
+          path: |
+            gmouse/target/release/gmouse.exe
+            gmouse/profiles/*.json

@@ -1,0 +1,20 @@
+[package]
+name = "gmouse"
+version = "0.1.0"
+edition = "2021"
+description = "Настройка любой USB/Bluetooth мыши под Windows 11: кнопки, чувствительность, диагностика HID"
+authors = ["MouseConfig"]
+
+[[bin]]
+name = "gmouse"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
+codegen-units = 1
+
+# Зависимостей нет вообще: всё через прямой FFI к Win32.
+[dependencies]
