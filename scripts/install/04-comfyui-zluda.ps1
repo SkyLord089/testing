@@ -283,14 +283,26 @@ try {
     }
 
     Write-Host '  torch.cuda:' -ForegroundColor White
-    & $venvPy -c @'
-import torch
-print("  torch      :", torch.__version__)
-print("  cuda       :", torch.version.cuda)
-print("  available  :", torch.cuda.is_available())
-if torch.cuda.is_available():
-    print("  device     :", torch.cuda.get_device_name(0))
-'@
+    # Код передаём ФАЙЛОМ, а не через -c с here-string.
+    # В PowerShell 5.1 многострочный аргумент для нативной программы
+    # (python -c @'...'@) разбивается на части, и python получает обрывок
+    # вроде "print(" -> SyntaxError: '(' was never closed.
+    $probeScript = Join-Path $env:TEMP 'comfy-torch-probe.py'
+    $probeCode = @(
+        'import torch',
+        'print("  torch      :", torch.__version__)',
+        'print("  cuda       :", torch.version.cuda)',
+        'print("  available  :", torch.cuda.is_available())',
+        'if torch.cuda.is_available():',
+        '    print("  device     :", torch.cuda.get_device_name(0))'
+    ) -join "`n"
+    Set-Content -Path $probeScript -Value $probeCode -Encoding UTF8
+    $probe = Invoke-Capture $venvPy @($probeScript)
+    if ($probe.Text) { $probe.Text -split "`n" | Where-Object { $_ -ne '' } | ForEach-Object { Write-Host "  $_" } }
+    if ($probe.Code -ne 0) {
+        Write-Host ("  [FAIL] проверка torch упала с кодом {0}" -f $probe.Code) -ForegroundColor Red
+    }
+    Remove-Item $probeScript -Force -ErrorAction SilentlyContinue
 } catch { Write-Host "  Ошибка: $_" -ForegroundColor Red } finally { Pop-Location }
 
 Write-Host ''
@@ -298,9 +310,10 @@ Write-Host 'Следующий шаг - ядра rocBLAS для gfx803:' -Foregr
 Write-Host '  powershell -ExecutionPolicy Bypass -File .\scripts\install\05-gfx803-rocblas.ps1 -HipVersion 6.4.2 -Archive .\downloads\rocm.gfx800-gfx900-for.hip.sdk.5.7.1-and-6.2.4.7z -ListOnly' -ForegroundColor Green
 Write-Host ''
 Write-Host 'Если torch.cuda.is_available() = False:' -ForegroundColor Yellow
-Write-Host '  * проверь, что HIP SDK есть в PATH (bin и bin\rocblas\library):' -ForegroundColor Gray
-Write-Host '    C:\Program Files\AMD\ROCm\6.4\bin' -ForegroundColor Gray
-Write-Host '  * запусти проверку: .\scripts\install\06-verify.ps1' -ForegroundColor Gray
+Write-Host '  * HIP работает через ДРАЙВЕРНУЮ копию System32\amdhip64.dll - так и надо.' -ForegroundColor Gray
+Write-Host '    НЕ добавляй bin HIP SDK в PATH: amdhip64_6.dll оттуда даёт hipInit=100.' -ForegroundColor Gray
+Write-Host '  * что именно грузится - покажет этап 7: scripts\install\07-hip-probe.ps1' -ForegroundColor Gray
+Write-Host '  * полная проверка: .\scripts\install\06-verify.ps1' -ForegroundColor Gray
 Write-Host ''
 Write-Host 'torch.cuda.is_available() = True ещё НЕ значит, что GEMM работает:' -ForegroundColor DarkGray
 Write-Host 'без ядер gfx803 первый же matmul упадёт (TensileLibrary).' -ForegroundColor DarkGray
