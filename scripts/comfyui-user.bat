@@ -21,12 +21,18 @@ set "ZLUDA_COMGR_LOG_LEVEL=1"
 rem --- кэш скомпилированных ядер (смените путь при необходимости)
 if not defined ZLUDA_CACHE_DIR set "ZLUDA_CACHE_DIR=%~dp0zluda-cache"
 
-rem --- PATH: bin HIP SDK na etoj mashine NE nuzhen.
-rem     Rabotaet drajvernaya kopiya System32\amdhip64.dll (sistema
-rem     nachodit eyo ranshe, chem lyuboj put iz PATH).
-rem     amdhip64_6.dll iz bin daet hipInit = 100 i ne ispolzuetsya.
-rem     Poetomu put k bin NAMERENNO ne dobavlyaem.
-rem set "PATH=C:\Program Files\AMD\ROCm\6.4\bin;%PATH%"
+rem --- PATH k bin HIP SDK: NEOBHODIM dlya comgr, i BEZOPASEN dlya amdhip64.
+rem     Nuzhen: ZLUDA pri init() pervoi delaet Comgr::find_and_load() i ishchet
+rem     po GOLYM imenam amd_comgr_3.dll / amd_comgr_2.dll / amd_comgr.dll.
+rem     V System32 ih net - bez PATH ZLUDA ne startuet, i torch.cuda
+rem     molcha govorit available = False.
+rem     Bezopasen: ZLUDA linkuetsya na amdhip64 (bez suffiksa), a v bin lezhit
+rem     amdhip64_6.dll. Goloe imya amdhip64.dll v bin NE naideno -> Windows
+rem     beryot draivernuyu System32\amdhip64.dll, kotoraya vidit RX 580.
+rem     Bin dobavlyaetsya v KONEC spiska. Otklyuchit: set RX580_NO_HIP_PATH=1
+if not defined RX580_NO_HIP_PATH (
+    set "PATH=%PATH%;C:\Program Files\AMD\ROCm\6.4\bin"
+)
 
 
 rem --- MIOpen: поменьше шума и поиск без зависаний

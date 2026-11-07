@@ -50,7 +50,13 @@ if (Test-Path $hipRoot) {
         $hipBinCandidates += (Join-Path $d.FullName 'bin')
     }
 }
-foreach ($hb in $hipBinCandidates) { if (Test-Path $hb) { $env:PATH = "$hb;$hb\rocblas\library;$env:PATH" } }
+# ВАЖНО: bin HIP SDK добавляется в КОНЕЦ PATH.
+#   * нужен: ZLUDA при init() ищет amd_comgr_3.dll / _2 / amd_comgr.dll по
+#     голым именам, а в System32 их нет. Без bin ZLUDA не стартует;
+#   * безопасен: в bin лежит amdhip64_6.dll, а линковка идёт на голое имя
+#     amdhip64.dll - его в bin нет, поэтому Windows берёт драйверную копию
+#     из System32 (она и видит RX 580).
+foreach ($hb in $hipBinCandidates) { if (Test-Path $hb) { $env:PATH = "$env:PATH;$hb;$hb\rocblas\library" } }
 
 function Header([string]$t) {
     Write-Host ''
@@ -281,6 +287,42 @@ if (Test-Path $torchLib) {
     }
 } else {
     Fail "Нет $torchLib" 'torch не установлен в venv'
+}
+
+# ---------- 4b. зависимости самого ZLUDA ----------
+# ZLUDA при init() делает Comgr::find_and_load() и ищет по ГОЛЫМ именам:
+#   amd_comgr_3.dll -> amd_comgr_2.dll -> amd_comgr.dll
+# В System32 их нет, поэтому без bin HIP SDK в PATH ZLUDA не стартует, и
+# torch.cuda.is_available() вернёт False без внятной причины.
+Header '4b. Зависимости ZLUDA (comgr и PATH)'
+
+$comgrFound = $false
+foreach ($n in 'amd_comgr_3.dll', 'amd_comgr_2.dll', 'amd_comgr.dll') {
+    $hit = $null
+    foreach ($hb in $hipBinCandidates) {
+        $cand = Join-Path $hb $n
+        if (Test-Path $cand) { $hit = $cand; break }
+    }
+    if ($hit) {
+        Ok ("comgr: найден {0} ({1})" -f $n, $hit)
+        $comgrFound = $true
+        break
+    }
+}
+if (-not $comgrFound) {
+    Fail 'comgr не найден (ни amd_comgr_3, ни _2, ни без суффикса)' 'ZLUDA не запустится. Нужен компонент HIP SDK Core; проверь bin.'
+}
+
+$pathHasBin = @($env:PATH -split ';' | Where-Object { $_ -match 'ROCm' })
+if ($pathHasBin.Count -gt 0) {
+    Ok ("PATH содержит HIP: {0}" -f (($pathHasBin | Select-Object -First 3) -join ', '))
+} else {
+    Fail 'В PATH нет каталога HIP SDK' 'ZLUDA не найдёт comgr. Лаунчер comfyui-user.bat добавляет его сам.'
+}
+
+$sysHipCheck = Join-Path $env:SystemRoot 'System32\amdhip64.dll'
+if (Test-Path $sysHipCheck) {
+    Ok ("драйверная amdhip64.dll на месте ({0})" -f (Get-Item $sysHipCheck).VersionInfo.FileVersion)
 }
 
 # ---------- 5. comfy/zluda.py ----------
