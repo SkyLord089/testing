@@ -65,30 +65,42 @@ fn from_wide(buf: &[u16]) -> String {
     OsString::from_wide(&buf[..end]).to_string_lossy().to_string()
 }
 
+const GENERIC_READ: u32 = 0x8000_0000;
+const GENERIC_WRITE: u32 = 0x4000_0000;
+const FILE_SHARE_WRITE: u32 = 0x02;
+const OPEN_EXISTING: u32 = 3;
+
+/// Открыть HID-интерфейс только на чтение.
+///
+/// Важно: с dwDesiredAccess = 0 Windows открывает устройство, но
+/// HidD_GetProductString / HidD_GetManufacturerString / HidD_GetFeature
+/// начинают возвращать ошибку — поэтому запрашиваем GENERIC_READ.
+/// Если интерфейс занят (например, мышью управляет игра), пробуем
+/// ещё раз без прав: VID/PID и дескриптор читаются и так.
 fn open_path(path: &str) -> HANDLE {
     let wpath = wide(path);
-    const FILE_SHARE_WRITE: u32 = 0x02;
-    const OPEN_EXISTING: u32 = 3;
-    unsafe {
-        CreateFileW(
-            wpath.as_ptr(),
-            0, // без прав: достаточно для атрибутов
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            std::ptr::null_mut(),
-            OPEN_EXISTING,
-            0,
-            0,
-        )
+    for access in [GENERIC_READ, 0] {
+        let handle = unsafe {
+            CreateFileW(
+                wpath.as_ptr(),
+                access,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null_mut(),
+                OPEN_EXISTING,
+                0,
+                0,
+            )
+        };
+        if handle != INVALID_HANDLE_VALUE && handle != 0 {
+            return handle;
+        }
     }
+    INVALID_HANDLE_VALUE
 }
 
 /// Открыть устройство для чтения/записи (нужно для репортов).
 pub fn open_rw(path: &str) -> Option<HANDLE> {
     let wpath = wide(path);
-    const GENERIC_READ: u32 = 0x8000_0000;
-    const GENERIC_WRITE: u32 = 0x4000_0000;
-    const FILE_SHARE_WRITE: u32 = 0x02;
-    const OPEN_EXISTING: u32 = 3;
     let handle = unsafe {
         CreateFileW(
             wpath.as_ptr(),
@@ -113,9 +125,49 @@ pub fn close(handle: HANDLE) {
     }
 }
 
-/// Все HID-интерфейсы в системе.
-pub fn enumerate() -> Vec<HidInfo> {
-    let mut found = Vec::new();
+/// Сколько интерфейсов SetupAPI вернул и сколько удалось открыть —
+/// для команды `doctor`, чтобы отличить «нет устройств» от «нет прав».
+#[derive(Debug, Default, Clone, Copy)]
+pub struct EnumerateStats {
+    pub interfaces: usize,
+    pub opened: usize,
+    pub errors: u32,
+}
+
+thread_local! {
+    static LAST_STATS: std::cell::Cell<EnumerateStats> =
+        const { std::cell::Cell::new(EnumerateStats {
+            interfaces: 0,
+            opened: 0,
+            errors: 0,
+        }) };
+}
+
+pub fn last_stats() -> EnumerateStats {
+    LAST_STATS.with(|cell| cell.get())
+}
+
+/// Пройти по всем HID-интерфейсам и вернуть их пути (без открытия).
+pub fn interface_paths() -> Vec<String> {
+    let mut out = Vec::new();
+    for_each_interface(|path| out.push(path));
+    out
+}
+
+/// Проверить, открывается ли интерфейс. 0 — да, иначе код ошибки Win32.
+pub fn probe_open(path: &str) -> u32 {
+    let handle = open_path(path);
+    if handle == INVALID_HANDLE_VALUE || handle == 0 {
+        return unsafe { win::GetLastError() };
+    }
+    close(handle);
+    0
+}
+
+fn for_each_interface(mut callback: impl FnMut(String)) {
+    // SAFETY: структуры соответствуют Win32 (setupapi/hid), буфер пути
+    // выделяется по размеру, который вернул сам SetupAPI.
+
     unsafe {
         let mut guid = GUID {
             Data1: 0,
@@ -131,10 +183,9 @@ pub fn enumerate() -> Vec<HidInfo> {
             0,
             DIGCF_PRESENT | DIGCF_DEVICEINTERFACE,
         );
-        if devs == INVALID_HANDLE_VALUE {
-            return found;
+        if devs == INVALID_HANDLE_VALUE || devs == 0 {
+            return;
         }
-
         let mut index = 0u32;
         loop {
             let mut data = SP_DEVICE_INTERFACE_DATA {
@@ -143,19 +194,18 @@ pub fn enumerate() -> Vec<HidInfo> {
                 Flags: 0,
                 Reserved: 0,
             };
-            let ok = SetupDiEnumDeviceInterfaces(
+            if SetupDiEnumDeviceInterfaces(
                 devs,
                 std::ptr::null_mut(),
                 &guid,
                 index,
                 &mut data,
-            );
-            if ok == 0 {
+            ) == 0
+            {
                 break;
             }
             index += 1;
 
-            // первый вызов — узнать размер буфера
             let mut required = 0u32;
             SetupDiGetDeviceInterfaceDetailW(
                 devs,
@@ -170,19 +220,20 @@ pub fn enumerate() -> Vec<HidInfo> {
             }
             // SP_DEVICE_INTERFACE_DETAIL_DATA_W: DWORD cbSize + WCHAR Path[1].
             // Размер cbSize зависит от выравнивания: 8 на x64, 6 на x86.
-            let size_of_detail: u32 = if cfg!(target_pointer_width = "64") { 8 } else { 6 };
+            let size_of_detail: u32 =
+                if cfg!(target_pointer_width = "64") { 8 } else { 6 };
             let path_offset = size_of_detail as usize;
             let mut buf = vec![0u8; required as usize];
             buf[0..4].copy_from_slice(&size_of_detail.to_le_bytes());
-            let ok = SetupDiGetDeviceInterfaceDetailW(
+            if SetupDiGetDeviceInterfaceDetailW(
                 devs,
                 &data,
                 buf.as_mut_ptr() as *mut std::ffi::c_void,
                 required,
                 &mut required,
                 std::ptr::null_mut(),
-            );
-            if ok == 0 {
+            ) == 0
+            {
                 continue;
             }
             let path_units: Vec<u16> = buf[path_offset..]
@@ -190,15 +241,29 @@ pub fn enumerate() -> Vec<HidInfo> {
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             let path = from_wide(&path_units);
-            if path.is_empty() {
-                continue;
-            }
-            if let Some(info) = describe(&path) {
-                found.push(info);
+            if !path.is_empty() {
+                callback(path);
             }
         }
         SetupDiDestroyDeviceInfoList(devs);
     }
+}
+
+/// Все HID-интерфейсы в системе (с открытием для чтения атрибутов).
+pub fn enumerate() -> Vec<HidInfo> {
+    let mut found = Vec::new();
+    let mut stats = EnumerateStats::default();
+    for_each_interface(|path| {
+        stats.interfaces += 1;
+        match describe(&path) {
+            Some(info) => {
+                stats.opened += 1;
+                found.push(info);
+            }
+            None => stats.errors += 1,
+        }
+    });
+    LAST_STATS.with(|cell| cell.set(stats));
     found
 }
 
@@ -274,9 +339,8 @@ fn describe(path: &str) -> Option<HidInfo> {
         .map(|(head, _)| head.to_string())
         .unwrap_or_else(|| path.to_string());
 
-    if info.vendor_id == 0 && info.product_id == 0 {
-        return None;
-    }
+    // Устройство без VID/PID всё равно показываем: путь и HID-caps
+    // помогают понять, что происходит (бывает у Bluetooth-интерфейсов).
     Some(info)
 }
 
@@ -333,6 +397,34 @@ pub fn feature_request(handle: HANDLE, data: &[u8]) -> Option<Vec<u8>> {
             return None;
         }
         Some(reply)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stats_default_is_zero() {
+        let stats = EnumerateStats::default();
+        assert_eq!(stats.interfaces, 0);
+        assert_eq!(stats.opened, 0);
+        assert_eq!(stats.errors, 0);
+    }
+
+    #[test]
+    fn probe_bad_path_reports_error() {
+        // Несуществующий путь: Windows обязана вернуть ненулевой код ошибки
+        let code = probe_open("\\\\?\\hid#vid_0000&pid_0000#none");
+        // На Windows CreateFileW вернёт ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND
+        assert_ne!(code, 0);
+    }
+
+    #[test]
+    fn capabilities_have_expected_layout() {
+        // Структура должна совпадать с HIDP_CAPS из hidpi.h (по размеру)
+        assert_eq!(std::mem::size_of::<HIDP_CAPS>(), 68);
+        assert_eq!(std::mem::size_of::<HIDD_ATTRIBUTES>(), 12);
     }
 }
 

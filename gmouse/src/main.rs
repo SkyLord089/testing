@@ -51,6 +51,7 @@ gmouse — настройка мыши под Windows 11
   gmouse probe [dpi]              отправить известные команды DPI
   gmouse identify                 подобрать команду DPI интерактивно
   gmouse watch <секунды>          дамп входных репортов служебного интерфейса
+  gmouse doctor                   диагностика: почему устройства не видны
   gmouse diag [-o файл]           отчёт о мыши в JSON
   gmouse profiles                 известные профили
   gmouse config-path              где лежит конфиг
@@ -193,6 +194,10 @@ fn run(args: &[String]) -> Result<i32, String> {
         "probe" => cmd_probe(args),
         "identify" => cmd_identify(args),
         "watch" => cmd_watch(args),
+        "doctor" => {
+            print!("{}", diag::doctor());
+            Ok(0)
+        }
         "diag" => cmd_diag(args),
         "profiles" => cmd_profiles(),
         "config-path" => {
@@ -210,7 +215,22 @@ fn run(args: &[String]) -> Result<i32, String> {
 fn cmd_list() -> Result<i32, String> {
     let devices = hid::enumerate();
     if devices.is_empty() {
+        let stats = hid::last_stats();
         println!("HID-устройства не найдены.");
+        println!(
+            "  SetupAPI вернул интерфейсов: {}, открыто: {}, ошибок: {}",
+            stats.interfaces, stats.opened, stats.errors
+        );
+        let hints = [
+            "1) gmouse doctor — покажет пути и коды ошибок",
+            "2) разбудите мышь (клик по кнопке) и повторите",
+            "3) Bluetooth-мышь: сначала сопрягите её в Параметрах",
+            "4) RDP/виртуальная машина: HID видны только в гостевой ОС",
+        ];
+        println!("\nЧто делать:");
+        for hint in hints {
+            println!("   {hint}");
+        }
         return Ok(1);
     }
     print!("{}", diag::summary(&devices));

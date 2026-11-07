@@ -102,6 +102,71 @@ pub fn summary(devices: &[hid::HidInfo]) -> String {
     out
 }
 
+/// Подробная диагностика перечисления: сколько интерфейсов нашёл SetupAPI,
+/// какие пути, что ответил CreateFileW. Нужна, когда `list` печатает
+/// «устройства не найдены».
+pub fn doctor() -> String {
+    let mut out = String::new();
+    out.push_str(&format!("ОС: {}\n", os_version()));
+
+    // 1. Что вообще видит SetupAPI
+    let devices = hid::enumerate();
+    let stats = hid::last_stats();
+    out.push_str(&format!(
+        "SetupAPI: интерфейсов={}, открыто={}, ошибок={}\n",
+        stats.interfaces, stats.opened, stats.errors
+    ));
+
+    // 2. Первые 15 путей с кодами ошибок открытия
+    out.push_str("\nПервые интерфейсы (проверка доступа):\n");
+    let mut shown = 0;
+    for path in raw_interface_paths().into_iter().take(15) {
+        let code = hid::probe_open(&path);
+        let verdict = match code {
+            0 => "открывается".to_string(),
+            other => format!("код ошибки {other}"),
+        };
+        let short = if path.chars().count() > 90 {
+            let head: String = path.chars().take(90).collect();
+            format!("{head}…")
+        } else {
+            path.clone()
+        };
+        out.push_str(&format!("    [{verdict}] {short}\n"));
+        shown += 1;
+    }
+    if shown == 0 {
+        out.push_str("    (SetupAPI не вернул ни одного HID-интерфейса)\n");
+    }
+
+    // 3. Устройства, которые удалось разобрать
+    out.push_str(&format!("\nРазобрано устройств: {}\n", devices.len()));
+    for device in &devices {
+        out.push_str(&format!(
+            "    {} {:04X}:{:04X} {:<28} usage=0x{:02X}/0x{:02X} in={}\n",
+            if device.is_mouse() { "МЫШЬ" } else { "     " },
+            device.vendor_id,
+            device.product_id,
+            device.product,
+            device.usage_page,
+            device.usage,
+            device.input_len
+        ));
+    }
+
+    if devices.is_empty() || !devices.iter().any(|d| d.is_mouse()) {
+        out.push_str(
+            "\nМышь не найдена через HID. Что это значит:\n             * мышь подключена через RDP/виртуальную машину — HID-интерфейсы\n               видны только внутри гостевой системы;\n             * это Bluetooth-мышь, и её HID-интерфейсы появляются только\n               после сопряжения (Параметры → Bluetooth);\n             * устройство отключено или спит.\n",
+        );
+    }
+    out
+}
+
+/// Сырые пути HID-интерфейсов из SetupAPI без попытки открытия.
+pub fn raw_interface_paths() -> Vec<String> {
+    hid::interface_paths()
+}
+
 fn truncate(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
@@ -249,6 +314,15 @@ mod tests {
             feature_len: 9,
             parent: "\\\\?\\hid#parent".into(),
         }
+    }
+
+    #[test]
+    fn doctor_returns_text() {
+        // На CI и в песочнице устройств нет — важно, что функция не падает
+        // и печатает версию ОС.
+        let text = doctor();
+        assert!(text.contains("ОС:"));
+        assert!(text.contains("SetupAPI"));
     }
 
     #[test]
