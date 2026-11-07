@@ -158,7 +158,7 @@ pub fn interface_paths() -> Vec<String> {
 pub fn probe_open(path: &str) -> u32 {
     let handle = open_path(path);
     if handle == INVALID_HANDLE_VALUE || handle == 0 {
-        return unsafe { win::GetLastError() };
+        return unsafe { crate::win::GetLastError() };
     }
     close(handle);
     0
