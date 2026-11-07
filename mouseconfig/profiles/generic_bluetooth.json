@@ -1,0 +1,9 @@
+{
+  "model": "Logitech (Bluetooth, универсальный)",
+  "match": { "pid": ["0xB023", "0xB013", "0xB01A"] },
+  "device_index": 255,
+  "capabilities": {
+    "dpi": { "min": 200, "max": 4000, "step": 50 },
+    "battery": "unified"
+  }
+}
