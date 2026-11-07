@@ -1,0 +1,104 @@
+name: Release gmouse.exe
+
+on:
+  push:
+    tags:
+      - "gmouse-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Тег релиза, например gmouse-v0.1.0"
+        required: true
+        default: "gmouse-v0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  # Обе сборки проверяем на тестах: MSVC (как у большинства) и GNU (без Visual Studio)
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - toolchain: stable-x86_64-pc-windows-msvc
+            name: msvc
+          - toolchain: stable-x86_64-pc-windows-gnu
+            name: gnu
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: gmouse
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - name: Тесты (${{ matrix.name }})
+        run: cargo test --verbose
+      - name: Сборка (${{ matrix.name }})
+        run: cargo build --release --verbose
+
+  release:
+    needs: test
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: gmouse
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: MSVC-сборка (рекомендуется)
+        uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: Забрать exe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/gmouse.exe dist/gmouse.exe
+          Copy-Item README.md dist/README.md
+          Copy-Item build.ps1, build.cmd, gmouse.cmd dist/
+          Copy-Item -Recurse profiles dist/profiles
+
+      - name: GNU-сборка (для машин без Visual Studio)
+        shell: pwsh
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
+          rustup run stable-x86_64-pc-windows-gnu cargo build --release --target x86_64-pc-windows-gnu
+          Copy-Item target/x86_64-pc-windows-gnu/release/gmouse.exe dist/gmouse-gnu.exe
+
+      - name: Архив
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/* -DestinationPath gmouse-windows.zip -Force
+
+      - name: Публикация релиза
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: "gmouse ${{ github.event.inputs.tag || github.ref_name }}"
+          body: |
+            ## gmouse для Windows 11
+
+            **Скачать:** `gmouse-windows.zip` (внизу в разделе Assets) — вход
+            в GitHub не нужен.
+
+            Внутри:
+            * `gmouse.exe` — обычная сборка (MSVC);
+            * `gmouse-gnu.exe` — запасная сборка, если первая не запускается;
+            * `profiles/` — профили мышей;
+            * `build.ps1`, `build.cmd`, `gmouse.cmd` — сборка из исходников.
+
+            Быстрый старт (PowerShell в папке с exe):
+            ```powershell
+            .\gmouse.exe list
+            .\gmouse.exe test
+            .\gmouse.exe preset linux-back-forward
+            .\gmouse.exe run
+            ```
+
+            SmartScreen может предупредить (файл не подписан):
+            «Подробнее» → «Выполнить в любом случае».
+          files: gmouse/gmouse-windows.zip
+          draft: false
+          generate_release_notes: true

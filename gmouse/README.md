@@ -36,32 +36,72 @@ vendor-протокол аппаратного DPI.
 
 ---
 
-## Сборка
+## Как получить gmouse.exe
 
-Нужен только Rust (MSVC toolchain):
+### Вариант 1 — скачать готовый (проще всего)
+
+**https://github.com/SkyLord089/testing/releases/latest**
+→ файл `gmouse-windows.zip` (вход в GitHub не нужен, внутри уже собранный
+`gmouse.exe` и запасной `gmouse-gnu.exe`).
+
+Распакуйте, откройте PowerShell в этой папке:
 
 ```powershell
-# 1. Установить Rust: https://rustup.rs  (вариант "Desktop development with C++")
-# 2. Собрать
-cd gmouse
-cargo build --release
-# 3. Готовый файл
-target\release\gmouse.exe
+.\gmouse.exe list
 ```
 
-Зависимостей нет — `cargo build` не ходит в интернет.
+### Вариант 2 — собрать у себя одной командой
 
-### Готовая сборка без Rust
+Нужен только Rust (https://win.rustup.rs, установка «по Enter»):
 
-В репозитории есть workflow `.github/workflows/rust-ci.yml`: на каждый push
-GitHub собирает `gmouse.exe` на Windows-раннере (MSVC) и прогоняет 19 тестов.
-Скачать готовый файл: **Actions → Rust CI (Windows) → последний удачный
-запуск → Artifacts → `gmouse-windows`** (внутри `gmouse.exe` и `profiles/`).
+```powershell
+cd gmouse
+.\build.cmd          # или:  powershell -ExecutionPolicy Bypass -File .\build.ps1
+```
 
-Проверено на windows-latest: `cargo build --release` и `cargo test` проходят,
-сборка без зависимостей.
+Скрипт сам поймёт, чего не хватает:
 
----
+* если установлен Visual Studio C++ — собирает обычным MSVC-тулчейном;
+* **если MSVC-линкера нет (ваша ошибка `linker link.exe not found`) —
+  доставит GNU-тулчейн и соберёт им, Visual Studio для этого не нужен.**
+
+Ручной вариант на случай, если скрипт недоступен:
+
+```powershell
+rustup toolchain install stable-x86_64-pc-windows-gnu
+rustup run stable-x86_64-pc-windows-gnu cargo build --release
+```
+(или поставьте компонент «Desktop development with C++» в Visual Studio
+Build Tools и собирайте как обычно: `cargo build --release`).
+
+### Вариант 3 — вообще не думать про сборку
+
+```powershell
+.\gmouse.cmd list      # соберёт при первом запуске и выполнит команду
+.\gmouse.cmd run
+```
+
+### Почему была ошибка `linker link.exe not found`
+
+Rust на Windows использует линкер от Visual Studio. Если установлен только
+Rust без «Desktop development with C++», линкера нет. Решения:
+
+| Способ | Что делать |
+|---|---|
+| GNU-тулчейн (быстро, ~300 МБ) | `rustup toolchain install stable-x86_64-pc-windows-gnu` и собрать с `--target x86_64-pc-windows-gnu` (скрипт `build.ps1` делает это сам) |
+| Visual Studio Build Tools | `winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"` |
+| Готовый exe | Releases, см. вариант 1 |
+
+### Почему не запускался `target\release\gmouse.exe`
+
+PowerShell не запускает программы по относительному пути без `\` перед
+именем папки — он считает это именем модуля. Правильно:
+
+```powershell
+.\target\release\gmouse.exe list
+```
+
+Именно поэтому удобнее `gmouse.cmd` из папки проекта.
 
 ## Быстрый старт
 

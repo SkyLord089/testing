@@ -29,18 +29,21 @@ HID\VID_1A2C&PID_2511&MI_01   -> China Resource Semico / Eastern Times DS2511
 
 Быстрый старт (Windows):
 
+**Скачать готовый `gmouse.exe`:** https://github.com/SkyLord089/testing/releases/latest
+(вход в GitHub не нужен), либо собрать самим:
+
 ```powershell
 cd gmouse
-cargo build --release
-target\release\gmouse.exe list
-target\release\gmouse.exe test                # узнать имена кнопок
-target\release\gmouse.exe preset linux-back-forward
-target\release\gmouse.exe run
+.\build.cmd            # сам доставит нужный линкер, если Visual Studio нет
+.\gmouse.cmd list     # обёртка: соберёт при первом запуске и выполнит команду
+.\gmouse.cmd test     # узнать имена кнопок
+.\gmouse.cmd preset linux-back-forward
+.\gmouse.cmd run      # Ctrl+Alt+Q — стоп
 ```
 
-Готовая сборка без Rust: GitHub Actions workflow
-[`rust-ci.yml`](.github/workflows/rust-ci.yml) собирает `gmouse.exe`
-на Windows-раннере (Actions → Artifacts).
+Тесты и сборка (MSVC и GNU) гоняются в CI:
+[`rust-ci.yml`](.github/workflows/rust-ci.yml),
+[`release-gmouse.yml`](.github/workflows/release-gmouse.yml).
 
 ## Ограничения, о которых стоит знать сразу
 
