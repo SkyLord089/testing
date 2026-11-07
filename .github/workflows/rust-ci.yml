@@ -38,10 +38,29 @@ jobs:
         continue-on-error: true
 
       - name: Сборка (release)
-        run: cargo build --release --verbose
+        shell: bash
+        run: cargo build --release --verbose 2>&1 | tee build.log; test ${PIPESTATUS[0]} -eq 0
 
       - name: Тесты
-        run: cargo test --verbose
+        shell: bash
+        run: cargo test --verbose 2>&1 | tee test.log; test ${PIPESTATUS[0]} -eq 0
+
+      - name: Ошибки сборки в комментарий PR
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ github.event.pull_request.number }}" ]; then
+            {
+              echo "### Сборка не прошла"
+              echo '```'
+              tail -c 6000 build.log 2>/dev/null || true
+              tail -c 4000 test.log 2>/dev/null || true
+              echo '```'
+            } > body.md
+            gh pr comment "${{ github.event.pull_request.number }}" --body-file body.md
+          fi
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -54,3 +73,20 @@ jobs:
           path: |
             gmouse/target/release/gmouse.exe
             gmouse/profiles/*.json
+
+      - name: Полный лог сборки в PR
+        if: always() && github.event.pull_request.number
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f build.log ] || [ -f test.log ]; then
+            {
+              echo "### Лог cargo (${{ job.status }})"
+              echo '```'
+              tail -c 14000 build.log 2>/dev/null || true
+              tail -c 6000 test.log 2>/dev/null || true
+              echo '```'
+            } > log-body.md
+            gh pr comment "${{ github.event.pull_request.number }}" --body-file log-body.md
+          fi
