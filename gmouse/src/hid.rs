@@ -420,9 +420,14 @@ mod tests {
 
     #[test]
     fn capabilities_have_expected_layout() {
-        // Структура должна совпадать с HIDP_CAPS из hidpi.h (по размеру)
-        assert_eq!(std::mem::size_of::<HIDP_CAPS>(), 68);
+        // Раскладка должна совпадать с hidpi.h:
+        // HIDP_CAPS = 2+2 + 2*3 + 2*17 + 2*10 = 64 байта
+        assert_eq!(std::mem::size_of::<HIDP_CAPS>(), 64);
         assert_eq!(std::mem::size_of::<HIDD_ATTRIBUTES>(), 12);
+        assert_eq!(
+            std::mem::size_of::<SP_DEVICE_INTERFACE_DATA>(),
+            if cfg!(target_pointer_width = "64") { 32 } else { 28 }
+        );
     }
 }
 
