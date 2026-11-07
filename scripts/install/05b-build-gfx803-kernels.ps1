@@ -114,6 +114,12 @@
     Дополнительные флаги компилятора при сборке, через пробел.
     Используется вместе с обёрткой Tensile_CXX_COMPILER_LAUNCHER.
 
+.PARAMETER SkipSourceKernels
+    Собрать ТОЛЬКО asm-ядра r9nano, без source-ядер.
+    Работает всегда: asm-ядра не включают HIP-заголовки, поэтому не требуют
+    C++ стандартной библиотеки. Но fp16 останется без ядер - только fp32/fp64.
+    Это аварийный вариант, если source-ядра собрать не удастся.
+
 .EXAMPLE
     .\05b-build-gfx803-kernels.ps1 -ListOnly
 
@@ -139,7 +145,8 @@ param(
     [switch]$ShortNames,
     [switch]$KeepBuildTmp,
     [switch]$DiagCompiler,
-    [string]$ExtraFlags = ''
+    [string]$ExtraFlags = '',
+    [switch]$SkipSourceKernels
 )
 
 $ErrorActionPreference = 'Stop'
@@ -158,6 +165,10 @@ $TENSILE_SHA = 'be49885fce2a61b600ae4593f1c2d00c8b4fa11e'
 $TENSILE_URL = "https://codeload.github.com/ROCm/Tensile/tar.gz/$TENSILE_SHA"
 
 $repoRootScripts = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+# Каталоги исходников нужны и диагностике, и сборке - определяем сразу.
+$rocblasSrc = $null
+$tensileSrc = $null
 
 $hipDirs = @{
     '6.4.2' = 'C:\Program Files\AMD\ROCm\6.4'
@@ -218,6 +229,8 @@ if (-not $hipDirs.ContainsKey($HipVersion)) { throw 'HipVersion: 6.4.2 или 6.
 $hipDir = $hipDirs[$HipVersion]
 $binDir = Join-Path $hipDir 'bin'
 $libraryDir = Join-Path $binDir 'rocblas\library'
+$rocblasSrc = Join-Path $BuildRoot 'rocBLAS'
+$tensileSrc = Join-Path $BuildRoot 'Tensile'
 $outDir = Join-Path $BuildRoot 'out'
 $newLibDir = Join-Path $outDir 'library'
 
@@ -345,17 +358,30 @@ if ($DiagCompiler) {
         }
     }
     if (-not $testCpp) {
-        # своего файла нет - берём минимальный, но с тем же include, что у Tensile
-        $tensileTypesCandidates = @(
-            (Join-Path $tensileSrc 'Tensile\Source\TensileTypes.h'),
-            (Join-Path $outDir 'TensileTypes.h')
-        )
-        $haveTypes = $false
-        foreach ($c in $tensileTypesCandidates) { if (Test-Path $c) { $haveTypes = $true } }
-        Dim 'Готовых файлов нет - делаю минимальный тест с #include <hip/hip_runtime.h>'
-        $probe = Join-Path $outDir '_diag_probe.cpp'
+        # Готового файла нет (сборка упала до записи) - воспроизводим структуру
+        # настоящего source-ядра Tensile: KernelHeader.h + TensileTypes.h.
+        # Всё берём из исходников Tensile, чтобы include-цепочка была та же.
+        Dim 'Готовых .cpp нет - собираю тест по структуре настоящего ядра Tensile'
         if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
-        [IO.File]::WriteAllText($probe, "#include <hip/hip_runtime.h>`nextern `"C`" __global__ void k(float* a) { a[0] += 1.0f; }`n")
+
+        # Tensile сам копирует эти заголовки в out перед компиляцией
+        $srcDir = Join-Path $tensileSrc 'Tensile\Source'
+        foreach ($h in @('TensileTypes.h', 'KernelHeader.h', 'tensile_bfloat16.h', 'hip_f8_impl.h')) {
+            $from = Join-Path $srcDir $h
+            if (Test-Path $from) { Copy-Item $from (Join-Path $outDir $h) -Force }
+        }
+
+        $probe = Join-Path $outDir '_diag_probe.cpp'
+        $body = @'
+#include "TensileTypes.h"
+#include <hip/hip_runtime.h>
+
+extern "C" __global__ void diag_kernel(float* a, float const* b)
+{
+    a[threadIdx.x] += b[threadIdx.x];
+}
+'@
+        [IO.File]::WriteAllText($probe, $body)
         $testCpp = Get-Item $probe
     }
 
@@ -475,9 +501,6 @@ if (-not (Test-Path $BuildRoot)) { New-Item -ItemType Directory -Path $BuildRoot
 $tarExe = Join-Path $env:SystemRoot 'System32\tar.exe'
 if (-not (Test-Path $tarExe)) { throw 'Нет tar.exe (нужен Windows 10 1803+).' }
 
-$rocblasSrc = Join-Path $BuildRoot 'rocBLAS'
-$tensileSrc = Join-Path $BuildRoot 'Tensile'
-
 function Get-Tarball([string]$url, [string]$tgz, [string]$destDir, [string]$marker) {
     if (-not (Test-Path $tgz)) {
         Step ("Скачиваю " + (Split-Path $tgz -Leaf))
@@ -589,6 +612,20 @@ if (-not $SkipBuild) {
     if ($nJ -le 0) { $nJ = [Math]::Min([Environment]::ProcessorCount, 8) }
 
     $logicRoot = Join-Path $rocblasSrc 'library\src\blas3\Tensile\Logic\asm_full'
+
+    # -SkipSourceKernels: оставить только логики r9nano (asm, fp32/fp64).
+    # Source-ядра (hip_*.yaml) требуют C++ stdlib, которой на Windows без MSVC нет.
+    if ($SkipSourceKernels) {
+        $onlyAsm = Join-Path $BuildRoot 'logic-asm-only'
+        if (Test-Path $onlyAsm) { Remove-Item $onlyAsm -Recurse -Force }
+        New-Item -ItemType Directory -Path $onlyAsm -Force | Out-Null
+        $r9dir = Join-Path $logicRoot 'r9nano'
+        if (-not (Test-Path $r9dir)) { throw ("Нет логик r9nano в " + $r9dir) }
+        Copy-Item (Join-Path $r9dir 'r9nano_*.yaml') $onlyAsm -Force
+        $logicRoot = $onlyAsm
+        $nOnly = @(Get-ChildItem $onlyAsm -Filter '*.yaml').Count
+        Warn2 ("-SkipSourceKernels: только asm-ядра (" + $nOnly + " логик)") 'fp16 останется без ядер - только fp32/fp64.'
+    }
 
     # Tensile ищет компилятор и бандлер через эти переменные.
     # HIP_DIR - то, что он читает на Windows (Tensile/Common.py:2404).
