@@ -112,6 +112,98 @@ pub fn summary(devices: &[hid::HidInfo]) -> String {
     out
 }
 
+/// Подробная диагностика: сколько интерфейсов нашёл SetupAPI, какие пути,
+/// что ответил CreateFileW, есть ли служебный интерфейс для настроек.
+pub fn doctor() -> String {
+    let mut out = String::new();
+    out.push_str(&format!("ОС: {}\n", os_version()));
+
+    let devices = hid::enumerate();
+    let stats = hid::last_stats();
+    out.push_str(&format!(
+        "SetupAPI: интерфейсов={}, открыто={}, ошибок={}\n",
+        stats.interfaces, stats.opened, stats.errors
+    ));
+
+    out.push_str("\nПервые интерфейсы (проверка доступа):\n");
+    let mut shown = 0;
+    for path in hid::interface_paths().into_iter().take(15) {
+        let code = hid::probe_open(&path);
+        let verdict = match code {
+            0 => "открывается".to_string(),
+            other => format!("код ошибки {other}"),
+        };
+        let short = if path.chars().count() > 90 {
+            let head: String = path.chars().take(90).collect();
+            format!("{head}…")
+        } else {
+            path.clone()
+        };
+        out.push_str(&format!("    [{verdict}] {short}\n"));
+        shown += 1;
+    }
+    if shown == 0 {
+        out.push_str("    (SetupAPI не вернул ни одного HID-интерфейса)\n");
+    }
+
+    out.push_str(&format!("\nРазобрано устройств: {}\n", devices.len()));
+    for device in &devices {
+        out.push_str(&format!(
+            "    {} {:04X}:{:04X} {:<28} usage=0x{:02X}/0x{:02X} in={}\n",
+            if device.is_mouse() { "МЫШЬ" } else { "     " },
+            device.vendor_id,
+            device.product_id,
+            device.product,
+            device.usage_page,
+            device.usage,
+            device.input_len
+        ));
+    }
+
+    let services: Vec<_> = devices
+        .iter()
+        .filter(|d| hid::is_service_interface(d))
+        .collect();
+    out.push_str(&format!(
+        "\nСлужебных интерфейсов (для настроек): {}\n",
+        services.len()
+    ));
+    for service in services {
+        out.push_str(&format!(
+            "    usage=0x{:02X}/0x{:02X} in={} out={} feature={}  {}\n",
+            service.usage_page,
+            service.usage,
+            service.input_len,
+            service.output_len,
+            service.feature_len,
+            service.path
+        ));
+    }
+    if devices.iter().any(|d| d.is_mouse()) && devices.iter().all(|d| !hid::is_service_interface(d))
+    {
+        out.push_str(
+            "    Ни одного. Значит настройки через HID недоступны: DPI\n\
+             \tпереключается кнопкой на корпусе, подсветка и макросы —\n\
+             \tтолько фирменной утилитой производителя.\n",
+        );
+    }
+
+    out.push_str("\nПолный список интерфейсов:\n");
+    out.push_str(&full_dump(&devices));
+
+    if devices.is_empty() || !devices.iter().any(|d| d.is_mouse()) {
+        out.push_str(
+            "\nМышь не найдена через HID. Что это значит:\n\
+             * мышь подключена через RDP/виртуальную машину — HID-интерфейсы\n\
+             \tвидны только внутри гостевой системы;\n\
+             * это Bluetooth-мышь, и её HID-интерфейсы появляются только\n\
+             \tпосле сопряжения (Параметры → Bluetooth);\n\
+             * устройство отключено или спит.\n",
+        );
+    }
+    out
+}
+
 /// Полный дамп всех интерфейсов — для отчёта разработчику.
 pub fn full_dump(devices: &[hid::HidInfo]) -> String {
     let mut out = String::from("VID:PID    mi   usage      in  out feat  kind        path\n");
