@@ -51,7 +51,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\00-all.ps1 -Profile t
 | 2 | `02-driver.ps1 -OpenPage` | открывает страницу драйвера RX 580, потом проверяет `amdhip64_6.dll` | ставим драйвер, перезагрузка |
 | 3 | `03-install-hip.ps1 -HipVersion 6.4.2` | качает установщик AMD, запускает GUI | **снять галочку PRO-драйвера**, перезагрузка |
 | 4 | `04-comfyui-zluda.ps1 -Profile target` | clone, venv, torch 2.7.0+cu118, ZLUDA 3.9.6, подмена DLL | — |
-| 5 | `05-gfx803-rocblas.ps1 -Archive <путь.7z>` | бэкап + установка ядер gfx803 для Polaris | скачать архив |
+| 5 | `05-gfx803-rocblas.ps1 -Archive <путь.7z>` | бэкап + установка готовых ядер gfx803 | скачать архив |
+| 5б | `05b-build-gfx803-kernels.ps1 -Install -Verify` | сборка ядер gfx803 из исходников rocBLAS 6.4.2 | — |
 | 6 | `06-verify.ps1` | сквозная проверка всей цепочки (HIP → rocBLAS → DLL → torch → GEMM) | — |
 
 Подробное описание с критериями «прошло/не прошло» — [`docs/08-install-fresh.md`](docs/08-install-fresh.md).
@@ -111,6 +112,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install\90-fallback-hip62.ps1
 | `scripts/install/03-install-hip.ps1` | Скачивание и установка HIP SDK 6.4.2 / 6.2.4 |
 | `scripts/install/04-comfyui-zluda.ps1` | ComfyUI-Zluda + venv + torch 2.7.0+cu118 + ZLUDA + патч DLL |
 | `scripts/install/05-gfx803-rocblas.ps1` | Ядра rocBLAS gfx803: `-ListOnly`, бэкап, `-Clean`, проверка |
+| `scripts/install/05b-build-gfx803-kernels.ps1` | Сборка ядер Tensile для gfx803 из исходников; без MSVC и CMake |
 | `scripts/install/06-verify.ps1` | Проверка установки: hipInfo, ядра gfx803, DLL, torch.cuda, GEMM/addmm |
 | `scripts/check-encoding.ps1` | Сторож кодировок: ловит `.ps1` без BOM и `.bat` с BOM, умеет `-Fix` |
 | `scripts/install/90-fallback-hip62.ps1` | План Б: откат на HIP 6.2.4 с сохранением torch 2.7 |
