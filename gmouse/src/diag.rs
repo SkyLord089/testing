@@ -291,6 +291,16 @@ pub fn watch_reports(path: &str, seconds: u64) -> Result<String, String> {
     Ok(out)
 }
 
+/// Метка времени в миллисекундах от старта программы — для потока событий.
+pub fn now_ms() -> String {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetTickCount() -> u32;
+    }
+    let ticks = unsafe { GetTickCount() };
+    format!("{:>8.3}s", ticks as f64 / 1000.0)
+}
+
 pub fn hex(bytes: &[u8]) -> String {
     bytes
         .iter()

@@ -359,47 +359,78 @@ impl Device {
         }
     }
 
+    /// Запрос на чтение для feature-транспорта.
+    ///
+    /// Официальная утилита: `a0 cmd size 00 profile 00 00 00`.
+    /// У X11-семейства (1d57:fa55/fa60/fa61) байт profile бывает важен:
+    /// `0` в нём == «запрос проигнорирован», поэтому пробуем 1, потом 0.
+    fn read_request(cmd: u8, size: u16, profile: u8) -> [u8; 8] {
+        [CMD_READ, cmd, size as u8, 0x00, profile, 0x00, 0x00, 0x00]
+    }
+
     fn read_block_cable(&self, cmd: u8, size: u16) -> Result<Vec<u8>, String> {
-        let request = [
-            CMD_READ,
-            cmd,
-            size as u8,
-            0x00,
+        // Размер чтения 64 байта: столько отдаёт Windows, и Profile (128)
+        // приходит этим же каналом (первый кусок).
+        let length = size.max(64);
+        let profiles = [
             self.profile_index,
-            0x00,
-            0x00,
+            self.profile_index.wrapping_add(1),
             0x00,
         ];
-        hid::write_feature(self.handle, &request)
-            .ok_or("мышь отклонила SET_FEATURE(0xa0) — попробуйте от администратора")?;
-        std::thread::sleep(std::time::Duration::from_millis(320));
+        let mut errors: Vec<String> = Vec::new();
 
-        // ждём готовности: a0 01 ...
-        let mut ready = false;
-        for _ in 0..20 {
-            if let Some(reply) = hid::read_feature_id(self.handle, CMD_READ, 8) {
-                if reply.get(1).copied().unwrap_or(0) == 1 {
-                    ready = true;
-                    break;
+        for profile_byte in profiles {
+            let request = Self::read_request(cmd, size, profile_byte);
+            if hid::write_feature(self.handle, &request).is_none() {
+                errors.push(format!(
+                    "SET_FEATURE(0xa0) отклонён (profile={profile_byte})"
+                ));
+                // STALL бывает разовым — повторяем, как официальная утилита
+                std::thread::sleep(std::time::Duration::from_millis(210));
+                if hid::write_feature(self.handle, &request).is_none() {
+                    continue;
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        if !ready {
-            return Err("устройство не подтвердило готовность блока (0xA0)".into());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(110));
 
-        let length = size.max(64);
-        let block = hid::read_feature_id(self.handle, cmd, length)
-            .ok_or("GET_FEATURE не вернул блок")?;
-        if block.first().copied() != Some(cmd) {
-            return Err(format!(
-                "в ответе чужая команда: ожидали 0x{cmd:02X}, получили 0x{:02X}",
-                block.first().copied().unwrap_or(0)
-            ));
+            // 1) ждём готовности: a0 01 ...
+            let mut ready = false;
+            for _ in 0..12 {
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                if let Some(reply) = hid::read_feature_id(self.handle, CMD_READ, 8) {
+                    let status = reply.get(1).copied().unwrap_or(0);
+                    if status == 1 {
+                        ready = true;
+                        break;
+                    }
+                    // 0 = ещё не готово; прочие значения — устройство ответило
+                    // другим кодом, но данные может отдать всё равно
+                }
+            }
+            if !ready {
+                errors.push(format!(
+                    "нет флага готовности 0xA0 (profile={profile_byte})"
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(110));
+
+            // 2) читаем сам блок
+            let Some(block) = hid::read_feature_id(self.handle, cmd, length) else {
+                errors.push(format!("GET_FEATURE(0x{cmd:02X}) не вернул данные"));
+                continue;
+            };
+            match block.first().copied() {
+                Some(id) if id == cmd => return Ok(block),
+                Some(other) => errors.push(format!(
+                    "в ответе чужая команда 0x{other:02X} вместо 0x{cmd:02X}"
+                )),
+                None => errors.push("пустой ответ".into()),
+            }
         }
-        Ok(block)
+
+        Err(format!(
+            "не удалось прочитать блок 0x{cmd:02X}: {}",
+            errors.join("; ")
+        ))
     }
 
     fn read_block_receiver(&self, cmd: u8, size: u16) -> Result<Vec<u8>, String> {

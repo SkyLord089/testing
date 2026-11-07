@@ -62,6 +62,8 @@ gmouse — настройка мыши под Windows 11
   (кабель -- feature-репорты, приёмник 2.4 ГГц -- report ID 4)
   gmouse doctor                   диагностика: всё про интерфейсы и доступ
   gmouse dump                     полный список HID-интерфейсов
+  gmouse shark scan               перебрать все Report ID служебного интерфейса
+  gmouse shark monitor            поток событий мыши (батарея, кнопка DPI)
   gmouse diag [-o файл]           отчёт о мыши в JSON
   gmouse profiles                 известные профили
   gmouse config-path              где лежит конфиг
@@ -482,6 +484,84 @@ fn cmd_shark(args: &[String]) -> Result<i32, String> {
             }
             Ok(0)
         }
+        "monitor" => {
+            println!("Поток событий (Ctrl+C — выход). Нажимайте кнопки и крутите колесо.");
+            let Some(handle) = hid::open_rw(&info.path) else {
+                return Err("не удалось открыть входной канал".into());
+            };
+            let length = info.input_len.max(16) as usize;
+            loop {
+                let Some(event) = hid::read_input_timeout(handle, length, 500) else {
+                    continue;
+                };
+                let mut note = String::new();
+                if let Some((percent, state)) = shark::parse_battery(&event) {
+                    note = format!("  <- батарея {percent}% ({state})");
+                } else if let Some(stage) = shark::parse_dpi_event(&event) {
+                    note = format!("  <- кнопка DPI: ступень {stage}");
+                }
+                println!("{}  {}{note}", diag::now_ms(), protocol::hex(&event));
+            }
+        }
+        "scan" => {
+            let Some(service) = hid::enumerate()
+                .into_iter()
+                .find(|d| d.parent == info.parent && hid::is_service_interface(d))
+            else {
+                return Err("у этой мыши нет служебного интерфейса — настроек в HID нет"
+                    .into());
+            };
+            let Some(handle) = hid::open_rw(&service.path) else {
+                return Err(format!("нет доступа к {}", service.path));
+            };
+            println!(
+                "Служебный интерфейс: usage=0x{:02X}/0x{:02X} in={} out={} feature={}",
+                service.usage_page,
+                service.usage,
+                service.input_len,
+                service.output_len,
+                service.feature_len
+            );
+            println!("Перебираю feature-репорты (Report ID 1..=16 и известные команды):\n");
+            let length = service.feature_len.max(64);
+            for report_id in 1u8..=16 {
+                match hid::read_feature_id(handle, report_id, length) {
+                    Some(data) => println!(
+                        "  0x{report_id:02X} ({} байт): {}",
+                        length,
+                        protocol::hex(&data[..data.len().min(32)])
+                    ),
+                    None => println!("  0x{report_id:02X}: нет ответа"),
+                }
+            }
+            println!("\nЧерез канал чтения 0xA0:");
+            for (cmd, label) in [
+                (shark::CMD_DPI, "DPI"),
+                (shark::CMD_LIGHTING, "подсветка"),
+                (shark::CMD_POLLING, "опрос"),
+                (shark::CMD_BUTTONS, "кнопки"),
+                (shark::CMD_FIRMWARE, "прошивка"),
+            ] {
+                let device = shark::Device {
+                    handle,
+                    read_handle: None,
+                    info: service.clone(),
+                    transport: shark::Transport::Cable,
+                    encoding: device.encoding,
+                    profile_index: 1,
+                };
+                match device.read_block(cmd, 64) {
+                    Ok(block) => println!(
+                        "  0x{cmd:02X} {label}: {}",
+                        protocol::hex(&block[..block.len().min(48)])
+                    ),
+                    Err(message) => println!("  0x{cmd:02X} {label}: {message}"),
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            hid::close(handle);
+            Ok(0)
+        }
         "encoding" => {
             let value = args
                 .get(2)
@@ -537,28 +617,33 @@ fn cmd_list() -> Result<i32, String> {
     }
     print!("{}", diag::summary(&devices));
 
-    // подсказка про Attack Shark: кабель или приёмник
-    let shark_candidates: Vec<_> = devices
+    // Подсказка про мыши 1D57/1A2C (Attack Shark, Xenta и клоны):
+    // важно не «есть ли feature где-то», а есть ли СЛУЖЕБНЫЙ интерфейс.
+    let shark_like: Vec<_> = devices
         .iter()
         .filter(|d| d.vendor_id == 0x1D57 || d.vendor_id == 0x1A2C)
         .collect();
-    if !shark_candidates.is_empty() {
-        let cable = shark_candidates
+    if !shark_like.is_empty() {
+        let with_service: Vec<_> = shark_like
             .iter()
-            .any(|d| d.feature_len > 0 && !d.is_vendor_defined());
-        println!(
-            "\nAttack Shark: найден {}, настройки читаются через {}.",
-            format_args!(
-                "{:04X}:{:04X}",
-                shark_candidates[0].vendor_id, shark_candidates[0].product_id
-            ),
-            if cable {
-                "кабель (feature-репорты)"
-            } else {
-                "приёмник 2.4 ГГц (report ID 4) — по проводу стабильнее"
-            }
-        );
-        println!("Проверить: .\\gmouse.exe shark status");
+            .filter(|d| hid::is_service_interface(d))
+            .collect();
+        let vendored = with_service
+            .iter()
+            .any(|d| d.usage_page >= 0xFF00);
+        println!("\nНастройки в HID:");
+        if with_service.is_empty() {
+            println!(
+                "  служебного интерфейса нет — DPI переключается кнопкой на \
+                 корпусе, подсветка/макросы только фирменной утилитой"
+            );
+        } else {
+            println!(
+                "  есть {} служебных интерфейсов{}; попробуйте: .\\gmouse.exe shark status",
+                with_service.len(),
+                if vendored { " (vendor-defined)" } else { "" }
+            );
+        }
     }
 
     if let Some(mouse) = devices.iter().find(|d| d.is_mouse()) {
