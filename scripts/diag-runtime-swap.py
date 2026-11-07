@@ -129,6 +129,10 @@ class PE(object):
         return out
 
     # ---- экспорт: список имён ----
+    #  IMAGE_EXPORT_DIRECTORY:
+    #    +0  Characteristics      +20 NumberOfFunctions
+    #    +12 Name                 +24 NumberOfNames
+    #    +16 Base                 +32 AddressOfNames
     def exports(self):
         if not self.ok:
             return []
@@ -138,18 +142,23 @@ class PE(object):
         o = self.off(exp_rva)
         if o is None:
             return []
-        (_, nnames, addr_names) = struct.unpack_from("<III", self.d, o + 16)
+        if o + 40 > len(self.d):
+            return []
+        n_names = struct.unpack_from("<I", self.d, o + 24)[0]
+        addr_names = struct.unpack_from("<I", self.d, o + 32)[0]
+        if not n_names or not addr_names:
+            return []
         no = self.off(addr_names)
         if no is None:
             return []
         out = []
-        for i in range(nnames):
+        for i in range(n_names):
             if no + i * 4 + 4 > len(self.d):
                 break
             rva = struct.unpack_from("<I", self.d, no + i * 4)[0]
-            s = self.cstr(rva)
-            if s:
-                out.append(s)
+            nm = self.cstr(rva)
+            if nm:
+                out.append(nm)
         return out
 
 
@@ -230,39 +239,60 @@ def main():
             dim("... и ещё %d" % (len(needed) - 12))
 
     # ------------------------------------------------------------------
-    step("2. Что экспортирует System32\\amdhip64.dll")
-    sys_pe = PE(sys_hip)
-    sys_exp = sys_pe.exports() if sys_pe.ok else []
-    if not sys_exp:
-        bad("не удалось прочитать экспорты драйверного рантайма")
+    step("2. Проверка через GetProcAddress (надёжнее разбора PE)")
+    #  Грузим драйверный рантайм напрямую и спрашиваем по каждой функции,
+    #  есть ли она. Это ровно то, что делает загрузчик Windows при импорте,
+    #  поэтому результат совпадает с реальным поведением.
+    import ctypes
+    try:
+        sys_lib = ctypes.WinDLL(sys_hip)
+    except OSError as e:
+        bad("драйверный рантайм не загрузился", str(e))
         return 2
-    ok("экспортирует функций: %d" % len(sys_exp))
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.GetProcAddress.restype = ctypes.c_void_p
+    k32.GetProcAddress.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    handle = sys_lib._handle
 
-    sdk_pe = PE(sdk_hip)
-    sdk_exp = sdk_pe.exports() if sdk_pe.ok else []
-    if sdk_exp:
-        dim("для сравнения, SDK-шный amdhip64_6.dll: %d" % len(sdk_exp))
-
-    # ------------------------------------------------------------------
-    step("3. Сравнение: чего не хватает драйверному рантайму")
     if needed:
-        sys_set = set(sys_exp)
-        missing = [f for f in needed
-                   if not f.startswith("ordinal:") and f not in sys_set]
+        missing = []
+        present = 0
+        for fn in needed:
+            if fn.startswith("ordinal:"):
+                continue
+            addr = k32.GetProcAddress(handle, fn.encode("ascii"))
+            if addr:
+                present += 1
+            else:
+                missing.append(fn)
+
+        ok("есть функций: %d из %d" % (present, present + len(missing)))
         if missing:
             bad("НЕ ХВАТАЕТ %d функций" % len(missing))
-            for f in missing[:15]:
+            for f in missing[:20]:
                 dim("нет: " + f)
-            if len(missing) > 15:
-                dim("... и ещё %d" % (len(missing) - 15))
+            if len(missing) > 20:
+                dim("... и ещё %d" % (len(missing) - 20))
             dim("")
-            dim("Значит подмена не сработает: rocblas.dll не загрузится")
+            dim("Подмена не сработает: rocblas.dll не загрузится")
             dim("(WinError 127 - не найдена процедура).")
         else:
-            ok("все требуемые функции есть у драйверного рантайма")
-            dim("Статическая проверка пройдена - имеет смысл живой тест.")
+            ok("ВСЕ требуемые функции есть у драйверного рантайма")
+            dim("Статическая проверка пройдена - живой тест ниже решает.")
     else:
-        warn("список требований пуст, сравнение невозможно")
+        warn("список требований пуст, проверять нечего")
+
+    # для справки: сколько всего экспортирует драйверный рантайм
+    sys_exp = PE(sys_hip).exports() if PE(sys_hip).ok else []
+    if sys_exp:
+        dim("драйверный рантайм экспортирует: %d функций" % len(sys_exp))
+    sdk_exp = PE(sdk_hip).exports() if PE(sdk_hip).ok else []
+    if sdk_exp:
+        dim("SDK-шный amdhip64_6.dll экспортирует: %d функций" % len(sdk_exp))
+        if sys_exp:
+            only_sdk = sorted(set(sdk_exp) - set(sys_exp))
+            if only_sdk:
+                dim("есть только в SDK (первые 10): " + ", ".join(only_sdk[:10]))
 
     # ------------------------------------------------------------------
     step("4. Живой тест в отдельной папке (систему не трогаем)")
