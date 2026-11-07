@@ -54,8 +54,12 @@ target\release\gmouse.exe
 ### Готовая сборка без Rust
 
 В репозитории есть workflow `.github/workflows/rust-ci.yml`: на каждый push
-GitHub собирает `gmouse.exe` на Windows-раннере. Скачать:
-**Actions → Rust CI (Windows) → последний запуск → Artifacts → gmouse-windows**.
+GitHub собирает `gmouse.exe` на Windows-раннере (MSVC) и прогоняет 19 тестов.
+Скачать готовый файл: **Actions → Rust CI (Windows) → последний удачный
+запуск → Artifacts → `gmouse-windows`** (внутри `gmouse.exe` и `profiles/`).
+
+Проверено на windows-latest: `cargo build --release` и `cargo test` проходят,
+сборка без зависимостей.
 
 ---
 
@@ -90,6 +94,7 @@ gmouse unbind x1
 gmouse speed 12        # 1..20, как ползунок в Параметрах Windows
 gmouse scroll 5        # строк на деление колеса
 gmouse accel off       # убрать ускорение указателя (для прицеливания)
+gmouse hscroll 3       # символов горизонтальной прокрутки
 ```
 
 ### Аппаратный DPI (если хочется попробовать)
@@ -116,8 +121,9 @@ gmouse test                     определить имена кнопок
 gmouse run                      демон с привязками
 gmouse bind/unbind/bindings     управление привязками
 gmouse preset <имя>             готовые наборы
+gmouse dpi <значение>           аппаратный DPI (если протокол уже найден)
 gmouse probe [dpi]              перебор команд DPI
-gmouse identify                 подбор команды DPI
+gmouse identify                 подбор команды DPI (интерактивно)
 gmouse watch <секунды>          дамп репортов
 gmouse diag [-o файл]           отчёт JSON
 gmouse profiles                 известные профили
@@ -179,7 +185,7 @@ gmouse/
 
 ```powershell
 cd gmouse
-cargo test          # 20+ юнит-тестов: JSON, конфиг, привязки, DPI-команды
+cargo test          # 19 юнит-тестов: JSON, конфиг, привязки, DPI-команды
 cargo clippy --all-targets
 ```
 
