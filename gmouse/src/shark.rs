@@ -488,7 +488,7 @@ impl Device {
         let mut profile = parse_profile(&raw, self.encoding)
             .ok_or("блок DPI короче ожидаемого (нет байта активной ступени)")?;
         if let Ok(polling) = self.read_polling() {
-            profile.polling_hz = polling;
+            profile.polling_hz = Some(polling);
         }
         Ok(profile)
     }
