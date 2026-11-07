@@ -165,8 +165,6 @@ pub fn probe_open(path: &str) -> u32 {
 }
 
 fn for_each_interface(mut callback: impl FnMut(String)) {
-    // SAFETY: структуры соответствуют Win32 (setupapi/hid), буфер пути
-    // выделяется по размеру, который вернул сам SetupAPI.
 
     unsafe {
         let mut guid = GUID {
