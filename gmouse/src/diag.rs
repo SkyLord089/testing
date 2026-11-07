@@ -18,7 +18,6 @@ pub fn os_version() -> String {
         fn RtlGetVersion(info: *mut OsVersionInfo) -> i32;
     }
     #[repr(C)]
-    #[derive(Default)]
     struct OsVersionInfo {
         size: u32,
         major: u32,
@@ -29,7 +28,11 @@ pub fn os_version() -> String {
     }
     let mut info = OsVersionInfo {
         size: std::mem::size_of::<OsVersionInfo>() as u32,
-        ..Default::default()
+        major: 0,
+        minor: 0,
+        build: 0,
+        platform: 0,
+        csd: [0u16; 128],
     };
     unsafe {
         RtlGetVersion(&mut info);
