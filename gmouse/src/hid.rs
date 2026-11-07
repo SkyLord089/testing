@@ -216,11 +216,15 @@ fn for_each_interface(mut callback: impl FnMut(String)) {
             if required == 0 {
                 continue;
             }
-            // SP_DEVICE_INTERFACE_DETAIL_DATA_W: DWORD cbSize + WCHAR Path[1].
-            // Размер cbSize зависит от выравнивания: 8 на x64, 6 на x86.
+            // SP_DEVICE_INTERFACE_DETAIL_DATA_W:
+            //   DWORD cbSize;  WCHAR DevicePath[1];
+            // sizeof = 8 на x64 (4 + 2 + выравнивание), 6 на x86,
+            // НО DevicePath всегда начинается с offset = 4 (сразу за cbSize).
+            // Если взять offset = sizeof, путь теряет первые два символа
+            // («\\?\» -> «?\») и CreateFileW возвращает ERROR_INVALID_NAME (123).
             let size_of_detail: u32 =
                 if cfg!(target_pointer_width = "64") { 8 } else { 6 };
-            let path_offset = size_of_detail as usize;
+            let path_offset = 4usize;
             let mut buf = vec![0u8; required as usize];
             buf[0..4].copy_from_slice(&size_of_detail.to_le_bytes());
             if SetupDiGetDeviceInterfaceDetailW(
@@ -330,16 +334,87 @@ fn describe(path: &str) -> Option<HidInfo> {
     }
     close(handle);
 
-    // Родитель: часть пути до последнего '\' — позволяет связать
-    // несколько HID-интерфейсов одной физической мыши.
-    info.parent = path
-        .rsplit_once('\\')
-        .map(|(head, _)| head.to_string())
-        .unwrap_or_else(|| path.to_string());
+    // «Родитель» = путь без хвоста #{guid} и без &colNN: по нему
+    // группируются интерфейсы одной физической мыши
+    // (vid_1a2c&pid_2511&mi_02 и vid_1a2c&pid_2511&mi_02&col01 — одно устройство).
+    info.parent = device_key(path);
 
     // Устройство без VID/PID всё равно показываем: путь и HID-caps
     // помогают понять, что происходит (бывает у Bluetooth-интерфейсов).
     Some(info)
+}
+
+/// Ключ физического устройства из пути HID-интерфейса.
+/// "\\?\hid#vid_1a2c&pid_2511&mi_02&col01#8&1169eeba&0&0000#{guid}"
+///   -> "vid_1a2c&pid_2511&mi_02"
+pub fn device_key(path: &str) -> String {
+    let without_guid = match path.rfind("#{") {
+        Some(index) => &path[..index],
+        None => path,
+    };
+    let interface_part = without_guid
+        .rsplit_once('#')
+        .map(|(head, _)| head)
+        .unwrap_or(without_guid);
+    let name = interface_part
+        .rsplit_once('#')
+        .map(|(_, tail)| tail)
+        .unwrap_or(interface_part);
+    match name.find("&col") {
+        Some(index) => name[..index].to_string(),
+        None => name.to_string(),
+    }
+}
+
+/// Прочитать feature-репорт. Первый байт буфера — Report ID.
+/// Windows возвращает данные того репорта, чей ID стоит в buf[0].
+pub fn read_feature(handle: HANDLE, length: u16) -> Option<Vec<u8>> {
+    if length < 2 {
+        return None;
+    }
+    let mut buf = vec![0u8; length as usize];
+    unsafe {
+        if HidD_GetFeature(handle, buf.as_mut_ptr() as *mut std::ffi::c_void,
+                           length as u32) == 0 {
+            return None;
+        }
+    }
+    Some(buf)
+}
+
+/// Прочитать feature-репорт конкретного Report ID.
+pub fn read_feature_id(handle: HANDLE, report_id: u8, length: u16) -> Option<Vec<u8>> {
+    if length < 2 {
+        return None;
+    }
+    let mut buf = vec![0u8; length as usize];
+    buf[0] = report_id;
+    unsafe {
+        if HidD_GetFeature(handle, buf.as_mut_ptr() as *mut std::ffi::c_void,
+                           length as u32) == 0 {
+            return None;
+        }
+    }
+    Some(buf)
+}
+
+/// Записать feature-репорт (первый байт — Report ID).
+pub fn write_feature(handle: HANDLE, data: &[u8]) -> Option<()> {
+    if data.len() < 2 {
+        return None;
+    }
+    unsafe {
+        if HidD_SetFeature(
+            handle,
+            data.as_ptr() as *const std::ffi::c_void,
+            data.len() as u32,
+        ) == 0
+        {
+            None
+        } else {
+            Some(())
+        }
+    }
 }
 
 /// Прочитать один входной репорт (блокирующе, с таймаутом).
@@ -401,6 +476,16 @@ pub fn feature_request(handle: HANDLE, data: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_key_groups_interfaces() {
+        let a = "\\\\?\\hid#vid_1a2c&pid_2511&mi_02&col01#8&1169eeba&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+        let b = "\\\\?\\hid#vid_1a2c&pid_2511&mi_02&col04#8&1169eeba&0&0003#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+        let c = "\\\\?\\hid#vid_1a2c&pid_2511&mi_01#8&292d7aff&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+        assert_eq!(device_key(a), "vid_1a2c&pid_2511&mi_02");
+        assert_eq!(device_key(a), device_key(b));
+        assert_ne!(device_key(a), device_key(c));
+    }
 
     #[test]
     fn stats_default_is_zero() {
