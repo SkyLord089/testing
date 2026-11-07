@@ -1,0 +1,11 @@
+{
+  "model": "Logitech MX Master 2S / MX Master",
+  "match": { "pid": ["0xB019", "0x4041"], "name_contains": "MX Master" },
+  "device_index": 255,
+  "capabilities": {
+    "dpi": { "min": 200, "max": 4000, "step": 50 },
+    "smart_shift": true,
+    "easy_switch": { "hosts": 3 },
+    "battery": "unified"
+  }
+}

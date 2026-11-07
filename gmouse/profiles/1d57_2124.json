@@ -1,0 +1,10 @@
+{
+  "model": "Xenta/Eastern Times 2.4G Wireless Mouse (VID_1D57 PID_2124)",
+  "pids": ["0x2124"],
+  "name_contains": "",
+  "dpi_min": 800,
+  "dpi_max": 3200,
+  "dpi_step": 400,
+  "dpi_protocol": null,
+  "notes": "DPI, скорее всего, переключается кнопкой на корпусе. Протокол определяется через `gmouse identify`."
+}

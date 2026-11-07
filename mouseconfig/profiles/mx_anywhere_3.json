@@ -1,0 +1,11 @@
+{
+  "model": "Logitech MX Anywhere 3 / 3S",
+  "match": { "pid": ["0xB025", "0xB037"], "name_contains": "MX Anywhere 3" },
+  "device_index": 255,
+  "capabilities": {
+    "dpi": { "min": 200, "max": 4000, "step": 50 },
+    "smart_shift": true,
+    "easy_switch": { "hosts": 3 },
+    "battery": "unified"
+  }
+}

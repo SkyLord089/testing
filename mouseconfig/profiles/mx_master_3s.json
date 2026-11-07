@@ -1,0 +1,21 @@
+{
+  "model": "Logitech MX Master 3S",
+  "match": {
+    "pid": ["0xB034", "0x4082"],
+    "name_contains": "MX Master 3"
+  },
+  "device_index": 255,
+  "capabilities": {
+    "dpi": { "min": 200, "max": 8000, "step": 50 },
+    "smart_shift": true,
+    "hires_wheel": true,
+    "easy_switch": { "hosts": 3 },
+    "battery": "unified"
+  },
+  "buttons": {
+    "middle": "middle_click",
+    "back": "browser_back",
+    "forward": "browser_forward",
+    "thumb_wheel": "horizontal_scroll"
+  }
+}

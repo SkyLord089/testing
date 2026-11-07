@@ -1,0 +1,11 @@
+{
+  "model": "Logitech G502 LIGHTSPEED",
+  "match": { "pid": ["0xC08B", "0x407F"], "name_contains": "G502" },
+  "device_index": 255,
+  "capabilities": {
+    "dpi": { "min": 100, "max": 25600, "step": 50 },
+    "smart_shift": false,
+    "easy_switch": false,
+    "battery": "voltage"
+  }
+}

@@ -1,0 +1,96 @@
+name: Rust CI (Windows)
+
+on:
+  push:
+    paths:
+      - "gmouse/**"
+      - ".github/workflows/rust-ci.yml"
+  pull_request:
+    paths:
+      - "gmouse/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: gmouse
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Кэш cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            gmouse/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('gmouse/Cargo.toml') }}
+
+      - name: Проверка формата
+        run: cargo fmt --all -- --check
+        continue-on-error: true
+
+      - name: Сборка (release)
+        shell: bash
+        run: cargo build --release --verbose 2>&1 | tee build.log; test ${PIPESTATUS[0]} -eq 0
+
+      - name: Тесты
+        shell: bash
+        run: cargo test --verbose 2>&1 | tee test.log; test ${PIPESTATUS[0]} -eq 0
+
+      - name: Ошибки сборки в комментарий PR
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ github.event.pull_request.number }}" ]; then
+            {
+              echo "### Сборка не прошла"
+              echo '```'
+              tail -c 6000 build.log 2>/dev/null || true
+              tail -c 4000 test.log 2>/dev/null || true
+              echo '```'
+            } > body.md
+            gh pr comment "${{ github.event.pull_request.number }}" --body-file body.md
+          fi
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+        continue-on-error: true
+
+      - name: Артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmouse-windows
+          path: |
+            gmouse/target/release/gmouse.exe
+            gmouse/profiles/*.json
+
+      - name: Полный лог сборки в PR
+        if: always() && github.event.pull_request.number
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f build.log ] || [ -f test.log ]; then
+            {
+              echo "### Лог cargo (${{ job.status }})"
+              echo '```'
+              tail -c 14000 build.log 2>/dev/null || true
+              tail -c 6000 test.log 2>/dev/null || true
+              echo '```'
+            } > log-body.md
+            gh pr comment "${{ github.event.pull_request.number }}" --body-file log-body.md
+          fi

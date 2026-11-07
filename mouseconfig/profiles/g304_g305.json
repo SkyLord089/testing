@@ -1,0 +1,11 @@
+{
+  "model": "Logitech G304 / G305 LIGHTSPEED",
+  "match": { "pid": ["0xC531", "0x4074"], "name_contains": "G304" },
+  "device_index": 255,
+  "capabilities": {
+    "dpi": { "min": 200, "max": 12000, "step": 50 },
+    "smart_shift": false,
+    "easy_switch": false,
+    "battery": "voltage"
+  }
+}
