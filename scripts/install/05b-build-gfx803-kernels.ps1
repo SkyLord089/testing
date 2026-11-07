@@ -105,6 +105,15 @@
     Короткие имена файлов ядер вместо длинных. Включайте, только если
     сборка падает на слишком длинных путях.
 
+.PARAMETER DiagCompiler
+    Не собирать ядра, а только разобраться, почему падает компиляция
+    source-ядер. Перебирает наборы флагов на реальном файле от Tensile
+    и печатает настоящую ошибку clang - Tensile сам её не показывает.
+
+.PARAMETER ExtraFlags
+    Дополнительные флаги компилятора при сборке, через пробел.
+    Используется вместе с обёрткой Tensile_CXX_COMPILER_LAUNCHER.
+
 .EXAMPLE
     .\05b-build-gfx803-kernels.ps1 -ListOnly
 
@@ -128,7 +137,9 @@ param(
     [string]$Python = '',
     [int]$Jobs = 0,
     [switch]$ShortNames,
-    [switch]$KeepBuildTmp
+    [switch]$KeepBuildTmp,
+    [switch]$DiagCompiler,
+    [string]$ExtraFlags = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -145,6 +156,8 @@ $ROCBLAS_URL = "https://codeload.github.com/ROCm/rocBLAS/tar.gz/refs/tags/$ROCBL
 # (CMakeLists.txt:198 set( TENSILE_VERSION 4.43.0 ...), tensile_tag.txt)
 $TENSILE_SHA = 'be49885fce2a61b600ae4593f1c2d00c8b4fa11e'
 $TENSILE_URL = "https://codeload.github.com/ROCm/Tensile/tar.gz/$TENSILE_SHA"
+
+$repoRootScripts = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 $hipDirs = @{
     '6.4.2' = 'C:\Program Files\AMD\ROCm\6.4'
@@ -306,6 +319,136 @@ if (-not $pyExe) { throw 'Python 3 не найден. Укажите путь ч
 $pyInfo = Invoke-Capture $pyExe ($pyPrefix + @('-c', 'import sys;print(sys.version.split()[0])'))
 Ok ("Python " + $pyInfo.Text.Trim()) ($pyExe)
 
+# ============================================================================
+#  ДИАГНОСТИКА КОМПИЛЯТОРА
+# ============================================================================
+#  Зачем отдельный режим: Tensile зовёт clang++ через subprocess, и при
+#  падении текст ошибки остаётся внутри дочернего процесса joblib.
+#  Снаружи видно только "returned non-zero exit status 1" - без причины.
+#  Здесь мы берём РЕАЛЬНЫЙ сгенерированный файл и прогоняем clang сами,
+#  перебирая варианты флагов, пока не найдём работающий.
+# ============================================================================
+if ($DiagCompiler) {
+    Header 'ДИАГНОСТИКА КОМПИЛЯЦИИ SOURCE-ЯДЕР'
+    Dim 'Собираем реальный файл от Tensile и смотрим настоящую ошибку clang.'
+
+    # исходники должны быть уже скачаны
+    if (-not (Test-Path $tensileSrc)) { throw ("Нет исходников Tensile в " + $tensileSrc + " - сначала запустите без -DiagCompiler") }
+    if (-not (Test-Path $rocblasSrc)) { throw ("Нет исходников rocBLAS в " + $rocblasSrc) }
+
+    # берём существующий .cpp из out, либо генерируем минимальный
+    $testCpp = $null
+    if (Test-Path $newLibDir) {
+        $testCpp = Get-ChildItem $newLibDir -Filter '*_DD_*.cpp' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $testCpp) {
+            $testCpp = Get-ChildItem $newLibDir -Filter '*.cpp' -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+    }
+    if (-not $testCpp) {
+        # своего файла нет - берём минимальный, но с тем же include, что у Tensile
+        $tensileTypesCandidates = @(
+            (Join-Path $tensileSrc 'Tensile\Source\TensileTypes.h'),
+            (Join-Path $outDir 'TensileTypes.h')
+        )
+        $haveTypes = $false
+        foreach ($c in $tensileTypesCandidates) { if (Test-Path $c) { $haveTypes = $true } }
+        Dim 'Готовых файлов нет - делаю минимальный тест с #include <hip/hip_runtime.h>'
+        $probe = Join-Path $outDir '_diag_probe.cpp'
+        if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
+        [IO.File]::WriteAllText($probe, "#include <hip/hip_runtime.h>`nextern `"C`" __global__ void k(float* a) { a[0] += 1.0f; }`n")
+        $testCpp = Get-Item $probe
+    }
+
+    Ok ("тестовый файл: " + $testCpp.Name) $testCpp.FullName
+
+    # базовые флаги - ровно те, что передаёт Tensile (TensileCreateLibrary.py:250-276)
+    $baseFlags = @(
+        '-D__HIP_HCC_COMPAT_MODE__=1',
+        '--cuda-device-only', '-x', 'hip', '-O3',
+        '-I', $newLibDir,
+        '-Xoffload-linker', '--build-id',
+        '-std=c++14', '-fms-extensions', '-fms-compatibility', '-fPIC',
+        '-Wno-deprecated-declarations',
+        '--offload-arch=gfx803'
+    )
+
+    # варианты: от «как есть» к «с обходом отсутствующего MSVC»
+    $variants = @(
+        @{ Name = 'A. как у Tensile, без правок';                  Add = @() },
+        @{ Name = 'B. + -D__HIP_PLATFORM_AMD__';                     Add = @('-D__HIP_PLATFORM_AMD__=1') },
+        @{ Name = 'C. + -isystem MSVC (нужен VS)';                   Add = @('-isystem', 'MSVC') },
+        @{ Name = 'D. + NO_EXCEPTIONS / NO_THREADS';                Add = @('-D_HAS_EXCEPTIONS=0', '-D__HIPCC_RTC__') },
+        @{ Name = 'E. + c++17';                                     Add = @('-std=c++17') },
+        @{ Name = 'F. + platform + c++17 + no-threads';             Add = @('-D__HIP_PLATFORM_AMD__=1', '-D__HIPCC_RTC__') },
+        @{ Name = 'G. без -fms-extensions';                          Add = @('-D__HIP_PLATFORM_AMD__=1', '-D__HIPCC_RTC__') ; Strip = @('-fms-extensions','-fms-compatibility') },
+        @{ Name = 'H. только __HIPCC_RTC__ (без stdlib)';            Add = @('-D__HIPCC_RTC__') },
+        @{ Name = 'I. RTC + platform';                               Add = @('-D__HIPCC_RTC__', '-D__HIP_PLATFORM_AMD__=1') }
+    )
+
+    $msvcRoot = $null
+    foreach ($vs in @(
+        'C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC',
+        'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC',
+        'C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC'
+    )) {
+        if (Test-Path $vs) { $msvcRoot = $vs; break }
+    }
+    if ($msvcRoot) { Ok 'MSVC найден' $msvcRoot } else { Warn2 'MSVC не найден' 'Вариант C работать не будет - это ожидаемо.' }
+
+    Write-Host ''
+    $winner = $null
+    foreach ($v in $variants) {
+        $flags = @()
+        foreach ($f in $baseFlags) {
+            if ($v.ContainsKey('Strip') -and $v.Strip -contains $f) { continue }
+            $flags += $f
+        }
+        $add = @($v.Add)
+        if ($add -contains 'MSVC') {
+            if (-not $msvcRoot) { continue }
+            $verDir = Get-ChildItem $msvcRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
+            $add = @('-isystem', (Join-Path $verDir.FullName 'include'))
+            $flags += @('-isystem', (Join-Path $env:ProgramFiles 'Windows Kits\10\Include\10.0.22621.0\ucrt'))
+        }
+        $flags += $add
+        $flags += @($testCpp.FullName, '-c', '-o', (Join-Path $outDir '_diag_test.o'))
+
+        $r = Invoke-Capture $clangxx $flags
+        if ($r.Code -eq 0) {
+            Ok ("РАБОТАЕТ: " + $v.Name) 'Это и есть нужный набор флагов.'
+            $winner = $v
+            if ($add.Count -gt 0) { Dim ("  доп. флаги: " + ($add -join ' ')) }
+            break
+        }
+        Bad ($v.Name) ''
+        # показываем суть: первую строку с error
+        $errLines = @($r.Text -split "`n" | Where-Object { $_ -match 'error|fatal' } | Select-Object -First 3)
+        if ($errLines.Count -gt 0) {
+            foreach ($e in $errLines) { Dim ("  " + $e.Trim()) }
+        } else {
+            $first = @($r.Text -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 3)
+            foreach ($e in $first) { Dim ("  " + $e.Trim()) }
+        }
+    }
+
+    Write-Host ''
+    if ($winner) {
+        Header 'ИТОГ ДИАГНОСТИКИ'
+        Ok ("Нужен вариант: " + $winner.Name)
+        Dim 'Запустите сборку с этими флагами:'
+        $fl = (@($winner.Add) | Where-Object { $_ -ne 'MSVC' }) -join ' '
+        Dim ("  .\05b-build-gfx803-kernels.ps1 -Install -Verify -ExtraFlags `"" + $fl + "`"")
+    } else {
+        Header 'ИТОГ ДИАГНОСТИКИ'
+        Warn2 'Ни один вариант не сработал.' ''
+        Dim 'Вывод выше содержит настоящую ошибку clang - покажите его.'
+        Dim 'Скорее всего не хватает заголовков C++ (нет MSVC Build Tools),'
+        Dim 'и тогда нужен либо VS Build Tools, либо сборка без source-ядер'
+        Dim '(флаг -SkipSourceKernels, только asm-ядра fp32/fp64).'
+    }
+    return
+}
+
 if ($ListOnly) {
     Header 'ПЛАН (режим -ListOnly, ничего не меняем)'
     Dim '1. Скачать исходники rocBLAS 6.4.2 (58 МБ) и Tensile 4.43.0 (13 МБ)'
@@ -458,6 +601,26 @@ if (-not $SkipBuild) {
 
     if (Test-Path $outDir) { Remove-Item $outDir -Recurse -Force }
 
+    # Обёртка вокруг компилятора. Нужна, потому что Tensile глотает текст
+    # ошибки clang: исключение поднимается внутри дочернего процесса joblib,
+    # и наружу выходит только "returned non-zero exit status 1".
+    # С обёрткой полный stderr попадает в clang-errors.log.
+    $wrapPy = Join-Path $repoRootScripts 'tensile-clang-wrap.py'
+    $clangLog = Join-Path $BuildRoot 'clang-errors.log'
+    if (Test-Path $clangLog) { Remove-Item $clangLog -Force }
+    if (Test-Path $wrapPy) {
+        # Пути ТОЛЬКО через прямой слэш: Tensile разбирает переменную
+        # через shlex.split() в posix-режиме, где обратный слэш экранирует.
+        $wrapArg = ($venvPy -replace '\\', '/') + ' ' + ($wrapPy -replace '\\', '/')
+        $env:Tensile_CXX_COMPILER_LAUNCHER = $wrapArg
+        $env:TENSILE_WRAP_LOG = $clangLog
+        if ($ExtraFlags) {
+            $env:TENSILE_WRAP_EXTRA = $ExtraFlags
+            Ok ("доп. флаги компилятора: " + $ExtraFlags)
+        }
+        Ok 'обёртка компилятора включена' ('лог ошибок: ' + $clangLog)
+    }
+
     $tclArgs = @(
         $tclScript,
         '--cxx-compiler=clang++',
@@ -514,9 +677,17 @@ if (-not $SkipBuild) {
         Dim '  * не хватило RAM  ->  уменьшите -Jobs до 4'
         Dim '  * clang не принял флаги  ->  смотрите последние 40 строк лога'
         Write-Host ''
-        Dim 'Последние строки лога:'
+        if (Test-Path $clangLog) {
+            Write-Host ''
+            Dim ('НАСТОЯЩАЯ ОШИБКА КОМПИЛЯТОРА (' + $clangLog + '):')
+            Get-Content $clangLog -Tail 60 | ForEach-Object { Write-Host ("   " + $_) -ForegroundColor DarkYellow }
+        } else {
+            Dim 'Лога обёртки нет - обёртка не подключилась.'
+        }
+        Write-Host ''
+        Dim 'Последние строки общего лога:'
         if (Test-Path $logFile) {
-            Get-Content $logFile -Tail 40 | ForEach-Object { Write-Host ("   " + $_) -ForegroundColor DarkYellow }
+            Get-Content $logFile -Tail 30 | ForEach-Object { Write-Host ("   " + $_) -ForegroundColor DarkGray }
         }
         throw 'Сборка ядер не удалась.'
     }
