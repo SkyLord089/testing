@@ -40,12 +40,14 @@ gmouse — настройка мыши под Windows 11
   gmouse speed <1..20>            скорость курсора (как в Параметрах)
   gmouse scroll <строк>           строк на одно деление колеса
   gmouse accel on|off             ускорение указателя
+  gmouse hscroll <символов>       горизонтальная прокрутка
   gmouse test                     показать имена кнопок (для конфига)
   gmouse run                      применить привязки (работает в фоне)
   gmouse bind <кнопка> <действие> [аргумент]
   gmouse unbind <кнопка>
   gmouse bindings                 показать сохранённые привязки
   gmouse preset <имя>             готовый набор привязок
+  gmouse dpi <значение>           аппаратный DPI (если протокол уже найден)
   gmouse probe [dpi]              отправить известные команды DPI
   gmouse identify                 подобрать команду DPI интерактивно
   gmouse watch <секунды>          дамп входных репортов служебного интерфейса
@@ -177,6 +179,17 @@ fn run(args: &[String]) -> Result<i32, String> {
         "unbind" => cmd_unbind(cfg, args),
         "bindings" => cmd_bindings(&cfg),
         "preset" => cmd_preset(cfg, args),
+        "dpi" => cmd_dpi(args),
+        "hscroll" => {
+            let value: u32 = args
+                .get(1)
+                .ok_or("укажите число символов: gmouse hscroll 3")?
+                .parse()
+                .map_err(|_| "символы — целое число")?;
+            settings::SystemMouse::read().set_hscroll_chars(value)?;
+            println!("Символов горизонтальной прокрутки: {value}");
+            Ok(0)
+        }
         "probe" => cmd_probe(args),
         "identify" => cmd_identify(args),
         "watch" => cmd_watch(args),
@@ -408,6 +421,51 @@ fn find_service_interface() -> Result<(hid::HidInfo, win::HANDLE), String> {
         )
     })?;
     Ok((service, handle))
+}
+
+/// Аппаратный DPI: работает, только если протокол известен для модели
+/// (найден через `gmouse identify` и записан в профиль).
+fn cmd_dpi(args: &[String]) -> Result<i32, String> {
+    let value: u32 = args
+        .get(1)
+        .ok_or("укажите DPI: gmouse dpi 1600")?
+        .parse()
+        .map_err(|_| "DPI — число, например 1600")?;
+    let devices = hid::enumerate();
+    let mouse = devices.iter().find(|d| d.is_mouse()).ok_or("мышь не найдена")?;
+    let profile = Profile::find(&mouse.product, mouse.product_id);
+    if !(profile.dpi_min..=profile.dpi_max).contains(&value) {
+        eprintln!(
+            "Предупреждение: {value} вне диапазона модели ({}..{})",
+            profile.dpi_min, profile.dpi_max
+        );
+    }
+    let model = profile.model.clone();
+    let Some(dpi_protocol) = profile.dpi_protocol else {
+        return Err(format!(
+            "для модели '{model}' протокол DPI ещё не известен.\n\
+             Определите его один раз: gmouse identify\n\
+             Затем допишите в профиль profiles/*.json поле dpi_protocol."
+        ));
+    };
+    let (info, handle) = find_service_interface()?;
+    let candidate = protocol::Candidate::from_protocol(
+        dpi_protocol.command_id,
+        dpi_protocol.sub_id,
+        dpi_protocol.offset,
+        dpi_protocol.transport,
+    );
+    let target = protocol::Target { handle };
+    let reply = target.send(&candidate, value);
+    hid::close(handle);
+    match reply {
+        Some(bytes) => {
+            println!("DPI = {value} отправлен через {}", info.vid_pid());
+            println!("Ответ устройства: {}", protocol::hex(&bytes));
+            Ok(0)
+        }
+        None => Err("устройство не приняло команду DPI".into()),
+    }
 }
 
 fn cmd_probe(args: &[String]) -> Result<i32, String> {

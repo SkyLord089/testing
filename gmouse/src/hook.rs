@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
 
-pub const WM_MOUSEMOVE: u32 = 0x0200;
 pub const WM_LBUTTONDOWN: u32 = 0x0201;
 pub const WM_LBUTTONUP: u32 = 0x0202;
 pub const WM_RBUTTONDOWN: u32 = 0x0204;
@@ -27,7 +26,6 @@ pub const WM_MOUSEHWHEEL: u32 = 0x020E;
 
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_SYSKEYDOWN: u32 = 0x0104;
-pub const WM_HOTKEY_STOP: u32 = 0x8000 + 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Button {

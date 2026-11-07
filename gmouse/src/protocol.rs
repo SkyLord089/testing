@@ -76,6 +76,24 @@ impl Candidate {
         buf
     }
 
+    /// Собрать кандидата из сохранённого в профиле протокола.
+    pub fn from_protocol(
+        command_id: u8,
+        sub_id: u8,
+        offset: usize,
+        transport: &str,
+    ) -> Candidate {
+        Candidate {
+            name: "из профиля",
+            transport: Transport::parse(transport).unwrap_or(Transport::Feature),
+            command_id,
+            sub_id,
+            little_endian: true,
+            offset,
+            length: 9,
+        }
+    }
+
     pub fn describe(&self) -> String {
         format!(
             "{:<28} {} cmd=0x{:02X} sub=0x{:02X} offset={} {}",

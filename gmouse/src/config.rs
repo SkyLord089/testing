@@ -44,6 +44,7 @@ impl Json {
         self.as_num().map(|n| n as i64)
     }
 
+    #[allow(dead_code)] // нужен при разборе отчётов и профилей
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Json::Bool(b) => Some(*b),
