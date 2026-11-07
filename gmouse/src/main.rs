@@ -60,7 +60,8 @@ gmouse — настройка мыши под Windows 11
   gmouse shark raw                Attack Shark: сырые блоки настроек
   gmouse shark encoding table|linear   какая кодировка DPI у модели
   (кабель -- feature-репорты, приёмник 2.4 ГГц -- report ID 4)
-  gmouse doctor                   диагностика: почему устройства не видны
+  gmouse doctor                   диагностика: всё про интерфейсы и доступ
+  gmouse dump                     полный список HID-интерфейсов
   gmouse diag [-o файл]           отчёт о мыши в JSON
   gmouse profiles                 известные профили
   gmouse config-path              где лежит конфиг
@@ -204,6 +205,10 @@ fn run(args: &[String]) -> Result<i32, String> {
         "identify" => cmd_identify(args),
         "watch" => cmd_watch(args),
         "shark" | "attackshark" | "att" => cmd_shark(args),
+        "dump" => {
+            println!("{}", diag::full_dump(&hid::enumerate()));
+            Ok(0)
+        }
         "doctor" => {
             print!("{}", diag::doctor());
             Ok(0)

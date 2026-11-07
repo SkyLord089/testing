@@ -345,25 +345,46 @@ fn describe(path: &str) -> Option<HidInfo> {
 }
 
 /// Ключ физического устройства из пути HID-интерфейса.
-/// "\\?\hid#vid_1a2c&pid_2511&mi_02&col01#8&1169eeba&0&0000#{guid}"
-///   -> "vid_1a2c&pid_2511&mi_02"
+///
+///   "\\?\hid#vid_1a2c&pid_2511&mi_02&col01#8&1169eeba&0&0001#{guid}"
+///     -> "vid_1a2c&pid_2511"
+///
+/// ВАЖНО: номер интерфейса (`&mi_02`) из ключа убирается — иначе мышь
+/// (`mi_01`) и её служебный интерфейс (`mi_02`) считались бы разными
+/// устройствами и «служебный интерфейс не найден» выдавалось ошибочно.
 pub fn device_key(path: &str) -> String {
     let without_guid = match path.rfind("#{") {
         Some(index) => &path[..index],
         None => path,
     };
-    let interface_part = without_guid
+    let instance = without_guid
         .rsplit_once('#')
         .map(|(head, _)| head)
         .unwrap_or(without_guid);
-    let name = interface_part
+    let mut name = instance
         .rsplit_once('#')
         .map(|(_, tail)| tail)
-        .unwrap_or(interface_part);
-    match name.find("&col") {
-        Some(index) => name[..index].to_string(),
-        None => name.to_string(),
+        .unwrap_or(instance)
+        .to_string();
+    if let Some(index) = name.find("&col") {
+        name.truncate(index);
     }
+    if let Some(index) = name.find("&mi_") {
+        name.truncate(index);
+    }
+    name
+}
+
+/// Интерфейс, через который у мышей этого семейства идут настройки.
+/// Это НЕ мышь и НЕ клавиатура: vendor-страница (приёмник) или
+/// collection `0x000B` с feature-репортами (кабель).
+pub fn is_service_interface(info: &HidInfo) -> bool {
+    let is_keyboard = info.usage_page == 0x01 && info.usage == 0x06;
+    let is_boot_pointer = info.usage_page == 0x01 && info.usage == 0x01;
+    !info.is_mouse()
+        && !is_keyboard
+        && !is_boot_pointer
+        && (info.feature_len > 0 || info.output_len > 0 || info.usage_page >= 0xFF00)
 }
 
 /// Прочитать feature-репорт конкретного Report ID.
@@ -555,9 +576,10 @@ mod tests {
         let a = "\\\\?\\hid#vid_1a2c&pid_2511&mi_02&col01#8&1169eeba&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
         let b = "\\\\?\\hid#vid_1a2c&pid_2511&mi_02&col04#8&1169eeba&0&0003#{4d1e55b2-f16f-11cf-88cb-001111000030}";
         let c = "\\\\?\\hid#vid_1a2c&pid_2511&mi_01#8&292d7aff&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
-        assert_eq!(device_key(a), "vid_1a2c&pid_2511&mi_02");
+        assert_eq!(device_key(a), "vid_1a2c&pid_2511");
         assert_eq!(device_key(a), device_key(b));
-        assert_ne!(device_key(a), device_key(c));
+        // у мыши (mi_01) и её служебного интерфейса (mi_02) ключ общий
+        assert_eq!(device_key(a), device_key(c));
     }
 
     #[test]

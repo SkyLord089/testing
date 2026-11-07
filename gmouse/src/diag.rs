@@ -54,27 +54,46 @@ fn mouse_devices(devices: &[hid::HidInfo]) -> Vec<&hid::HidInfo> {
 /// Краткая сводка: список мышей, их VID/PID и служебные интерфейсы.
 pub fn summary(devices: &[hid::HidInfo]) -> String {
     let mut out = String::new();
-    let mice = mouse_devices(devices);
-    if mice.is_empty() {
-        out.push_str("Мыши не найдены.\n");
+    if devices.is_empty() {
+        out.push_str("HID-устройства не найдены.\n");
         return out;
     }
-    // группируем по VID:PID
+
+    // Группируем по физическому устройству (VID:PID + экземпляр), чтобы
+    // показать все интерфейсы каждой мыши: мышь, клавиатуру, служебный.
     let mut groups: BTreeMap<String, Vec<&hid::HidInfo>> = BTreeMap::new();
-    for mouse in mice {
-        groups.entry(mouse.vid_pid()).or_default().push(mouse);
+    for device in devices {
+        let key = format!(
+            "{:04X}:{:04X} {}",
+            device.vendor_id,
+            device.product_id,
+            &device.parent
+        );
+        groups.entry(key).or_default().push(device);
     }
-    for (vid_pid, items) in &groups {
-        let name: &str = items
+
+    for (key, items) in &groups {
+        let name = items
             .iter()
             .map(|d| d.product.as_str())
             .find(|p| !p.is_empty())
             .unwrap_or("(без имени)");
-        out.push_str(&format!("{vid_pid}  {name}\n"));
+        let has_mouse = items.iter().any(|d| d.is_mouse());
+        let has_service = items.iter().any(|d| hid::is_service_interface(d));
+        let mark = if has_mouse { "МЫШЬ" } else { "     " };
+        out.push_str(&format!("{mark} {key}  {name}\n"));
         for item in items {
             out.push_str(&format!(
-                "    {:<38} usage=0x{:02X}/0x{:02X} in={} out={} feature={}\n",
-                truncate(&item.path, 38),
+                "      {:<10} usage=0x{:02X}/0x{:02X} in={} out={} feature={}\n",
+                if item.is_mouse() {
+                    "мышь"
+                } else if item.usage_page == 0x01 && item.usage == 0x06 {
+                    "клавиатура"
+                } else if hid::is_service_interface(item) {
+                    "служебный"
+                } else {
+                    "иное"
+                },
                 item.usage_page,
                 item.usage,
                 item.input_len,
@@ -82,89 +101,44 @@ pub fn summary(devices: &[hid::HidInfo]) -> String {
                 item.feature_len
             ));
         }
-        let services: Vec<_> = devices
-            .iter()
-            .filter(|d| d.parent == items[0].parent && d.is_vendor_defined())
-            .collect();
-        if services.is_empty() {
-            out.push_str("    служебный vendor-интерфейс (0xFF00): не найден\n");
-        } else {
-            for svc in services {
-                out.push_str(&format!(
-                    "    служебный интерфейс: usage=0x{:02X}/0x{:02X} \
-                     in={} out={} feature={}\n",
-                    svc.usage_page, svc.usage, svc.input_len, svc.output_len,
-                    svc.feature_len
-                ));
-            }
+        if has_mouse && !has_service {
+            out.push_str(
+                "      ! служебного интерфейса нет: у этого устройства настройки\n\
+                 \t(DPI, подсветка) не выведены в HID — их меняет только\n\
+                 \tкнопка на корпусе или фирменная утилита.\n",
+            );
         }
     }
     out
 }
 
-/// Подробная диагностика перечисления: сколько интерфейсов нашёл SetupAPI,
-/// какие пути, что ответил CreateFileW. Нужна, когда `list` печатает
-/// «устройства не найдены».
-pub fn doctor() -> String {
-    let mut out = String::new();
-    out.push_str(&format!("ОС: {}\n", os_version()));
-
-    // 1. Что вообще видит SetupAPI
-    let devices = hid::enumerate();
-    let stats = hid::last_stats();
-    out.push_str(&format!(
-        "SetupAPI: интерфейсов={}, открыто={}, ошибок={}\n",
-        stats.interfaces, stats.opened, stats.errors
-    ));
-
-    // 2. Первые 15 путей с кодами ошибок открытия
-    out.push_str("\nПервые интерфейсы (проверка доступа):\n");
-    let mut shown = 0;
-    for path in raw_interface_paths().into_iter().take(15) {
-        let code = hid::probe_open(&path);
-        let verdict = match code {
-            0 => "открывается".to_string(),
-            other => format!("код ошибки {other}"),
-        };
-        let short = if path.chars().count() > 90 {
-            let head: String = path.chars().take(90).collect();
-            format!("{head}…")
-        } else {
-            path.clone()
-        };
-        out.push_str(&format!("    [{verdict}] {short}\n"));
-        shown += 1;
-    }
-    if shown == 0 {
-        out.push_str("    (SetupAPI не вернул ни одного HID-интерфейса)\n");
-    }
-
-    // 3. Устройства, которые удалось разобрать
-    out.push_str(&format!("\nРазобрано устройств: {}\n", devices.len()));
-    for device in &devices {
+/// Полный дамп всех интерфейсов — для отчёта разработчику.
+pub fn full_dump(devices: &[hid::HidInfo]) -> String {
+    let mut out = String::from("VID:PID    mi   usage      in  out feat  kind        path\n");
+    for device in devices {
         out.push_str(&format!(
-            "    {} {:04X}:{:04X} {:<28} usage=0x{:02X}/0x{:02X} in={}\n",
-            if device.is_mouse() { "МЫШЬ" } else { "     " },
+            "{:04X}:{:04X}  {:<4} 0x{:02X}/0x{:02X}  {:>3} {:>3} {:>4}  {:<11} {}\n",
             device.vendor_id,
             device.product_id,
-            device.product,
+            interface_number(&device.path),
             device.usage_page,
             device.usage,
-            device.input_len
+            device.input_len,
+            device.output_len,
+            device.feature_len,
+            device.kind(),
+            device.path
         ));
-    }
-
-    if devices.is_empty() || !devices.iter().any(|d| d.is_mouse()) {
-        out.push_str(
-            "\nМышь не найдена через HID. Что это значит:\n             * мышь подключена через RDP/виртуальную машину — HID-интерфейсы\n               видны только внутри гостевой системы;\n             * это Bluetooth-мышь, и её HID-интерфейсы появляются только\n               после сопряжения (Параметры → Bluetooth);\n             * устройство отключено или спит.\n",
-        );
     }
     out
 }
 
-/// Сырые пути HID-интерфейсов из SetupAPI без попытки открытия.
-pub fn raw_interface_paths() -> Vec<String> {
-    hid::interface_paths()
+/// Номер интерфейса из пути (`&mi_02` -> "02", иначе "-").
+pub fn interface_number(path: &str) -> String {
+    path.find("&mi_")
+        .and_then(|index| path.get(index + 4..index + 6))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "-".into())
 }
 
 fn truncate(text: &str, max: usize) -> String {
@@ -331,11 +305,41 @@ mod tests {
     }
 
     #[test]
-    fn summary_mentions_service_interface() {
-        let devices = vec![device("mouse", 0x01, 0x02), device("svc", 0xFF00, 0x01)];
-        let text = summary(&devices);
+    fn summary_groups_and_marks_service_interface() {
+        let mut mouse = device("mouse", 0x01, 0x02);
+        mouse.parent = "vid_1d57&pid_2124".into();
+        let mut service = device("svc", 0xFF00, 0x01);
+        service.parent = "vid_1d57&pid_2124".into();
+        service.feature_len = 9;
+        let text = summary(&[mouse, service]);
         assert!(text.contains("1D57:2124"));
-        assert!(text.contains("служебный интерфейс"));
+        assert!(text.contains("служебный"));
+        assert!(text.contains("МЫШЬ"));
+    }
+
+    #[test]
+    fn summary_warns_when_no_service_interface() {
+        let mut mouse = device("mouse", 0x01, 0x02);
+        mouse.parent = "vid_1a2c&pid_2511".into();
+        let text = summary(&[mouse]);
+        assert!(text.contains("служебного интерфейса нет"));
+    }
+
+    #[test]
+    fn full_dump_lists_every_interface() {
+        let devices = vec![device("a", 0x01, 0x02), device("b", 0xFF00, 0x01)];
+        let text = full_dump(&devices);
+        assert_eq!(text.lines().count(), 3);
+        assert!(text.contains("0xFF00/0x01"));
+    }
+
+    #[test]
+    fn interface_number_from_path() {
+        assert_eq!(
+            interface_number("\\\\?\\hid#vid_1d57&pid_2124&mi_02&col01#8&1c2da351&0&0000#{g}"),
+            "02"
+        );
+        assert_eq!(interface_number("\\\\?\\hid#vid_1d57&pid_2124#8&1#0"), "-");
     }
 
     #[test]
