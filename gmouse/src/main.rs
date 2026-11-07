@@ -55,7 +55,7 @@ gmouse — настройка мыши под Windows 11
   gmouse shark status             Attack Shark: DPI, ступени, опрос, батарея
   gmouse shark dpi <значение>     Attack Shark: DPI активной ступени
   gmouse shark stage <1..6>       Attack Shark: активная ступень DPI
-  gmouse shark polling <Гц>       Attack Shark: 125/250/500/1000/2000/4000/8000
+  gmouse shark polling <Гц>       Attack Shark: 125/250/500/1000
   gmouse shark battery            Attack Shark: заряд (по событиям мыши)
   gmouse doctor                   диагностика: почему устройства не видны
   gmouse diag [-o файл]           отчёт о мыши в JSON
@@ -352,7 +352,7 @@ fn cmd_shark(args: &[String]) -> Result<i32, String> {
                 .get(2)
                 .ok_or("укажите частоту: gmouse shark polling 1000")?
                 .parse()
-                .map_err(|_| "частота — число: 125/250/500/1000/2000/4000/8000")?;
+                .map_err(|_| "частота — число: 125/250/500/1000")?;
             device.write_polling(hz)?;
             match device.read_polling() {
                 Some(now) => println!("Частота опроса: {now} Гц"),
@@ -389,11 +389,7 @@ fn cmd_shark(args: &[String]) -> Result<i32, String> {
             ) {
                 println!("Report 0x06: {}", protocol::hex(&polling));
             }
-            if let Some(state) = hid::read_feature_id(
-                device.handle,
-                shark::REPORT_STATE,
-                64,
-            ) {
+            if let Some(state) = device.read_state() {
                 println!("Report 0x0A: {}", protocol::hex(&state));
             }
             Ok(0)

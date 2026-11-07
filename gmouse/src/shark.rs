@@ -48,25 +48,69 @@ pub struct Profile {
     pub raw: Vec<u8>,
 }
 
-/// DPI -> байт сенсора. Линейная формула `dpi = (n + 1) * 50`,
-/// для значений выше 12000 используется множитель 2 (бит в маске ступеней).
-pub fn encode_dpi(dpi: u32) -> (u8, bool) {
-    let dpi = dpi.clamp(50, 40_000);
-    let double = dpi > 12_000;
-    let effective = if double { dpi / 2 } else { dpi };
-    let steps = (effective / 50).max(1);
-    let n = steps.saturating_sub(1);
-    (n.min(254) as u8, double)
+/// Таблица ступеней сенсора PAW3311 (как в публичной документации
+/// attackshark-bridge / X11 driver): DPI = (индекс + 1) * 50 при yByte = 0
+/// и (индекс + 1) * 100 при yByte = 1. Не равномерная — поэтому и нельзя
+/// считать «(n+1)*50» напрямую по байту.
+const DPI_3311: [u8; 200] = [
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0e,
+    0x0f, 0x10, 0x11, 0x12, 0x13, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1b, 0x1c,
+    0x1d, 0x1e, 0x1f, 0x20, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x29, 0x2a,
+    0x2b, 0x2c, 0x2d, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x36, 0x37, 0x38,
+    0x39, 0x3a, 0x3b, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x43, 0x44, 0x45, 0x46,
+    0x47, 0x48, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x51, 0x52, 0x53, 0x54,
+    0x55, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5e, 0x5f, 0x60, 0x61, 0x62,
+    0x63, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70,
+    0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7f,
+    0x80, 0x81, 0x82, 0x83, 0x84, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8d,
+    0x8e, 0x8f, 0x90, 0x91, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x9a, 0x9b,
+    0x9c, 0x9d, 0x9e, 0x9f, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa7, 0xa8, 0xa9,
+    0xaa, 0xab, 0xac, 0xae, 0xaf, 0xb0, 0xb1, 0xb2, 0xb3, 0xb5, 0xb6, 0xb7,
+    0xb8, 0xb9, 0xbb, 0xbc, 0xbd, 0xbe, 0xbf, 0xc0, 0xc2, 0xc3, 0xc4, 0xc5,
+    0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xcf, 0xd0, 0xd1, 0xd2, 0xd3,
+    0xd4, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xdb, 0xdd, 0xde, 0xdf, 0xe0, 0xe1,
+    0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xea, 0xeb,
+];
+
+/// Минимальный и максимальный DPI, которые кодируются и читаются обратно
+/// без потерь (выше 20000 кодирование в прошивке другое).
+pub const MIN_DPI: u32 = 50;
+pub const MAX_DPI: u32 = 20_000;
+
+/// DPI -> (xByte, yByte, double).
+pub fn encode_dpi(dpi: u32) -> (u8, u8, bool) {
+    let mut dpi = dpi.clamp(MIN_DPI, MAX_DPI);
+    let double = dpi > 10_000;
+    if double {
+        // выше 10000 сенсор хранит половину значения
+        dpi = (dpi as f64 / 2.0).round() as u32;
+    }
+    if dpi > 5_000 && dpi % 100 == 0 {
+        let index = (dpi / 100 - 1) as usize;
+        return (DPI_3311[index.min(DPI_3311.len() - 1)], 1, double);
+    }
+    let index = ((dpi.saturating_sub(50)) / 50) as usize;
+    (DPI_3311[index.min(DPI_3311.len() - 1)], 0, double)
 }
 
-/// Байт сенсора -> DPI.
-pub fn decode_dpi(byte: u8, double: bool) -> u32 {
-    let base = (byte as u32 + 1) * 50;
-    if double {
-        base * 2
-    } else {
-        base
+/// (xByte, yByte, double) -> DPI. 0 означает «ступень выключена».
+pub fn decode_dpi(x_byte: u8, y_byte: u8, double: bool) -> u32 {
+    if x_byte == 0 && y_byte == 0 {
+        return 0;
     }
+    let position = DPI_3311.iter().position(|b| *b == x_byte);
+    let mut dpi = match (y_byte, position) {
+        (0, Some(index)) => index as u32 * 50 + 50,
+        (1, Some(index)) => index as u32 * 100 + 100,
+        (_, Some(_)) => 10_100 + (((y_byte as u32) << 8 | x_byte as u32) - 199) * 100,
+        // байта нет в таблице — показываем хотя бы грубую оценку
+        (0, None) => x_byte as u32 * 50,
+        _ => 0,
+    };
+    if double {
+        dpi = dpi.saturating_mul(2);
+    }
+    dpi
 }
 
 /// Частота опроса из байта: встречаются и индекс (0..3), и код (1/2/4/8).
@@ -76,9 +120,7 @@ pub fn decode_polling(byte: u8) -> Option<u16> {
         0x02 => Some(500),
         0x04 => Some(250),
         0x08 => Some(125),
-        3 => Some(2000),
-        4 => Some(4000),
-        5 => Some(8000),
+        // 2000/4000/8000 Гц кодируются по-другому; кодировка не подтверждена
         _ => None,
     }
 }
@@ -89,9 +131,7 @@ pub fn encode_polling(hz: u16) -> Option<u8> {
         250 => 0x04,
         500 => 0x02,
         1000 => 0x01,
-        2000 => 3,
-        4000 => 4,
-        8000 => 5,
+        // выше 1000 Гц протокол другой — не пишем наугад
         _ => return None,
     })
 }
@@ -122,11 +162,11 @@ pub fn parse_profile(raw: &[u8]) -> Option<Profile> {
     }
     let mut stages = Vec::with_capacity(6);
     for i in 0..6 {
-        let byte = *raw.get(off::STAGE_DPI + i)?;
-        let high = *raw.get(off::STAGE_HIGH + i).unwrap_or(&0);
-        let mask = *raw.get(off::STAGE_MASK_A).unwrap_or(&0);
-        let double = high != 0 || (mask >> i) & 1 == 1;
-        stages.push(decode_dpi(byte, double));
+        let x_byte = *raw.get(off::STAGE_DPI + i)?;
+        let y_byte = *raw.get(off::STAGE_HIGH + i).unwrap_or(&0);
+        // бит «x2» в маске ступеней ставит прошивка для значений >10000 DPI
+        let double = (raw.get(off::STAGE_MASK_A).unwrap_or(&0) >> i) & 1 == 1;
+        stages.push(decode_dpi(x_byte, y_byte, double));
     }
     Some(Profile {
         stages,
@@ -144,18 +184,17 @@ pub fn set_active_dpi(profile: &mut Profile, dpi: u32) -> bool {
         return false;
     }
     let index = (profile.active_stage.saturating_sub(1) as usize).min(5);
-    let (byte, double) = encode_dpi(dpi);
-    profile.raw[off::STAGE_DPI + index] = byte;
+    let (x_byte, y_byte, double) = encode_dpi(dpi);
+    profile.raw[off::STAGE_DPI + index] = x_byte;
+    profile.raw[off::STAGE_HIGH + index] = y_byte;
     if double {
         profile.raw[off::STAGE_MASK_A] |= 1 << index;
         profile.raw[off::STAGE_MASK_B] |= 1 << index;
-        profile.raw[off::STAGE_HIGH + index] = 1;
     } else {
         profile.raw[off::STAGE_MASK_A] &= !(1 << index);
         profile.raw[off::STAGE_MASK_B] &= !(1 << index);
-        profile.raw[off::STAGE_HIGH + index] = 0;
     }
-    profile.stages[index] = decode_dpi(byte, double);
+    profile.stages[index] = decode_dpi(x_byte, y_byte, double);
     apply_checksum(&mut profile.raw)
 }
 
@@ -197,14 +236,33 @@ impl Device {
             .ok_or_else(|| "мышь отклонила запись профиля".to_string())
     }
 
+    /// Прочитать дамп состояния (Report 0x0A) через канал 0xA0:
+    /// сначала просим, ждём готовности, затем читаем сам репорт.
+    pub fn read_state(&self) -> Option<Vec<u8>> {
+        let mut request = vec![0u8; 8];
+        request[0] = REPORT_READ_CHANNEL;
+        request[1] = REPORT_STATE;
+        request[2] = 64; // Windows отдаёт максимум 64 байта feature-репорта
+        hid::write_feature(self.handle, &request)?;
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            let reply = hid::read_feature_id(self.handle, REPORT_READ_CHANNEL, 8)?;
+            if reply.get(1).copied().unwrap_or(0) == 1 {
+                return hid::read_feature_id(self.handle, REPORT_STATE, 64);
+            }
+        }
+        None
+    }
+
     pub fn read_polling(&self) -> Option<u16> {
         let raw = hid::read_feature_id(self.handle, REPORT_POLLING, POLLING_LEN)?;
         decode_polling(*raw.get(1)?)
     }
 
     pub fn write_polling(&self, hz: u16) -> Result<(), String> {
-        let code = encode_polling(hz)
-            .ok_or_else(|| format!("частота {hz} Гц не поддерживается"))?;
+        let code = encode_polling(hz).ok_or_else(|| {
+            format!("частота {hz} Гц не поддерживается (только 125/250/500/1000)")
+        })?;
         let mut data = vec![0u8; POLLING_LEN as usize];
         data[0] = REPORT_POLLING;
         data[1] = code;
@@ -235,26 +293,35 @@ mod tests {
 
     #[test]
     fn dpi_codec_roundtrip() {
-        for dpi in [400u32, 800, 1200, 1600, 1800, 2400, 3200, 6400] {
-            let (byte, double) = encode_dpi(dpi);
-            assert_eq!(decode_dpi(byte, double), dpi, "dpi={dpi}");
+        for dpi in [
+            400u32, 800, 1200, 1600, 1800, 2000, 2400, 3200, 6400, 8000, 12000,
+        ] {
+            let (x, y, double) = encode_dpi(dpi);
+            assert_eq!(decode_dpi(x, y, double), dpi, "dpi={dpi}");
         }
     }
 
     #[test]
-    fn dpi_above_12000_uses_double_bit() {
-        let (byte, double) = encode_dpi(24000);
+    fn dpi_above_10000_uses_double_bit() {
+        let (x, y, double) = encode_dpi(20000);
         assert!(double);
-        assert_eq!(decode_dpi(byte, double), 24000);
+        assert_eq!(decode_dpi(x, y, double), 20000);
     }
 
     #[test]
     fn dpi_matches_known_capture() {
-        // Из публичной документации: байт 0x12 = 800 DPI, 0x25 = 1600 DPI
-        assert_eq!(decode_dpi(0x12, false), 800);
-        assert_eq!(decode_dpi(0x25, false), 1600);
-        assert_eq!(encode_dpi(800).0, 0x12);
-        assert_eq!(encode_dpi(1600).0, 0x25);
+        // Публичная таблица ступеней PAW3311: 0x12 = 800, 0x25 = 1600
+        assert_eq!(decode_dpi(0x12, 0, false), 800);
+        assert_eq!(decode_dpi(0x25, 0, false), 1600);
+        assert_eq!(encode_dpi(800), (0x12, 0, false));
+        assert_eq!(encode_dpi(1600), (0x25, 0, false));
+        // 0x09 = 400 DPI (первая ступень из захвата)
+        assert_eq!(decode_dpi(0x09, 0, false), 400);
+    }
+
+    #[test]
+    fn disabled_stage_is_zero() {
+        assert_eq!(decode_dpi(0, 0, false), 0);
     }
 
     #[test]
@@ -314,7 +381,9 @@ mod tests {
             assert_eq!(decode_polling(encode_polling(hz).unwrap()), Some(hz));
         }
         assert_eq!(decode_polling(0x02), Some(500));
+        // неподтверждённые частоты не кодируем
         assert_eq!(encode_polling(777), None);
+        assert_eq!(encode_polling(8000), None);
     }
 
     #[test]
