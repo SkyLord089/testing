@@ -198,7 +198,7 @@ impl Target {
         match candidate.transport {
             Transport::Feature => hid::feature_request(self.handle, &payload),
             Transport::Output => {
-                if hid::output_report(self.handle, &payload) {
+                if hid::write_output_report(self.handle, &payload).is_some() {
                     Some(payload)
                 } else {
                     None

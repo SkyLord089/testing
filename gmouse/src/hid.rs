@@ -398,6 +398,95 @@ pub fn read_feature_id(handle: HANDLE, report_id: u8, length: u16) -> Option<Vec
     Some(buf)
 }
 
+/// Записать output-репорт (первый байт — Report ID).
+pub fn write_output_report(handle: HANDLE, data: &[u8]) -> Option<()> {
+    if data.is_empty() {
+        return None;
+    }
+    let mut buf = vec![0u8; data.len().max(9)];
+    buf[..data.len()].copy_from_slice(data);
+    unsafe {
+        if HidD_SetOutputReport(
+            handle,
+            buf.as_ptr() as *const std::ffi::c_void,
+            buf.len() as u32,
+        ) == 0
+        {
+            None
+        } else {
+            Some(())
+        }
+    }
+}
+
+/// Прочитать входной репорт с таймаутом через overlapped-ввод.
+/// Возвращает None, если данных нет за отведённое время.
+pub fn read_input_timeout(handle: HANDLE, length: usize, timeout_ms: u32) -> Option<Vec<u8>> {
+    if length == 0 || length > 4096 {
+        return None;
+    }
+    #[repr(C)]
+    struct OVERLAPPED {
+        internal: usize,
+        internal_high: usize,
+        offset: u32,
+        offset_high: u32,
+        event: HANDLE,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateEventW(attrs: *mut std::ffi::c_void, manual: BOOL,
+                        initial: BOOL, name: LPCWSTR) -> HANDLE;
+        fn WaitForSingleObject(handle: HANDLE, ms: u32) -> u32;
+        fn ResetEvent(handle: HANDLE) -> BOOL;
+        fn CancelIo(handle: HANDLE) -> BOOL;
+    }
+    const WAIT_OBJECT_0: u32 = 0;
+    let mut buf = vec![0u8; length];
+    let mut read = 0u32;
+    unsafe {
+        let event = CreateEventW(std::ptr::null_mut(), 1, 0, std::ptr::null());
+        if event == 0 {
+            return None;
+        }
+        let mut overlapped = OVERLAPPED {
+            internal: 0,
+            internal_high: 0,
+            offset: 0,
+            offset_high: 0,
+            event,
+        };
+        let started = ReadFile(
+            handle,
+            buf.as_mut_ptr() as *mut std::ffi::c_void,
+            length as u32,
+            &mut read,
+            &mut overlapped as *mut OVERLAPPED as *mut std::ffi::c_void,
+        );
+        let ok = if started != 0 {
+            read as usize
+        } else {
+            let wait = WaitForSingleObject(event, timeout_ms);
+            if wait != WAIT_OBJECT_0 {
+                CancelIo(handle);
+                CloseHandle(event);
+                return None;
+            }
+            let mut transferred = 0u32;
+            GetOverlappedResult(handle, &mut overlapped as *mut OVERLAPPED
+                as *mut std::ffi::c_void, &mut transferred, 0);
+            ResetEvent(event);
+            transferred as usize
+        };
+        CloseHandle(event);
+        if ok == 0 {
+            return None;
+        }
+        buf.truncate(ok);
+        Some(buf)
+    }
+}
+
 /// Записать feature-репорт (первый байт — Report ID).
 pub fn write_feature(handle: HANDLE, data: &[u8]) -> Option<()> {
     if data.len() < 2 {
@@ -516,18 +605,3 @@ mod tests {
     }
 }
 
-/// Записать output-репорт.
-pub fn output_report(handle: HANDLE, data: &[u8]) -> bool {
-    if data.is_empty() {
-        return false;
-    }
-    let mut buf = vec![0u8; data.len().max(9)];
-    buf[..data.len()].copy_from_slice(data);
-    unsafe {
-        HidD_SetOutputReport(
-            handle,
-            buf.as_ptr() as *const std::ffi::c_void,
-            buf.len() as u32,
-        ) != 0
-    }
-}

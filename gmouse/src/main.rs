@@ -57,6 +57,9 @@ gmouse — настройка мыши под Windows 11
   gmouse shark stage <1..6>       Attack Shark: активная ступень DPI
   gmouse shark polling <Гц>       Attack Shark: 125/250/500/1000
   gmouse shark battery            Attack Shark: заряд (по событиям мыши)
+  gmouse shark raw                Attack Shark: сырые блоки настроек
+  gmouse shark encoding table|linear   какая кодировка DPI у модели
+  (кабель -- feature-репорты, приёмник 2.4 ГГц -- report ID 4)
   gmouse doctor                   диагностика: почему устройства не видны
   gmouse diag [-o файл]           отчёт о мыши в JSON
   gmouse profiles                 известные профили
@@ -219,70 +222,130 @@ fn run(args: &[String]) -> Result<i32, String> {
     }
 }
 
-/// Открыть служебный интерфейс Attack Shark (Configuration Collection).
-fn open_shark() -> Result<(shark::Device, hid::HidInfo), String> {
+/// Найти служебный интерфейс Attack Shark и определить транспорт.
+///
+/// * кабель  — config-коллекция объявляет **feature**-репорты (usage 0x000B);
+/// * приёмник — config-коллекция на vendor-странице 0xFF01, только
+///   input/output reports, feature-репортов нет.
+fn open_shark(encoding_override: Option<shark::Encoding>) -> Result<shark::Device, String> {
     let devices = hid::enumerate();
     if devices.is_empty() {
         return Err("HID-устройства не найдены. Запустите: gmouse doctor".into());
     }
-    // Служебный интерфейс: та же мышь, но не 0x01/0x02 (мышь) и не
-    // клавиатура — у Attack Shark это vendor-defined collection.
-    let candidates: Vec<&hid::HidInfo> = devices
-        .iter()
-        .filter(|d| {
-            let key = &d.parent;
-            !d.is_mouse()
-                && devices.iter().any(|m| m.is_mouse() && &m.parent == key)
-                && !(d.usage_page == 0x01 && d.usage == 0x06)
-        })
-        .collect();
-    let interfaces: Vec<&hid::HidInfo> = if candidates.is_empty() {
-        devices
-            .iter()
-            .filter(|d| !d.is_mouse() && !(d.usage_page == 0x01 && d.usage == 0x06))
-            .collect()
-    } else {
-        candidates
-    };
-    if interfaces.is_empty() {
-        return Err("не найден служебный интерфейс мыши (проверьте: gmouse list)".into());
-    }
+
+    // интерфейсы, где вообще есть feature-репорты (признак кабеля)
     let mut errors = Vec::new();
-    for info in interfaces {
-        let Some(handle) = hid::open_rw(&info.path) else {
-            errors.push(format!("{}: нет доступа", info.path));
+    let mut ordered: Vec<&hid::HidInfo> = devices
+        .iter()
+        .filter(|d| d.feature_len > 0 && !(d.usage_page == 0x01 && d.usage == 0x01))
+        .collect();
+    // сначала те, у кого есть и input, и feature (кабель), потом приёмники
+    ordered.sort_by_key(|d| (d.is_vendor_defined(), d.input_len));
+
+    for candidate in &ordered {
+        let Some(handle) = hid::open_rw(&candidate.path) else {
+            errors.push(format!("{}: нет доступа", candidate.path));
             continue;
         };
+        let encoding =
+            encoding_override.unwrap_or_else(|| shark::Encoding::for_pid(candidate.product_id));
         let device = shark::Device {
             handle,
-            path: info.path.clone(),
+            read_handle: None,
+            info: (*candidate).clone(),
+            transport: shark::Transport::Cable,
+            encoding,
+            profile_index: 1,
         };
         match device.read_profile() {
-            Ok(_) => return Ok((device, info.clone())),
+            Ok(_) => return Ok(device),
             Err(message) => {
-                errors.push(format!("{}: {message}", info.path));
+                errors.push(format!("{} (кабель): {message}", candidate.path));
                 hid::close(handle);
             }
         }
     }
+
+    // Приёмник: config-интерфейс на vendor-странице, input+output, без feature.
+    let mut receiver_candidates: Vec<&hid::HidInfo> = devices
+        .iter()
+        .filter(|d| d.is_vendor_defined() && d.output_len > 0 && d.input_len > 0)
+        .collect();
+    receiver_candidates.sort_by_key(|d| (d.usage_page, d.usage));
+    for candidate in receiver_candidates {
+        let Some(handle) = hid::open_rw(&candidate.path) else {
+            errors.push(format!("{}: нет доступа", candidate.path));
+            continue;
+        };
+        let Some(read_handle) = hid::open_rw(&candidate.path) else {
+            hid::close(handle);
+            errors.push(format!("{}: не открылся второй дескриптор", candidate.path));
+            continue;
+        };
+        let encoding =
+            encoding_override.unwrap_or_else(|| shark::Encoding::for_pid(candidate.product_id));
+        let device = shark::Device {
+            handle,
+            read_handle: Some(read_handle),
+            info: (*candidate).clone(),
+            transport: shark::Transport::Receiver,
+            encoding,
+            profile_index: 1,
+        };
+        match device.read_profile() {
+            Ok(_) => return Ok(device),
+            Err(message) => {
+                errors.push(format!("{} (приёмник): {message}", candidate.path));
+                if let Some(read) = device.read_handle {
+                    hid::close(read);
+                }
+                hid::close(handle);
+            }
+        }
+    }
+
+    let hint = if hid::enumerate().iter().any(|d| d.is_mouse()) {
+        "Мышь видна, но служебный интерфейс не отвечает.\n  \
+         * закройте фирменную утилиту Attack Shark (она держит устройство);\n  \
+         * запустите PowerShell от администратора;\n  \
+         * попробуйте подключить мышь кабелем (по проводу протокол надёжнее)."
+    } else {
+        "Мышь не найдена через HID. Проверьте подключение: gmouse doctor"
+    };
     Err(format!(
-        "не удалось прочитать профиль Attack Shark.\n  {}\n\
-         Запустите от администратора и закройте фирменную утилиту Attack Shark.",
+        "не удалось прочитать настройки Attack Shark.\n  {}\n{hint}",
         errors.join("\n  ")
     ))
 }
 
 fn cmd_shark(args: &[String]) -> Result<i32, String> {
     let sub = args.get(1).map(String::as_str).unwrap_or("status");
-    let (device, info) = open_shark()?;
+
+    // кодировку DPI можно переопределить: --encoding table|linear
+    let mut encoding_override = None;
+    if let Some(index) = args.iter().position(|a| a == "--encoding") {
+        let value = args.get(index + 1).ok_or("--encoding table|linear")?;
+        encoding_override = Some(
+            shark::Encoding::parse(value).ok_or("--encoding: table или linear")?,
+        );
+    }
+
+    let device = open_shark(encoding_override)?;
+    let info = device.info.clone();
 
     match sub {
         "status" | "info" => {
-            let profile = device.read_profile()?;
             println!("Attack Shark — {}", info.product);
+            println!("  VID:PID: {:04X}:{:04X}", info.vendor_id, info.product_id);
+            println!("  транспорт: {}", device.transport.name());
+            println!("  кодировка DPI: {}", device.encoding.name());
             println!("  путь: {}", info.path);
+            let profile = device.read_profile()?;
             println!("  активная ступень: {}", profile.active_stage);
             for (index, dpi) in profile.stages.iter().enumerate() {
+                if *dpi == 0 {
+                    continue;
+                }
                 let mark = if index + 1 == profile.active_stage as usize {
                     "  <-- активна"
                 } else {
@@ -291,13 +354,14 @@ fn cmd_shark(args: &[String]) -> Result<i32, String> {
                 println!("    ступень {}: {:>5} DPI{mark}", index + 1, dpi);
             }
             println!(
-                "  angle snap: {}, ripple control: {}",
-                if profile.angle_snap { "вкл" } else { "выкл" },
-                if profile.ripple_control { "вкл" } else { "выкл" }
+                "  частота опроса: {}",
+                profile
+                    .polling_hz
+                    .map(|hz| format!("{hz} Гц"))
+                    .unwrap_or_else(|| "не прочиталась".into())
             );
-            match device.read_polling() {
-                Some(hz) => println!("  частота опроса: {hz} Гц"),
-                None => println!("  частота опроса: не прочиталась"),
+            if let Some(firmware) = device.read_firmware() {
+                println!("  прошивка: {firmware}");
             }
             Ok(0)
         }
@@ -308,22 +372,26 @@ fn cmd_shark(args: &[String]) -> Result<i32, String> {
                 .parse()
                 .map_err(|_| "DPI — число, например 1600")?;
             let mut profile = device.read_profile()?;
-            let old = profile.stages
-                [(profile.active_stage.saturating_sub(1) as usize).min(5)];
+            let index = (profile.active_stage.saturating_sub(1) as usize).min(7);
+            let old = profile.stages.get(index).copied().unwrap_or(0);
             if !shark::set_active_dpi(&mut profile, value) {
-                return Err("не удалось собрать профиль для записи".into());
+                return Err("не удалось собрать блок для записи".into());
             }
-            device.write_profile(&profile)?;
-            // проверка чтением: подтверждает, что мышь приняла запись
+            device.write_block(&profile.raw)?;
             let check = device.read_profile()?;
-            let now = check.stages[(check.active_stage.saturating_sub(1) as usize).min(5)];
+            let now = check.stages.get(index).copied().unwrap_or(0);
             println!(
-                "Ступень {} : {old} -> {now} DPI (записано {value})",
+                "Ступень {} : {old} -> {now} DPI (запрошено {value})",
                 check.active_stage
             );
             if now.abs_diff(value) > 50 {
                 return Err(format!(
-                    "мышь вернула {now} DPI вместо {value}: запись не применилась"
+                    "мышь вернула {now} DPI вместо {value}.\n\
+                     Попробуйте другую кодировку: gmouse shark dpi {value} --encoding {}",
+                    match device.encoding {
+                        shark::Encoding::Linear => "table",
+                        shark::Encoding::StepTable => "linear",
+                    }
                 ));
             }
             Ok(0)
@@ -331,19 +399,22 @@ fn cmd_shark(args: &[String]) -> Result<i32, String> {
         "stage" => {
             let stage: u8 = args
                 .get(2)
-                .ok_or("укажите ступень 1..6: gmouse shark stage 2")?
+                .ok_or("укажите ступень 1..8: gmouse shark stage 2")?
                 .parse()
-                .map_err(|_| "ступень — число 1..6")?;
+                .map_err(|_| "ступень — число 1..8")?;
             let mut profile = device.read_profile()?;
             if !shark::set_active_stage(&mut profile, stage) {
-                return Err("ступень должна быть от 1 до 6".into());
+                return Err("ступень должна быть от 1 до 8".into());
             }
-            device.write_profile(&profile)?;
+            device.write_block(&profile.raw)?;
             let check = device.read_profile()?;
             println!(
                 "Активная ступень: {} ({} DPI)",
                 check.active_stage,
-                check.stages[(check.active_stage - 1) as usize]
+                check.stages
+                    .get((check.active_stage - 1) as usize)
+                    .copied()
+                    .unwrap_or(0)
             );
             Ok(0)
         }
@@ -353,50 +424,77 @@ fn cmd_shark(args: &[String]) -> Result<i32, String> {
                 .ok_or("укажите частоту: gmouse shark polling 1000")?
                 .parse()
                 .map_err(|_| "частота — число: 125/250/500/1000")?;
-            device.write_polling(hz)?;
-            match device.read_polling() {
-                Some(now) => println!("Частота опроса: {now} Гц"),
-                None => println!("Записано {hz} Гц (прочитать обратно не удалось)"),
-            }
+            let now = device.write_polling(hz)?;
+            println!("Частота опроса: {now} Гц");
             Ok(0)
         }
         "battery" => {
             // Батарея приходит асинхронными событиями на входном эндпоинте.
-            println!("Слушаю события мыши до 15 секунд (нажмите любую кнопку)...");
-            if let Some(handle) = hid::open_rw(&info.path) {
-                let len = info.input_len.max(8) as usize;
-                for _ in 0..600 {
-                    let Some(event) = hid::read_input(handle, len) else {
-                        break;
-                    };
-                    if let Some((percent, state)) = shark::parse_battery(&event) {
-                        println!("Заряд: {percent}% ({state})");
-                        hid::close(handle);
-                        return Ok(0);
-                    }
+            println!("Слушаю события мыши до 15 секунд (пошевелите мышью)...");
+            let Some(handle) = hid::open_rw(&info.path) else {
+                return Err("не удалось открыть входной канал".into());
+            };
+            let length = info.input_len.max(8) as usize;
+            let result = (0..300).find_map(|_| {
+                let event = hid::read_input_timeout(handle, length, 300)?;
+                shark::parse_battery(&event)
+            });
+            hid::close(handle);
+            match result {
+                Some((percent, state)) => {
+                    println!("Заряд: {percent}% ({state})");
+                    Ok(0)
                 }
-                hid::close(handle);
+                None => Err(
+                    "событие батареи не пришло. Отключите и подключите мышь и повторите"
+                        .into(),
+                ),
             }
-            Err("событие батареи не пришло. Отключите и подключите мышь и повторите".into())
         }
         "raw" => {
+            println!("транспорт: {}", device.transport.name());
+            for (cmd, size, name) in [
+                (shark::CMD_DPI, shark::RECEIVER_SIZE, "0x04 DPI"),
+                (shark::CMD_LIGHTING, 15, "0x05 подсветка"),
+                (shark::CMD_POLLING, shark::POLLING_SIZE, "0x06 опрос"),
+                (shark::CMD_BUTTONS, 59, "0x08 кнопки"),
+                (shark::CMD_FIRMWARE, shark::FIRMWARE_SIZE, "0x0B прошивка"),
+            ] {
+                match device.read_block(cmd, size) {
+                    Ok(block) => println!("{name}: {}", protocol::hex(&block)),
+                    Err(message) => println!("{name}: не прочитано ({message})"),
+                }
+            }
+            Ok(0)
+        }
+        "encoding" => {
+            let value = args
+                .get(2)
+                .ok_or("укажите кодировку: gmouse shark encoding table|linear")?;
+            let encoding = shark::Encoding::parse(value)
+                .ok_or("кодировка: table или linear")?;
+            let device = open_shark(Some(encoding))?;
             let profile = device.read_profile()?;
-            println!("Report 0x04: {}", protocol::hex(&profile.raw));
-            if let Some(polling) = hid::read_feature_id(
-                device.handle,
-                shark::REPORT_POLLING,
-                shark::POLLING_LEN,
-            ) {
-                println!("Report 0x06: {}", protocol::hex(&polling));
+            println!(
+                "Кодировка {} для {:04X}:{:04X}",
+                encoding.name(),
+                device.info.vendor_id,
+                device.info.product_id
+            );
+            for (index, dpi) in profile.stages.iter().enumerate() {
+                if *dpi > 0 {
+                    println!("    ступень {}: {:>5} DPI", index + 1, dpi);
+                }
             }
-            if let Some(state) = device.read_state() {
-                println!("Report 0x0A: {}", protocol::hex(&state));
-            }
+            println!(
+                "\nСверьте активную ступень с реальной скоростью курсора. \
+                 Верная кодировка — та, где активная ступень совпадает."
+            );
             Ok(0)
         }
         other => Err(format!(
             "неизвестная подкоманда '{other}'. Доступны: status, dpi, stage, \
-             polling, battery, raw"
+             polling, battery, raw, encoding"
         )),
     }
 }
@@ -423,6 +521,31 @@ fn cmd_list() -> Result<i32, String> {
         return Ok(1);
     }
     print!("{}", diag::summary(&devices));
+
+    // подсказка про Attack Shark: кабель или приёмник
+    let shark_candidates: Vec<_> = devices
+        .iter()
+        .filter(|d| d.vendor_id == 0x1D57 || d.vendor_id == 0x1A2C)
+        .collect();
+    if !shark_candidates.is_empty() {
+        let cable = shark_candidates
+            .iter()
+            .any(|d| d.feature_len > 0 && !d.is_vendor_defined());
+        println!(
+            "\nAttack Shark: найден {}, настройки читаются через {}.",
+            format_args!(
+                "{:04X}:{:04X}",
+                shark_candidates[0].vendor_id, shark_candidates[0].product_id
+            ),
+            if cable {
+                "кабель (feature-репорты)"
+            } else {
+                "приёмник 2.4 ГГц (report ID 4) — по проводу стабильнее"
+            }
+        );
+        println!("Проверить: .\\gmouse.exe shark status");
+    }
+
     if let Some(mouse) = devices.iter().find(|d| d.is_mouse()) {
         let profile = Profile::find(&mouse.product, mouse.product_id);
         println!(
