@@ -366,22 +366,6 @@ pub fn device_key(path: &str) -> String {
     }
 }
 
-/// Прочитать feature-репорт. Первый байт буфера — Report ID.
-/// Windows возвращает данные того репорта, чей ID стоит в buf[0].
-pub fn read_feature(handle: HANDLE, length: u16) -> Option<Vec<u8>> {
-    if length < 2 {
-        return None;
-    }
-    let mut buf = vec![0u8; length as usize];
-    unsafe {
-        if HidD_GetFeature(handle, buf.as_mut_ptr() as *mut std::ffi::c_void,
-                           length as u32) == 0 {
-            return None;
-        }
-    }
-    Some(buf)
-}
-
 /// Прочитать feature-репорт конкретного Report ID.
 pub fn read_feature_id(handle: HANDLE, report_id: u8, length: u16) -> Option<Vec<u8>> {
     if length < 2 {

@@ -435,12 +435,21 @@ fn cmd_shark(args: &[String]) -> Result<i32, String> {
                 return Err("не удалось открыть входной канал".into());
             };
             let length = info.input_len.max(8) as usize;
-            let result = (0..300).find_map(|_| {
-                let event = hid::read_input_timeout(handle, length, 300)?;
-                shark::parse_battery(&event)
-            });
+            let mut battery = None;
+            for _ in 0..300 {
+                let Some(event) = hid::read_input_timeout(handle, length, 300) else {
+                    break;
+                };
+                if let Some(stage) = shark::parse_dpi_event(&event) {
+                    println!("  кнопка DPI: ступень {stage}");
+                }
+                if let Some(found) = shark::parse_battery(&event) {
+                    battery = Some(found);
+                    break;
+                }
+            }
             hid::close(handle);
-            match result {
+            match battery {
                 Some((percent, state)) => {
                     println!("Заряд: {percent}% ({state})");
                     Ok(0)
@@ -458,6 +467,7 @@ fn cmd_shark(args: &[String]) -> Result<i32, String> {
                 (shark::CMD_LIGHTING, 15, "0x05 подсветка"),
                 (shark::CMD_POLLING, shark::POLLING_SIZE, "0x06 опрос"),
                 (shark::CMD_BUTTONS, 59, "0x08 кнопки"),
+                (shark::CMD_PROFILE, 128, "0x0A профиль целиком"),
                 (shark::CMD_FIRMWARE, shark::FIRMWARE_SIZE, "0x0B прошивка"),
             ] {
                 match device.read_block(cmd, size) {
