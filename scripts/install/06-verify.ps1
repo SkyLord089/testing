@@ -292,32 +292,30 @@ if (Test-Path $torchLib) {
 # ---------- 4b. зависимости самого ZLUDA ----------
 # ZLUDA при init() делает Comgr::find_and_load() и ищет по ГОЛЫМ именам:
 #   amd_comgr_3.dll -> amd_comgr_2.dll -> amd_comgr.dll
-# В System32 их нет, поэтому без bin HIP SDK в PATH ZLUDA не стартует, и
-# torch.cuda.is_available() вернёт False без внятной причины.
-Header '4b. Зависимости ZLUDA (comgr и PATH)'
+# В System32 их нет, а PATH НЕ подходит: comfy\zluda.py в первых строках
+#   paths_no_rocm = [p for p in paths if "rocm" not in p.lower()]
+# вырезает из PATH всё, что содержит "rocm". Поэтому comgr должен лежать
+# копией в venv\Scripts - рядом с python.exe и nvcuda.dll.
+Header '4b. Зависимости ZLUDA (comgr)'
 
+$venvScripts = Join-Path $InstallDir 'venv\Scripts'
 $comgrFound = $false
 foreach ($n in 'amd_comgr_3.dll', 'amd_comgr_2.dll', 'amd_comgr.dll') {
-    $hit = $null
-    foreach ($hb in $hipBinCandidates) {
-        $cand = Join-Path $hb $n
-        if (Test-Path $cand) { $hit = $cand; break }
-    }
-    if ($hit) {
-        Ok ("comgr: найден {0} ({1})" -f $n, $hit)
+    $inScripts = Join-Path $venvScripts $n
+    if (Test-Path $inScripts) {
+        Ok ("comgr: {0} в venv\Scripts ({1:0.0} МБ)" -f $n, ((Get-Item $inScripts).Length / 1MB))
         $comgrFound = $true
         break
     }
 }
 if (-not $comgrFound) {
-    Fail 'comgr не найден (ни amd_comgr_3, ни _2, ни без суффикса)' 'ZLUDA не запустится. Нужен компонент HIP SDK Core; проверь bin.'
+    Fail 'comgr нет в venv\Scripts' 'ZLUDA не запустится. Запусти scripts\patch-torch-zluda.ps1 -Venv <venv>: он копирует amd_comgr*.dll из HIP SDK.'
 }
 
-$pathHasBin = @($env:PATH -split ';' | Where-Object { $_ -match 'ROCm' })
-if ($pathHasBin.Count -gt 0) {
-    Ok ("PATH содержит HIP: {0}" -f (($pathHasBin | Select-Object -First 3) -join ', '))
-} else {
-    Fail 'В PATH нет каталога HIP SDK' 'ZLUDA не найдёт comgr. Лаунчер comfyui-user.bat добавляет его сам.'
+# Проверяем, что PATH действительно чистится - это не ошибка, а поведение
+$rocmInPath = @($env:PATH -split ';' | Where-Object { $_ -match 'rocm' })
+if ($rocmInPath.Count -gt 0) {
+    Write-Host ("       в PATH есть ROCm ({0} шт.) - comfy\zluda.py вырежет; на работу не влияет" -f $rocmInPath.Count) -ForegroundColor DarkGray
 }
 
 $sysHipCheck = Join-Path $env:SystemRoot 'System32\amdhip64.dll'

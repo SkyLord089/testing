@@ -21,18 +21,12 @@ set "ZLUDA_COMGR_LOG_LEVEL=1"
 rem --- кэш скомпилированных ядер (смените путь при необходимости)
 if not defined ZLUDA_CACHE_DIR set "ZLUDA_CACHE_DIR=%~dp0zluda-cache"
 
-rem --- PATH k bin HIP SDK: NEOBHODIM dlya comgr, i BEZOPASEN dlya amdhip64.
-rem     Nuzhen: ZLUDA pri init() pervoi delaet Comgr::find_and_load() i ishchet
-rem     po GOLYM imenam amd_comgr_3.dll / amd_comgr_2.dll / amd_comgr.dll.
-rem     V System32 ih net - bez PATH ZLUDA ne startuet, i torch.cuda
-rem     molcha govorit available = False.
-rem     Bezopasen: ZLUDA linkuetsya na amdhip64 (bez suffiksa), a v bin lezhit
-rem     amdhip64_6.dll. Goloe imya amdhip64.dll v bin NE naideno -> Windows
-rem     beryot draivernuyu System32\amdhip64.dll, kotoraya vidit RX 580.
-rem     Bin dobavlyaetsya v KONEC spiska. Otklyuchit: set RX580_NO_HIP_PATH=1
-if not defined RX580_NO_HIP_PATH (
-    set "PATH=%PATH%;C:\Program Files\AMD\ROCm\6.4\bin"
-)
+rem --- PATH k bin HIP SDK bolshe NE dobavlyaem.
+rem     Prichina: comfy\zluda.py v pervyh zhe strokah delaet
+rem       paths_no_rocm = [p for p in paths if "rocm" not in p.lower()]
+rem     i vyrezaet iz PATH vse, chto soderzhit "rocm" - to est bin SDK.
+rem     Poetomu comgr kladyotsya kopiey v venv\Scripts (etap 4 / patch),
+rem     i imenno otuda ego beryot ZLUDA.
 
 
 rem --- MIOpen: поменьше шума и поиск без зависаний
@@ -49,7 +43,12 @@ rem set "TORCHINDUCTOR_DISABLE=1"
 rem set "AMD_LOG_LEVEL=3"
 
 rem --- аргументы ComfyUI под gfx803: минимум новых подсистем
-set "COMMANDLINE_ARGS=--auto-launch --use-quad-cross-attention --reserve-vram 0.9 --disable-async-offload --disable-pinned-memory --disable-comfy-compiler --disable-dynamic-vram"
+rem --- --disable-mmap: OBAZATELEN dlya ZLUDA.
+rem     Bez nego safetensors ottaet tenzor, ssylayushiysya na mmap-fajl,
+rem     a ZLUDA chitaet ego kak svoyu pamyat -> "Windows fatal exception:
+rem     access violation" v torch\storage.py pri f.get_tensor(k).
+rem     S flagom delaetsya prinuditelnaya kopiya (.to(device, copy=True)).
+set "COMMANDLINE_ARGS=--auto-launch --use-quad-cross-attention --reserve-vram 0.9 --disable-async-offload --disable-pinned-memory --disable-comfy-compiler --disable-dynamic-vram --disable-mmap"
 
 rem --- VRAM: если 4 ГБ - раскомментируйте строку ниже.
 rem     Точный объём: Диспетчер задач - Производительность - GPU - Выделенная память.

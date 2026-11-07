@@ -182,6 +182,35 @@ if (Test-Path $nvcudaSrc) {
     $results += [PSCustomObject]@{ File = 'Scripts\nvcuda.dll'; Action = 'COPIED'; Note = 'чтобы работал запуск без zluda.exe' }
 }
 
+# ---------- comgr: рядом с nvcuda.dll, а не через PATH ----------
+# ZLUDA при init() ищет amd_comgr_3.dll / _2 / amd_comgr.dll по ГОЛЫМ именам.
+# В System32 их нет, а PATH не годится: comfy\zluda.py в первых же строках
+#   paths_no_rocm = [p for p in paths if "rocm" not in p.lower()]
+# вырезает из PATH всё, что содержит "rocm" - то есть bin HIP SDK.
+# Поэтому кладём comgr туда, где поиск не зависит от PATH: каталог рядом
+# с python.exe (venv\Scripts). Он в порядке поиска DLL всегда первый.
+$hipBinForComgr = $null
+$hipRootForComgr = 'C:\Program Files\AMD\ROCm'
+if (Test-Path $hipRootForComgr) {
+    foreach ($d in (Get-ChildItem $hipRootForComgr -Directory | Sort-Object Name -Descending)) {
+        $b = Join-Path $d.FullName 'bin'
+        if (Test-Path (Join-Path $b 'amd_comgr_3.dll')) { $hipBinForComgr = $b; break }
+        if (Test-Path (Join-Path $b 'amd_comgr_2.dll')) { $hipBinForComgr = $b; break }
+        if (Test-Path (Join-Path $b 'amd_comgr.dll'))   { $hipBinForComgr = $b; break }
+    }
+}
+if ($hipBinForComgr) {
+    foreach ($n in 'amd_comgr_3.dll', 'amd_comgr_2.dll', 'amd_comgr.dll') {
+        $src = Join-Path $hipBinForComgr $n
+        if (-not (Test-Path $src)) { continue }
+        $dst = Join-Path $Venv "Scripts\$n"
+        if (-not $WhatIfOnly) { Copy-Item $src $dst -Force }
+        $results += [PSCustomObject]@{ File = "Scripts\$n"; Action = 'COPIED'; Note = 'comgr для ZLUDA (PATH не годится - его режет comfy/zluda.py)' }
+    }
+} else {
+    $results += [PSCustomObject]@{ File = 'amd_comgr*.dll'; Action = 'MISS'; Note = "не найден в $hipRootForComgr - ZLUDA не стартует" }
+}
+
 # ---------- итог ----------
 Write-Host ''
 Write-Host '=== ИТОГ ===' -ForegroundColor Cyan
