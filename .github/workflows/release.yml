@@ -1,0 +1,110 @@
+name: Build and publish release
+
+# A commit such as "release: v0.1.0" starts a release for that commit.
+# Other pushes do not create or alter releases.
+on:
+  push:
+    branches:
+      - '**'
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: "${{ startsWith(github.event.head_commit.message, 'release: v') }}"
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create draft release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          first_line="${COMMIT_MESSAGE%%$'\n'*}"
+          tag="${first_line#release: }"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'Release commit must be named release: vX.Y.Z' >&2
+            exit 1
+          fi
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [[ "$tag" != "v$version" ]]; then
+            echo "Tag $tag does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+             gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+            echo "Release or tag $tag already exists; refusing to overwrite it" >&2
+            exit 1
+          fi
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "Strafe Lab $tag" \
+            --notes-file .github/release-notes.md --draft
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  package:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            extension: .exe
+          - os: ubuntu-22.04
+            platform: linux
+            extension: ''
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test Rust code
+        run: cargo test --locked
+      - name: Test the bundled WebAssembly engine
+        run: node --test tests/wasm.test.mjs
+      - name: Build Windows executable with a static C runtime
+        if: matrix.platform == 'windows'
+        env:
+          RUSTFLAGS: '-C target-feature=+crt-static'
+        run: cargo build --locked --release --bin strafe-lab
+      - name: Build Linux executable
+        if: matrix.platform == 'linux'
+        run: cargo build --locked --release --bin strafe-lab
+      - name: Smoke-test release executable
+        run: python scripts/smoke_release.py target/release/strafe-lab${{ matrix.extension }}
+      - name: Package executable and documentation
+        run: python scripts/package_release.py ${{ matrix.platform }} ${{ needs.prepare.outputs.tag }} target/release/strafe-lab${{ matrix.extension }} target/release-package
+      - name: Upload assets to the draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ '${{ matrix.platform }}' == 'windows' ]]; then extension=zip; else extension=tar.gz; fi
+          asset="target/release-package/Strafe-Lab-${TAG}-${{ matrix.platform }}-x86_64.${extension}"
+          gh release upload "$TAG" "$asset" "$asset.sha256" --repo "$GITHUB_REPOSITORY" --clobber
+
+  publish:
+    needs: [prepare, package]
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - name: Verify all four assets and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for suffix in windows-x86_64.zip windows-x86_64.zip.sha256 linux-x86_64.tar.gz linux-x86_64.tar.gz.sha256; do
+            name="Strafe-Lab-${TAG}-${suffix}"
+            grep -Fxq "$name" <<< "$assets" || { echo "Missing asset: $name" >&2; exit 1; }
+          done
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
