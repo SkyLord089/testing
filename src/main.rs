@@ -140,7 +140,7 @@ fn launch_app(url: &str) -> bool {
 
     for browser in candidates {
         if Command::new(browser)
-            .args([app_arg.as_str(), "--window-size=980,800", "--new-window"])
+            .args([app_arg.as_str(), "--window-size=1000,620", "--new-window"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()

@@ -35,7 +35,7 @@ def main():
         base = match.group(0)
         with urllib.request.urlopen(base, timeout=5) as response:
             assert response.status == 200
-            assert b"STRAFE" in response.read()
+            assert b"<canvas" in response.read()
         with urllib.request.urlopen(base + "engine.wasm", timeout=5) as response:
             assert response.headers.get_content_type() == "application/wasm"
             assert response.read(4) == b"\0asm"

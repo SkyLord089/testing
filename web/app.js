@@ -1,115 +1,69 @@
 (() => {
   "use strict";
 
-  // The simulation and the ASCII scene are produced in Rust/WebAssembly. The
-  // browser is just a window, input bridge, and monospace character painter.
-  const COLS = 120;
-  const ROWS = 72;
+  // Rust supplies the complete ASCII scene; this page is only its window and input bridge.
+  const COLS = 160;
+  const ROWS = 96;
   const CELL_W = 6;
-  const CELL_H = 7.5; // 120×72 cells in a true 720×540 (4:3) buffer.
+  const CELL_H = 7.5; // 960×720 logical 4:3, stretched by CSS to 16:9.
   const GLYPH_H = 8;
   const PALETTE = [
-    "#111712", "#1a211a", "#242d23", "#343a2c", "#454936",
-    "#565a40", "#707157", "#8b896a", "#a49d7c", "#beb393",
-    "#d7ccac", "#f1e7cb", "#574530", "#ba8e60", "#eac28a",
+    "#101510", "#171f18", "#212b21", "#303a2b", "#414b37",
+    "#566048", "#6d765a", "#8b9375", "#aab096", "#c8cbb3",
+    "#e1e1c7", "#f2ecd7", "#574530", "#ba8e60", "#eac28a",
     "#92ac83", "#c97458", "#3a4938", "#d1f0ad", "#6e7666",
+    "#111512", "#242b25", "#49554b", "#8b998a", "#c2cbba",
+    "#393729", "#5c5640", "#988b69", "#d3c19a", "#4b3020",
+    "#916344", "#dfaa71", "#292719", "#413b26", "#5b5236",
+    "#756947", "#92845d", "#afa17b", "#cbbd97",
   ];
   const KEY = {
     KeyW: 1 << 0, KeyS: 1 << 1, KeyA: 1 << 2, KeyD: 1 << 3,
-    ArrowLeft: 1 << 4, ArrowRight: 1 << 5, ArrowUp: 1 << 6, ArrowDown: 1 << 7,
     ShiftLeft: 1 << 8, ShiftRight: 1 << 8, KeyF: 1 << 9,
   };
   const FIRE = 1 << 9;
   const game = document.getElementById("game");
   const canvas = document.getElementById("screen");
   const ctx = canvas.getContext("2d", { alpha: false });
-  const loading = document.getElementById("loading");
-  const hint = document.getElementById("click-hint");
-  const hintTitle = document.getElementById("hint-title");
-  const hintSubtitle = document.getElementById("hint-subtitle");
-  const speedFill = document.getElementById("speed-fill");
-  const movementStatus = document.getElementById("movement-status");
-  const feedback = document.getElementById("shot-feedback");
-  const settings = document.getElementById("settings-panel");
-  const settingsButton = document.getElementById("settings-button");
-  const sensitivityInput = document.getElementById("sensitivity");
-  const sensitivityValue = document.getElementById("sensitivity-value");
-  const resetButton = document.getElementById("reset");
+  const errorElement = document.getElementById("error");
+  const heldKeys = new Set();
   let wasm;
-  let mouseX = 0;
-  let mouseY = 0;
   let mouseFire = false;
   let queuedShot = false;
-  let heldKeys = new Set();
   let lastTime;
-  let fallback = false;
-  let pendingLock = false;
-  let sensitivity = 1;
-  let previousResult = -1;
-
-  try {
-    const saved = Number(localStorage.getItem("strafe-lab-sensitivity"));
-    if (Number.isFinite(saved) && saved >= 0.1 && saved <= 8) sensitivity = saved;
-  } catch (_) { /* Settings storage can be blocked; play still works. */ }
-  sensitivityInput.value = String(sensitivity);
-  sensitivityValue.value = sensitivity.toFixed(2);
-
-  function setSettings(open) {
-    settings.hidden = !open;
-    settingsButton.setAttribute("aria-expanded", String(open));
-    if (open && document.pointerLockElement === game) document.exitPointerLock();
-  }
-  settingsButton.addEventListener("click", () => setSettings(settings.hidden));
-  document.getElementById("settings-close").addEventListener("click", () => {
-    setSettings(false);
-    settingsButton.focus();
-  });
-  sensitivityInput.addEventListener("input", () => {
-    sensitivity = Number(sensitivityInput.value);
-    sensitivityValue.value = sensitivity.toFixed(2);
-    try { localStorage.setItem("strafe-lab-sensitivity", String(sensitivity)); } catch (_) {}
-  });
-
-  function reset() {
-    if (wasm) wasm.game_reset();
-    heldKeys.clear();
-    mouseFire = false;
-    queuedShot = false;
-    mouseX = mouseY = 0;
-    feedback.textContent = "";
-    previousResult = -1;
-    game.focus({ preventScroll: true });
-  }
-  resetButton.addEventListener("click", reset);
 
   function clearInput() {
     heldKeys.clear();
     mouseFire = false;
     queuedShot = false;
-    mouseX = mouseY = 0;
   }
   document.addEventListener("keydown", (event) => {
-    if (event.code === "Escape") {
-      if (!settings.hidden) setSettings(false);
-      if (document.pointerLockElement === game) document.exitPointerLock();
-      clearInput();
-      return;
-    }
-    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.code === "KeyR") {
       event.preventDefault();
-      if (!event.repeat) reset();
+      if (!event.repeat && wasm) {
+        wasm.game_reset();
+        clearInput();
+      }
       return;
     }
     if (Object.prototype.hasOwnProperty.call(KEY, event.code)) {
       event.preventDefault();
       heldKeys.add(event.code);
-      // A very quick tap can begin and end between animation frames.
+      // Preserve a quick tap even if it starts and ends between animation frames.
       if (event.code === "KeyF" && !event.repeat) queuedShot = true;
     }
   });
-  document.addEventListener("keyup", (event) => {
-    heldKeys.delete(event.code);
+  document.addEventListener("keyup", (event) => heldKeys.delete(event.code));
+  game.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    game.focus({ preventScroll: true });
+    mouseFire = true;
+    queuedShot = true;
+  });
+  document.addEventListener("pointerup", (event) => {
+    if (event.button === 0) mouseFire = false;
   });
   window.addEventListener("blur", clearInput);
   document.addEventListener("visibilitychange", () => {
@@ -117,81 +71,13 @@
     lastTime = undefined;
   });
 
-  function useFallback() {
-    pendingLock = false;
-    fallback = true;
-    hint.hidden = false;
-    hintTitle.textContent = "МЫШЬ НЕ ЗАХВАЧЕНА";
-    hintSubtitle.textContent = "стрелки — обзор, F или ЛКМ — выстрел";
-  }
-  async function captureMouse() {
-    if (!game.requestPointerLock) return useFallback();
-    pendingLock = true;
-    try {
-      // Raw movement avoids OS acceleration where the browser permits it.
-      try {
-        await game.requestPointerLock({ unadjustedMovement: true });
-      } catch (err) {
-        // Some browsers do not support raw input, but do support pointer lock.
-        if (err && err.name === "NotSupportedError") await game.requestPointerLock();
-        else throw err;
-      }
-    } catch (_) {
-      useFallback();
-    } finally {
-      pendingLock = false;
-    }
-  }
-  game.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || !wasm) return;
-    event.preventDefault();
-    game.focus({ preventScroll: true });
-    if (document.pointerLockElement === game || fallback) {
-      mouseFire = true;
-      queuedShot = true;
-    } else if (!pendingLock) captureMouse();
-  });
-  document.addEventListener("pointerup", (event) => {
-    if (event.button === 0) mouseFire = false;
-  });
-  document.addEventListener("pointerlockchange", () => {
-    const locked = document.pointerLockElement === game;
-    game.classList.toggle("locked", locked);
-    if (locked) {
-      // Some browsers emit a synthetic warp movement before lockchange.
-      // Discard it so clicking the field does not jerk the crosshair.
-      mouseX = mouseY = 0;
-      fallback = false;
-      hint.hidden = true;
-    } else {
-      clearInput();
-      if (!fallback) {
-        hint.hidden = false;
-        hintTitle.textContent = "КЛИКНИ ПО ПОЛЮ";
-        hintSubtitle.textContent = "чтобы захватить мышь и начать";
-      }
-    }
-  });
-  document.addEventListener("pointerlockerror", () => {
-    if (!pendingLock && document.pointerLockElement !== game) useFallback();
-  });
-  document.addEventListener("mousemove", (event) => {
-    if (document.pointerLockElement === game && game.classList.contains("locked")) {
-      mouseX += event.movementX || 0;
-      mouseY += event.movementY || 0;
-    }
-  });
-  game.addEventListener("contextmenu", (event) => event.preventDefault());
-
   function inputMask() {
-    let mask = (mouseFire || queuedShot) ? FIRE : 0;
+    let mask = mouseFire || queuedShot ? FIRE : 0;
     for (const code of heldKeys) mask |= KEY[code] || 0;
     return mask;
   }
 
-  // Cache glyph pixels once. Rendering each of 8,640 characters with fillText
-  // every frame is far too slow on some machines; composing the cached cells
-  // into one ImageData buffer keeps the trainer responsive without a GPU.
+  // Cache glyph pixels once instead of drawing 15,360 characters per frame.
   const glyphCanvas = document.createElement("canvas");
   glyphCanvas.width = 128 * CELL_W;
   glyphCanvas.height = GLYPH_H;
@@ -234,7 +120,6 @@
       const r = (back[0] * (255 - a) + fore[0] * a + 127) / 255 | 0;
       const g = (back[1] * (255 - a) + fore[1] * a + 127) / 255 | 0;
       const b = (back[2] * (255 - a) + fore[2] * a + 127) / 255 | 0;
-      // ImageData is RGBA, represented by little-endian 32-bit pixels.
       cached[i] = (0xff000000 | (b << 16) | (g << 8) | r) >>> 0;
     }
     glyphCache.set(key, cached);
@@ -264,28 +149,12 @@
     ctx.putImageData(image, 0, 0);
   }
 
-  function updateHud() {
-    const speed = wasm.game_speed();
-    const accurate = Boolean(wasm.game_accurate());
-    speedFill.style.width = `${Math.max(0, Math.min(100, speed * 100))}%`;
-    speedFill.classList.toggle("moving", !accurate);
-    movementStatus.classList.toggle("moving", !accurate);
-    movementStatus.textContent = accurate ? "ТОЧНЫЙ ВЫСТРЕЛ" : "В ДВИЖЕНИИ";
-    const result = wasm.game_result();
-    if (result !== previousResult) {
-      feedback.textContent = ["", "ПРОМАХ", "ПОПАДАНИЕ", "ПОПАДАНИЕ В ГОЛОВУ"][result] || "";
-      previousResult = result;
-    }
-  }
-
   function frame(now) {
     const dt = lastTime === undefined ? 0 : Math.min((now - lastTime) / 1000, 0.05);
     lastTime = now;
-    const ptr = wasm.game_frame(dt, inputMask(), mouseX, mouseY, sensitivity);
+    const ptr = wasm.game_frame(dt, inputMask());
     queuedShot = false;
-    mouseX = mouseY = 0;
     paint(new Uint8Array(wasm.memory.buffer, ptr, COLS * ROWS * 4));
-    updateHud();
     requestAnimationFrame(frame);
   }
 
@@ -294,16 +163,13 @@
       const response = await fetch("/engine.wasm");
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const bytes = await response.arrayBuffer();
-      const module = await WebAssembly.instantiate(bytes, {
-        env: { sinf: Math.sin, cosf: Math.cos, sqrtf: Math.sqrt },
-      });
+      const module = await WebAssembly.instantiate(bytes, { env: { sqrtf: Math.sqrt } });
       wasm = module.instance.exports;
-      loading.hidden = true;
       requestAnimationFrame(frame);
     } catch (error) {
       console.error("Не удалось запустить Rust-движок:", error);
-      loading.classList.add("error");
-      loading.textContent = "НЕ УДАЛОСЬ ЗАГРУЗИТЬ ДВИЖОК. Запустите приложение через cargo run и откройте адрес из терминала.";
+      errorElement.textContent = "Не удалось загрузить комнату. Откройте адрес, напечатанный в терминале приложения.";
+      errorElement.hidden = false;
     }
   }
   start();

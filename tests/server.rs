@@ -50,8 +50,8 @@ fn local_server_serves_only_the_bundled_game() {
     let html = request(port, "GET", "/");
     assert!(html.starts_with(b"HTTP/1.1 200 OK"));
     assert!(html
-        .windows(b"STRAFE".len())
-        .any(|window| window == b"STRAFE"));
+        .windows(b"<canvas".len())
+        .any(|window| window == b"<canvas"));
     let wasm = request(port, "GET", "/engine.wasm");
     assert!(wasm
         .windows(b"application/wasm".len())

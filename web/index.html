@@ -3,68 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#151a17">
-  <title>Strafe Lab — ASCII-тренажёр</title>
+  <meta name="theme-color" content="#101510">
+  <title>Strafe Lab — ASCII-комната</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <main class="app" aria-label="Strafe Lab, тренажёр стрейфов">
-    <header class="titlebar">
-      <div class="identity">
-        <div class="mark" aria-hidden="true"><span>+</span><i></i></div>
-        <div>
-          <div class="wordmark">STRAFE <span>/</span> LAB<span class="wordmark-period">.</span></div>
-          <div class="identity-caption">ASCII MOVEMENT TRAINER</div>
-        </div>
-      </div>
-      <div class="title-actions">
-        <div class="connection"><span></span> ЛОКАЛЬНАЯ СЕССИЯ</div>
-        <span class="title-divider" aria-hidden="true"></span>
-        <button class="settings-button" id="settings-button" type="button" aria-expanded="false" aria-controls="settings-panel" title="Настройки чувствительности">
-          <span class="settings-symbol" aria-hidden="true">&#9881;</span><span class="settings-text">НАСТРОЙКИ</span>
-        </button>
-        <div class="settings-panel" id="settings-panel" hidden>
-          <div class="settings-heading"><span>ПАРАМЕТРЫ</span><button id="settings-close" type="button" aria-label="Закрыть настройки">×</button></div>
-          <label for="sensitivity">Чувствительность мыши <output id="sensitivity-value" for="sensitivity">1.00</output></label>
-          <input id="sensitivity" type="range" min="0.1" max="8" step="0.05" value="1">
-          <p>Можно начать со значения sens из CS2. Фактическая скорость зависит от DPI и настроек мыши.</p>
-        </div>
-      </div>
-    </header>
-
-    <section class="screen-frame" aria-label="Тренировочная площадка">
-      <div class="game" id="game" tabindex="0" role="application" aria-label="Игровое поле. Кликните для захвата мыши. WASD — движение, стрелки или мышь — обзор, F или левая кнопка мыши — выстрел, R — сброс.">
-        <canvas id="screen" width="720" height="540" aria-hidden="true"></canvas>
-        <div class="screen-grain" aria-hidden="true"></div>
-        <div class="top-overlay" aria-hidden="true">
-          <div class="range-label"><span class="tiny-line"></span><div><span class="overline">ТРЕНИРОВОЧНАЯ ЗОНА</span><strong>СТРЕЙФ / 01</strong></div></div>
-          <div class="aspect-label"><span>4:3</span><i>→</i> STRETCHED</div>
-        </div>
-        <div class="shot-feedback" id="shot-feedback" aria-live="polite"></div>
-        <div class="click-hint" id="click-hint">
-          <span class="hint-cross" aria-hidden="true">+</span>
-          <span><strong id="hint-title">КЛИКНИ ПО ПОЛЮ</strong><small id="hint-subtitle">чтобы захватить мышь и начать</small></span>
-        </div>
-        <div class="bottom-overlay" aria-hidden="true">
-          <div class="movement-indicator">
-            <div class="movement-heading"><span>СОСТОЯНИЕ</span><i></i><span id="movement-status">ТОЧНЫЙ ВЫСТРЕЛ</span></div>
-            <div class="speed-track"><div id="speed-fill"></div><span></span></div>
-            <div class="movement-caption"><span>СКОРОСТЬ</span><span>ДВИЖЕНИЕ</span></div>
-          </div>
-          <div class="weapon-label"><span>ТЕРРОРИСТЫ / ОСНОВНОЕ</span><strong>AK-47 <i>◈</i></strong></div>
-        </div>
-        <div class="loading" id="loading"><span class="loading-plus">+</span> ЗАГРУЗКА ТРЕНАЖЁРА<span class="loading-dots">...</span></div>
-      </div>
-    </section>
-
-    <footer class="controls">
-      <div class="control-group"><div class="key-pair"><kbd>A</kbd><kbd>D</kbd></div><div><strong>СТРЕЙФ</strong><span>влево / вправо</span></div></div>
-      <div class="control-group"><div class="key-pair"><kbd>W</kbd><kbd>S</kbd></div><div><strong>ДВИЖЕНИЕ</strong><span>вперёд / назад</span></div></div>
-      <div class="control-group"><div class="mouse-key" aria-hidden="true"><span></span></div><div><strong>ОБЗОР</strong><span>мышь / стрелки</span></div></div>
-      <div class="control-group"><kbd class="wide-key">ЛКМ</kbd><div><strong>ВЫСТРЕЛ</strong><span>или клавиша F</span></div></div>
-      <button class="reset-button" id="reset" type="button" title="Вернуться в исходное положение (R)"><kbd>R</kbd><span>СБРОС</span><span class="reset-arrow" aria-hidden="true">↺</span></button>
-    </footer>
-    <div class="tip"><span class="tip-index">// СОВЕТ</span><span>Останови стрейф противоположной клавишей перед выстрелом.</span><span class="tip-end">ESC — ОСВОБОДИТЬ МЫШЬ</span></div>
+  <main id="game" class="game" tabindex="0" role="application" aria-label="ASCII-комната от первого лица. WASD — движение, Shift — шаг, R — сброс, F или левая кнопка мыши — вспышка выстрела.">
+    <canvas id="screen" width="960" height="720" aria-hidden="true"></canvas>
+    <p id="error" class="error" role="alert" hidden></p>
+    <noscript><p class="error">Для отображения комнаты включите JavaScript.</p></noscript>
   </main>
   <script src="/app.js" defer></script>
 </body>
