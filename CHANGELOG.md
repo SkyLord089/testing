@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2 — STEP parser compatibility
+- Accept valid empty aggregates used by STEP exports from HOOPS Exchange / Plasticity through the upstream ruststep parser fix.
+- Add a regression test for the uploaded AP203 file and replace the misleading AP203/AP214 error hint.
+
 ## 0.2.1 — STEP upload feedback fix
 - Fixed a JavaScript function naming mismatch that caused the file-selection handler to fail before rendering the imported model.
 - Confirmed the upload flow in a simulated browser page with the bundled UI scripts and `cube.step` fixture.
