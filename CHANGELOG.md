@@ -1,7 +1,7 @@
 # Changelog
 
 ## 0.2.4 — bounded STEP tessellation resources
-- Limit Truck/Rayon tessellation to at most two workers with larger worker stacks to reduce memory spikes on complex STEP assemblies.
+- Limit Truck/Rayon tessellation to at most two workers and run HTTP requests on larger-stack threads to reduce memory spikes and stack exhaustion on complex STEP assemblies.
 - Use the faster parameter-based tessellation first and invoke robust nearest-point fallback only for faces it cannot mesh.
 
 ## 0.2.3 — clearer STEP failure state
