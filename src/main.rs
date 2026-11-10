@@ -170,6 +170,16 @@ fn run()->Result<(),String>{
 }
 fn main(){if env::args().len()==1{if let Err(e)=launch_app(){eprintln!("facetforge: {e}");process::exit(2)}return}if let Err(e)=run(){eprintln!("facetforge: {e}");process::exit(2)}}
 
+#[cfg(test)]mod uploaded_step_regression{
+#[test]
+fn user_uploaded_step_parses(){
+let step=include_str!("../SAI-GRY_AR15_2026-11-10-204805.step");
+let parsed=truck_stepio::r#in::ruststep::parser::parse(step);
+assert!(parsed.is_ok(),"uploaded STEP syntax parse failed: {:?}",parsed.err());
+let table=truck_stepio::r#in::Table::from_step(step).expect("Truck could not build a table from the uploaded STEP file");
+assert!(!table.shell.is_empty(),"uploaded STEP parsed but contains no B-REP shells");
+}
+}
 #[cfg(test)]mod tests{use super::*;
 #[test]fn obj_fan_triangulates_and_cleans(){let m=parse_obj("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3 4\n").unwrap();assert_eq!(m.faces.len(),2);let o=optimize(m,100.0,1.0);assert_eq!(o.faces.len(),2);}
 #[test]fn binary_stl_is_read(){let mut b=vec![0u8;84+50];b[80..84].copy_from_slice(&1u32.to_le_bytes());let pts=[[0f32,0.,0.],[1.,0.,0.],[0.,1.,0.]];for (i,p) in pts.iter().enumerate(){let at=96+i*12;for j in 0..3{b[at+j*4..at+j*4+4].copy_from_slice(&p[j].to_le_bytes());}}assert_eq!(parse_stl(&b).unwrap().faces.len(),1);}
