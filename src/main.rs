@@ -67,7 +67,7 @@ fn circle_radii(step:&str)->Vec<f64>{
     let upper=step.to_ascii_uppercase();let mut cursor=0;let mut radii=Vec::new();
     while let Some(offset)=upper[cursor..].find("CIRCLE"){let start=cursor+offset;let after=start+6;let Some(open_rel)=upper[after..].find('(')else{break};let open=after+open_rel;let bytes=upper.as_bytes();let mut depth=0i32;let mut quoted=false;let mut close=None;
         for (i,&c) in bytes.iter().enumerate().skip(open){if c==b'\''{quoted=!quoted}if quoted{continue}if c==b'('{depth+=1}else if c==b')'{depth-=1;if depth==0{close=Some(i);break}}}
-        if let Some(end)=close{let fields:Vec<_>=upper[open+1..end].split(',').collect();if let Some(last)=fields.last(){let literal=last.trim().replace('D','E');if let Ok(r)=literal.parse::<f64>(){if r.is_finite()&&r>1e-12{radii.push(r)}}}cursor=end+1}else{break}
+        if let Some(end)=close{let fields:Vec<_>=upper[open+1..end].split(',').collect();if let Some(last)=fields.last(){let literal=last.trim().replace('D',"E");if let Ok(r)=literal.parse::<f64>(){if r.is_finite()&&r>1e-12{radii.push(r)}}}cursor=end+1}else{break}
     }
     radii.sort_by(f64::total_cmp);radii.dedup_by(|a,b|(*a-*b).abs()<=1e-12*a.abs().max(b.abs()).max(1.0));radii
 }
