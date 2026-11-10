@@ -29,4 +29,4 @@ For STEP, `--tolerance` is the maximum chord deviation in the model's coordinate
 
 ## Known limitations
 
-This is an early CAD-first rebuild, not yet the full topology optimizer requested. In particular, it does not yet measure and enforce the per-circle vertex-count-divisible-by-four rule, guarantee a target polygon count, or perform production-grade feature-aware edge collapse. Some STEP assembly/vendor extensions still need testing. See [CHANGELOG](CHANGELOG.md).
+This is a CAD-aware tessellator, not yet the full topology optimizer requested. Complete circular STEP curves are aligned to segment counts divisible by four; this does not apply to partial arcs. The tool does not yet guarantee an exact target polygon count or perform production-grade feature-aware edge collapse. Some STEP assembly/vendor extensions still need testing. See [CHANGELOG](CHANGELOG.md).
