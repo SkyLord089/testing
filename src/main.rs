@@ -93,19 +93,27 @@ fn align_circle_tolerance(step:&str,requested:f64)->f64{
 fn tessellate_step(step:&str,tolerance:f64)->Result<String,String>{
     let used_tolerance=align_circle_tolerance(step,tolerance);
     let table=Table::from_step(step).ok_or_else(||"STEP syntax could not be parsed. This error does not identify the AP schema; check the file is complete ISO-10303-21 text.".to_string())?;
-    let mut combined=PolygonMesh::default();let mut shells=0usize;
+    let mut combined=PolygonMesh::default();let mut shells=0usize;let mut robust_fallback_faces=0usize;
     let workers=std::thread::available_parallelism().map(|n|n.get().min(2)).unwrap_or(1);
     let pool=rayon::ThreadPoolBuilder::new().num_threads(workers).stack_size(8*1024*1024).build().map_err(|e|format!("Could not start bounded tessellation workers: {e}"))?;
     for shell in table.shell.values(){
         let compressed=table.to_compressed_shell(shell).map_err(|e|format!("Could not read a STEP surface or boundary: {e}"))?;
-        let mut mesh=pool.install(||compressed.robust_triangulation(used_tolerance)).to_polygon();
+        let mut tessellated=pool.install(||compressed.triangulation(used_tolerance));
+        let failed:Vec<usize>=tessellated.faces.iter().enumerate().filter_map(|(i,face)|face.surface.is_none().then_some(i)).collect();
+        if !failed.is_empty(){
+            robust_fallback_faces+=failed.len();
+            let mut fallback=compressed.clone();fallback.faces=failed.iter().map(|&i|compressed.faces[i].clone()).collect();
+            let robust=pool.install(||fallback.robust_triangulation(used_tolerance));
+            for (target,face) in failed.into_iter().zip(robust.faces){tessellated.faces[target].surface=face.surface;}
+        }
+        let mut mesh=tessellated.to_polygon();
         mesh.put_together_same_attrs(5.0e-5).remove_degenerate_faces().remove_unused_attrs();
         combined.merge(mesh);shells+=1;
     }
     if shells==0||combined.faces().is_empty(){return Err("No supported solid or shell geometry was found in the STEP file.".into())}
     let mut bytes=Vec::new();obj::write(&combined,&mut bytes).map_err(|e|format!("Could not export tessellated geometry: {e}"))?;
     let output=String::from_utf8(bytes).map_err(|e|format!("Could not encode generated mesh: {e}"))?;
-    Ok(format!("# FacetForge effective tolerance={used_tolerance:.9}\n# Full circles sampled at increments divisible by four\n{output}"))
+    Ok(format!("# FacetForge effective tolerance={used_tolerance:.9}\n# Full circles sampled at increments divisible by four\n# Robust fallback faces={robust_fallback_faces}\n{output}"))
 }
 
 #[derive(Clone, Copy, Debug, Default)]
