@@ -208,7 +208,7 @@ fn main(){
 let args:Vec<String>=env::args().collect();
 if args.get(1).map(|s|s.as_str())==Some("--step-worker"){
 let tolerance=args.get(2).and_then(|s|s.parse::<f64>().ok()).unwrap_or(0.08);
-let result=(||{let mut step=String::new();std::io::stdin().read_to_string(&mut step).map_err(|e|format!("Cannot read STEP worker input: {e}"))?;let mesh=tessellate_step(&step,tolerance)?;std::io::stdout().write_all(mesh.as_bytes()).map_err(|e|format!("Cannot write STEP worker output: {e}"))})());
+let result=(||{let mut step=String::new();std::io::stdin().read_to_string(&mut step).map_err(|e|format!("Cannot read STEP worker input: {e}"))?;let mesh=tessellate_step(&step,tolerance)?;std::io::stdout().write_all(mesh.as_bytes()).map_err(|e|format!("Cannot write STEP worker output: {e}"))})();
 if let Err(e)=result{eprintln!("STEP worker: {e}");process::exit(2)}return
 }
 if args.len()==1{if let Err(e)=launch_app(){eprintln!("facetforge: {e}");process::exit(2)}return}
