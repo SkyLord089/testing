@@ -177,6 +177,8 @@ let step=include_str!("../SAI-GRY_AR15_2026-11-10-204805.step");
 assert!(step.contains("AP203_CONFIGURATION_CONTROLLED_3D_DESIGN"));
 let table=truck_stepio::r#in::Table::from_step(step).expect("uploaded AP203 STEP should parse");
 assert!(!table.shell.is_empty(),"uploaded AP203 STEP should contain B-REP shells");
+let mesh=tessellate_step(step,0.08).expect("uploaded AP203 STEP should tessellate");
+assert!(mesh.lines().any(|line|line.starts_with("f ")),"uploaded AP203 STEP should produce mesh faces");
 }
 }
 #[cfg(test)]mod tests{use super::*;
