@@ -186,7 +186,7 @@ current.push_str(line);current.push('\n');
 }
 if !current.trim().is_empty(){records.push(current);}
 for (index,record) in records.iter().enumerate(){
-if let Err(error)=truck_stepio::r#in::ruststep::parser::exchange::entity_instance(record){
+if let Err(error)=truck_stepio::r#in::ruststep::parser::exchange::entity_instance(record.trim_start()){
 panic!("error: STEP entity {} fails individually: {}",index+1,format!("{error:?}").replace('\n'," | "));
 }
 }
