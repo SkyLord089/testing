@@ -78,8 +78,12 @@ fn handle_connection(mut stream:TcpStream){
         match result{Ok(obj)=>respond(stream,"200 OK","text/plain; charset=utf-8",obj.as_bytes()),Err(e)=>respond(stream,"422 Unprocessable Content","text/plain; charset=utf-8",e.as_bytes())}
         return
     }
-    let (mime,body)=match path{"/"|"/index.html"=>("text/html; charset=utf-8",APP_HTML),"/style.css"=>("text/css; charset=utf-8",APP_CSS),"/app.js"=>("text/javascript; charset=utf-8",APP_JS),_=>{respond(stream,"404 Not Found","text/plain",b"Not found");return}};
-    respond(stream,"200 OK",mime,body.as_bytes());
+    match path{
+        "/"|"/index.html"=>{let html=APP_HTML.replace("__FACETFORGE_VERSION__",env!("CARGO_PKG_VERSION"));respond(stream,"200 OK","text/html; charset=utf-8",html.as_bytes())},
+        "/style.css"=>respond(stream,"200 OK","text/css; charset=utf-8",APP_CSS.as_bytes()),
+        "/app.js"=>respond(stream,"200 OK","text/javascript; charset=utf-8",APP_JS.as_bytes()),
+        _=>respond(stream,"404 Not Found","text/plain",b"Not found"),
+    }
 }
 
 fn launch_app()->Result<(),String>{
@@ -234,7 +238,9 @@ if let Err(e)=run(){eprintln!("facetforge: {e}");process::exit(2)}
 }
 
 #[cfg(test)]mod health_endpoint_regression{use super::*;
-#[test]fn local_health_endpoint_reports_build_version(){let listener=TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();let worker=std::thread::spawn(move||handle_connection(listener.accept().unwrap().0));let mut client=TcpStream::connect(address).unwrap();client.write_all(b"GET /api/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").unwrap();let mut response=Vec::new();client.read_to_end(&mut response).unwrap();worker.join().unwrap();let response=String::from_utf8_lossy(&response);assert!(response.starts_with("HTTP/1.1 200 OK"),"{response}");assert!(response.contains(env!("CARGO_PKG_VERSION")),"{response}");}
+fn get(path:&str)->String{let listener=TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();let worker=std::thread::spawn(move||handle_connection(listener.accept().unwrap().0));let mut client=TcpStream::connect(address).unwrap();write!(client,"GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").unwrap();let mut response=Vec::new();client.read_to_end(&mut response).unwrap();worker.join().unwrap();String::from_utf8_lossy(&response).into_owned()}
+#[test]fn local_health_endpoint_reports_build_version(){let response=get("/api/health");assert!(response.starts_with("HTTP/1.1 200 OK"),"{response}");assert!(response.contains(env!("CARGO_PKG_VERSION")),"{response}");}
+#[test]fn served_ui_uses_engine_build_version(){let response=get("/");assert!(response.starts_with("HTTP/1.1 200 OK"),"{response}");assert!(response.contains(&format!("{} · STEP kernel",env!("CARGO_PKG_VERSION"))),"{response}");assert!(!response.contains("__FACETFORGE_VERSION__"),"version placeholder was not replaced");}
 }
 #[cfg(test)]mod uploaded_step_regression{use super::*;
 #[test]

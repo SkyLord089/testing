@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.7 — keep embedded UI and engine versions in sync
+- Inject the displayed UI version from the Rust package version at runtime so shipped UI and local engine cannot drift apart on later releases.
+- Add a regression test for the embedded page's displayed build version.
+
 ## 0.2.6 — retry memory-limited tessellation more coarsely
 - If the isolated STEP worker reports an allocation failure, retry with progressively coarser chord tolerances up to 0.5 model units; the UI reports the effective tolerance from the generated mesh.
 - Avoid an unnecessary full-size copy of the uploaded STEP text in the web server.
