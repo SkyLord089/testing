@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 — STEP upload feedback fix
+- Fixed a JavaScript function naming mismatch that caused the file-selection handler to fail before rendering the imported model.
+- Confirmed the upload flow in a simulated browser page with the bundled UI scripts and `cube.step` fixture.
+
 ## 0.2.0 — CAD-first rebuild
 
 - Replaced the mesh-first screen with a CAD-first workflow and a redesigned topology workspace.
