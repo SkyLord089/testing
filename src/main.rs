@@ -33,7 +33,7 @@ fn handle_connection(mut stream:TcpStream){
         let n=match stream.read(&mut chunk){Ok(0)|Err(_)=>return,Ok(n)=>n};request.extend_from_slice(&chunk[..n]);
         if request.len()>body_end+65536{return}
     }
-    let (path,query)=target.split_once('?').unwrap_or((target,""));
+    let (path,query)=target.split_once('?').unwrap_or((target.as_str(),""));
     if method=="POST"&&path=="/api/step"{
         let tolerance=query.split('&').find_map(|part|part.strip_prefix("tolerance=")).and_then(|v|v.parse::<f64>().ok()).filter(|v|v.is_finite()).unwrap_or(0.1).clamp(0.001,100.0);
         let data=&request[header_end..body_end];
