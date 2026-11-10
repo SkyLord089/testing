@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.6 — retry memory-limited tessellation more coarsely
+- If the isolated STEP worker reports an allocation failure, retry with progressively coarser chord tolerances up to 0.5 model units; the UI reports the effective tolerance from the generated mesh.
+- Avoid an unnecessary full-size copy of the uploaded STEP text in the web server.
+
 ## 0.2.5 — isolate CAD tessellation failures
 - Run STEP tessellation in a child process so memory exhaustion or a fatal CAD-kernel crash cannot close the local web server terminal; return the worker exit details to the UI instead.
 

@@ -16,7 +16,7 @@ fn run_step_worker(step:&str,tolerance:f64)->Result<String,String>{
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(||tessellate_step(step,tolerance))){Ok(result)=>result,Err(_)=>Err("STEP tessellator panicked while processing this model.".into())}
 }
 #[cfg(not(test))]
-fn run_step_worker(step:&str,tolerance:f64)->Result<String,String>{
+fn run_step_worker_once(step:&str,tolerance:f64)->Result<String,String>{
     let executable=env::current_exe().map_err(|e|format!("Cannot locate the FacetForge executable: {e}"))?;
     let mut child=Command::new(executable).arg("--step-worker").arg(tolerance.to_string()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e|format!("Cannot start isolated STEP worker: {e}"))?;
     let mut stdin=child.stdin.take().ok_or("Cannot open isolated STEP worker input")?;
@@ -25,6 +25,24 @@ fn run_step_worker(step:&str,tolerance:f64)->Result<String,String>{
     let output=child.wait_with_output().map_err(|e|format!("Could not collect STEP worker output: {e}"))?;
     if !output.status.success(){let detail=String::from_utf8_lossy(&output.stderr);let detail=detail.lines().take(12).collect::<Vec<_>>().join(" | ");return Err(format!("Isolated STEP worker exited with {}: {}",output.status,detail))}
     String::from_utf8(output.stdout).map_err(|e|format!("STEP worker returned invalid UTF-8 mesh data: {e}"))
+}
+#[cfg(not(test))]
+fn run_step_worker(step:&str,tolerance:f64)->Result<String,String>{
+    let mut attempt=tolerance;
+    let mut attempts=Vec::new();
+    loop{
+        attempts.push(attempt);
+        match run_step_worker_once(step,attempt){
+            Ok(mesh)=>return Ok(mesh),
+            Err(error) if error.to_ascii_lowercase().contains("memory allocation")||error.to_ascii_lowercase().contains("0xc0000409")=>{
+                let next=(attempt*2.0).min(0.5);
+                if next<=attempt{return Err(format!("STEP tessellation ran out of memory; tried coarser tolerances {}. Worker detail: {error}",attempts.iter().map(|t|format!("{t:.3}")).collect::<Vec<_>>().join(", ")))}
+                eprintln!("STEP worker ran out of memory at tolerance {attempt:.3}; retrying with coarser tolerance {next:.3}.");
+                attempt=next;
+            }
+            Err(error)=>return Err(error),
+        }
+    }
 }
 fn handle_connection(mut stream:TcpStream){
     let _=stream.set_read_timeout(Some(std::time::Duration::from_secs(180)));
@@ -56,7 +74,7 @@ fn handle_connection(mut stream:TcpStream){
     if method=="POST"&&path=="/api/step"{
         let tolerance=query.split('&').find_map(|part|part.strip_prefix("tolerance=")).and_then(|v|v.parse::<f64>().ok()).filter(|v|v.is_finite()).unwrap_or(0.1).clamp(0.001,100.0);
         let data=&request[header_end..body_end];
-        let result=String::from_utf8(data.to_vec()).map_err(|_|"STEP file is not valid UTF-8 text.".to_string()).and_then(|step|run_step_worker(&step,tolerance));
+        let result=std::str::from_utf8(data).map_err(|_|"STEP file is not valid UTF-8 text.".to_string()).and_then(|step|run_step_worker(step,tolerance));
         match result{Ok(obj)=>respond(stream,"200 OK","text/plain; charset=utf-8",obj.as_bytes()),Err(e)=>respond(stream,"422 Unprocessable Content","text/plain; charset=utf-8",e.as_bytes())}
         return
     }
