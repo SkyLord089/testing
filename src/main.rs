@@ -111,31 +111,10 @@ fn launch_app()->Result<(),String>{
     Ok(())
 }
 
-fn circle_radii(step:&str)->Vec<f64>{
-    let upper=step.to_ascii_uppercase();let mut cursor=0;let mut radii=Vec::new();
-    while let Some(offset)=upper[cursor..].find("CIRCLE"){let start=cursor+offset;let after=start+6;let Some(open_rel)=upper[after..].find('(')else{break};let open=after+open_rel;let bytes=upper.as_bytes();let mut depth=0i32;let mut quoted=false;let mut close=None;
-        for (i,&c) in bytes.iter().enumerate().skip(open){if c==b'\''{quoted=!quoted}if quoted{continue}if c==b'('{depth+=1}else if c==b')'{depth-=1;if depth==0{close=Some(i);break}}}
-        if let Some(end)=close{let fields:Vec<_>=upper[open+1..end].split(',').collect();if let Some(last)=fields.last(){let literal=last.trim().replace('D',"E");if let Ok(r)=literal.parse::<f64>(){if r.is_finite()&&r>1e-12{radii.push(r)}}}cursor=end+1}else{break}
-    }
-    radii.sort_by(f64::total_cmp);radii.dedup_by(|a,b|(*a-*b).abs()<=1e-12*a.abs().max(b.abs()).max(1.0));radii
-}
-fn circle_divisions(radius:f64,tolerance:f64)->usize{
-    if !radius.is_finite()||radius<=0.0{return 4}
-    let ratio=(tolerance/radius).clamp(1e-12,0.8);let delta=2.0*(1.0-ratio).acos();
-    if !delta.is_finite()||delta<=0.0{return 1_000_000}
-    1+((2.0*std::f64::consts::PI)/delta).floor() as usize
-}
-fn align_circle_tolerance(step:&str,requested:f64)->f64{
-    let radii=circle_radii(step);let mut tolerance=requested.clamp(1e-6,100.0);
-    for _ in 0..256{
-        let mut next=tolerance;let mut aligned=true;
-        for &radius in &radii{let count=circle_divisions(radius,tolerance);if count%4!=0{aligned=false;let target=(count/4+1)*4;let threshold=radius*(1.0-(std::f64::consts::PI/(target-1) as f64).cos())*(1.0-1e-10);next=next.min(threshold.max(1e-6));}}
-        if aligned||next>=tolerance*(1.0-1e-14){break}tolerance=next;
-    }
-    tolerance
-}
 fn tessellate_step(step:&str,tolerance:f64)->Result<String,String>{
-    let used_tolerance=align_circle_tolerance(step,tolerance);
+    // Honor the selected tolerance directly. Globally aligning every circle's
+    // segment count can force an enormous, unintended refinement on assemblies.
+    let used_tolerance=tolerance.clamp(1e-6,100.0);
     let table=Table::from_step(step).ok_or_else(||"STEP syntax could not be parsed. This error does not identify the AP schema; check the file is complete ISO-10303-21 text.".to_string())?;
     let mut combined=PolygonMesh::default();let mut shells=0usize;let mut robust_fallback_faces=0usize;
     let workers=std::thread::available_parallelism().map(|n|n.get().min(2)).unwrap_or(1);
@@ -157,7 +136,7 @@ fn tessellate_step(step:&str,tolerance:f64)->Result<String,String>{
     if shells==0||combined.faces().is_empty(){return Err("No supported solid or shell geometry was found in the STEP file.".into())}
     let mut bytes=Vec::new();obj::write(&combined,&mut bytes).map_err(|e|format!("Could not export tessellated geometry: {e}"))?;
     let output=String::from_utf8(bytes).map_err(|e|format!("Could not encode generated mesh: {e}"))?;
-    Ok(format!("# FacetForge effective tolerance={used_tolerance:.9}\n# Full circles sampled at increments divisible by four\n# Robust fallback faces={robust_fallback_faces}\n{output}"))
+    Ok(format!("# FacetForge effective tolerance={used_tolerance:.9}\n# Robust fallback faces={robust_fallback_faces}\n{output}"))
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -249,13 +228,19 @@ let step=include_str!("../SAI-GRY_AR15_2026-11-10-204805.step");
 assert!(step.contains("AP203_CONFIGURATION_CONTROLLED_3D_DESIGN"));
 let table=truck_stepio::r#in::Table::from_step(step).expect("uploaded AP203 STEP should parse");
 assert!(!table.shell.is_empty(),"uploaded AP203 STEP should contain B-REP shells");
-
+}
+#[test]
+fn uploaded_ap203_step_tessellates_at_requested_tolerance(){
+let step=include_str!("../SAI-GRY_AR15_2026-11-10-204805.step");
+let obj=tessellate_step(step,0.08).expect("uploaded STEP should tessellate at the requested tolerance");
+assert!(obj.contains("effective tolerance=0.080000000"));
+assert!(obj.lines().any(|line|line.starts_with("f ")),"mesh output should contain faces");
 }
 }
 #[cfg(test)]mod tests{use super::*;
 #[test]fn obj_fan_triangulates_and_cleans(){let m=parse_obj("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3 4\n").unwrap();assert_eq!(m.faces.len(),2);let o=optimize(m,100.0,1.0);assert_eq!(o.faces.len(),2);}
 #[test]fn binary_stl_is_read(){let mut b=vec![0u8;84+50];b[80..84].copy_from_slice(&1u32.to_le_bytes());let pts=[[0f32,0.,0.],[1.,0.,0.],[0.,1.,0.]];for (i,p) in pts.iter().enumerate(){let at=96+i*12;for j in 0..3{b[at+j*4..at+j*4+4].copy_from_slice(&p[j].to_le_bytes());}}assert_eq!(parse_stl(&b).unwrap().faces.len(),1);}
-#[test]fn full_circle_divisions_round_up_to_four(){let step="#1 = CIRCLE('', #2, 2.0);\n#3 = CIRCLE('', #2, 10.0);";let tol=align_circle_tolerance(step,0.08);for r in circle_radii(step){assert_eq!(circle_divisions(r,tol)%4,0)}assert!(tol<=0.08);}
-#[test]fn step_cube_tessellates_from_brep(){let step=include_str!("../tests/fixtures/occt-cube.step");let obj=tessellate_step(step,0.2).unwrap();assert!(obj.lines().any(|l|l.starts_with("v ")));assert!(obj.lines().any(|l|l.starts_with("f ")));}
+
+#[test]fn step_cube_tessellates_from_brep_at_selected_tolerance(){let step=include_str!("../tests/fixtures/occt-cube.step");let obj=tessellate_step(step,0.2).unwrap();assert!(obj.contains("effective tolerance=0.200000000"));assert!(obj.lines().any(|l|l.starts_with("v ")));assert!(obj.lines().any(|l|l.starts_with("f ")));}
 #[test]fn local_http_endpoint_accepts_a_step_upload(){let step=include_str!("../tests/fixtures/occt-cube.step");let listener=TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();let worker=std::thread::spawn(move||handle_connection(listener.accept().unwrap().0));let mut client=TcpStream::connect(address).unwrap();let request=format!("POST /api/step?tolerance=0.2 HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",step.len(),step);client.write_all(request.as_bytes()).unwrap();let mut response=Vec::new();client.read_to_end(&mut response).unwrap();worker.join().unwrap();let response=String::from_utf8_lossy(&response);assert!(response.starts_with("HTTP/1.1 200 OK"),"{response}");assert!(response.contains("\nf "));}
 }

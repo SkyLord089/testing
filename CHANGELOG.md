@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.8 — prevent runaway STEP mesh refinement
+- Removed global circle segment-count alignment, which could silently shrink a requested 0.08 tolerance to about 0.0003 on the uploaded assembly and cause extreme memory use.
+- Honor the selected chord tolerance directly, update the status text, and add a regression check for the effective tolerance.
+
 ## 0.2.7 — keep embedded UI and engine versions in sync
 - Inject the displayed UI version from the Rust package version at runtime so shipped UI and local engine cannot drift apart on later releases.
 - Add a regression test for the embedded page's displayed build version.
