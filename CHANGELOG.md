@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.9 — robustly project STEP trim boundaries
+- Use Truck's nearest-parameter robust tessellation for all faces instead of only faces that fail the fast parameter path, improving trimmed-face boundary fidelity on the uploaded model.
+- Exercise the uploaded STEP through complete tessellation in CI at 0.08 model-unit tolerance.
+
 ## 0.2.8 — prevent runaway STEP mesh refinement
 - Removed global circle segment-count alignment, which could silently shrink a requested 0.08 tolerance to about 0.0003 on the uploaded assembly and cause extreme memory use.
 - Honor the selected chord tolerance directly, update the status text, and add a regression check for the effective tolerance.
