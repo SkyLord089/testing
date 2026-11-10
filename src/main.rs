@@ -174,8 +174,10 @@ fn main(){if env::args().len()==1{if let Err(e)=launch_app(){eprintln!("facetfor
 #[test]
 fn user_uploaded_step_parses(){
 let step=include_str!("../SAI-GRY_AR15_2026-11-10-204805.step");
-let parsed=truck_stepio::r#in::ruststep::parser::parse(step);
-assert!(parsed.is_ok(),"error: uploaded STEP syntax parse failed: {:?}",parsed.err());
+if let Err(error)=truck_stepio::r#in::ruststep::parser::parse(step){
+let detail=error.to_string().lines().take(8).collect::<Vec<_>>().join(" | ");
+panic!("error: uploaded STEP syntax parse failed: {detail}");
+}
 let table=truck_stepio::r#in::Table::from_step(step).expect("error: Truck could not build a table from the uploaded STEP file");
 assert!(!table.shell.is_empty(),"error: uploaded STEP parsed but contains no B-REP shells");
 }
