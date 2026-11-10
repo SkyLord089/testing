@@ -196,8 +196,12 @@ if parse_prefix(records.len()).is_err(){
 let(mut good,mut bad)=(0,records.len());
 while good+1<bad{let mid=good+(bad-good)/2;if parse_prefix(mid).is_ok(){good=mid}else{bad=mid}}
 let record=records.get(good).map(|s|s.trim().chars().take(220).collect::<String>()).unwrap_or_default();
+let isolated_error=records.get(good).and_then(|record_text|{
+let mut isolated=header.to_string();isolated.push_str(record_text);isolated.push_str("\nENDSEC;\nEND-ISO-10303-21;\n");
+truck_stepio::r#in::ruststep::parser::parse(&isolated).err().map(|e|e.to_string().lines().take(8).collect::<Vec<_>>().join(" | "))
+}).unwrap_or_else(||"isolated record parsed".to_string());
 let error=parse_prefix(bad).err().map(|e|e.to_string().lines().take(6).collect::<Vec<_>>().join(" | ")).unwrap_or_default();
-panic!("error: uploaded STEP parser fails near entity {} of {}: {} | {}",good+1,records.len(),record,error);
+panic!("error: uploaded STEP parser fails near entity {} of {}: {} | isolated: {} | prefix: {}",good+1,records.len(),record,isolated_error,error);
 }
 let table=truck_stepio::r#in::Table::from_step(step).expect("error: Truck could not build a table from the uploaded STEP file");
 assert!(!table.shell.is_empty(),"error: uploaded STEP parsed but contains no B-REP shells");
