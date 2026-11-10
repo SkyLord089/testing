@@ -15,6 +15,6 @@ jobs:
           set +e
           cargo test --all-targets > cargo-test.log 2>&1
           result=$?
-          if [ "$result" -ne 0 ]; then tail -n 15 cargo-test.log | sed 's/^/::error::/'; fi
+          if [ "$result" -ne 0 ]; then sed -E 's/\x1B\[[0-9;]*[mK]//g' cargo-test.log | grep -iE 'error\[|error:|failed to|could not|unresolved|mismatched|no method|trait bound|expected .*found' | tail -n 12 | sed 's/^/::error::/'; fi
           exit "$result"
       - run: cargo build --release
