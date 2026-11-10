@@ -19,10 +19,13 @@ fn handle_connection(mut stream:TcpStream){
         let n=match stream.read(&mut chunk){Ok(0)|Err(_)=>return,Ok(n)=>n};request.extend_from_slice(&chunk[..n]);
         if let Some(pos)=request.windows(4).position(|w|w==b"\r\n\r\n"){header_end=pos+4;break}
     }
-    let headers=String::from_utf8_lossy(&request[..header_end]);let mut lines=headers.lines();
-    let mut first=lines.next().unwrap_or("").split_whitespace();let method=first.next().unwrap_or("");let target=first.next().unwrap_or("/");
-    let mut content_length=0usize;
-    for line in lines{if let Some((key,value))=line.split_once(':'){if key.eq_ignore_ascii_case("content-length"){content_length=value.trim().parse().unwrap_or(0)}}}
+    let (method,target,content_length)={
+        let headers=String::from_utf8_lossy(&request[..header_end]);let mut lines=headers.lines();
+        let mut first=lines.next().unwrap_or("").split_whitespace();let method=first.next().unwrap_or("").to_string();let target=first.next().unwrap_or("/").to_string();
+        let mut length=0usize;
+        for line in lines{if let Some((key,value))=line.split_once(':'){if key.eq_ignore_ascii_case("content-length"){length=value.trim().parse().unwrap_or(0)}}}
+        (method,target,length)
+    };
     const MAX_STEP_BYTES:usize=100*1024*1024;
     if content_length>MAX_STEP_BYTES {respond(stream,"413 Payload Too Large","text/plain",b"STEP file exceeds the 100 MB limit.");return}
     let body_end=header_end.saturating_add(content_length);
@@ -148,7 +151,7 @@ fn optimize(mut m:Mesh,density:f64,curve_detail:f64)->Mesh{
     }
     // Remove repeated-index, zero-area, and duplicate triangles after welding.
     let mut unique=HashMap::new(); let mut faces=Vec::new();
-    for mut f in m.faces { if f[0]>=m.vertices.len()||f[1]>=m.vertices.len()||f[2]>=m.vertices.len(){continue} if f[0]==f[1]||f[1]==f[2]||f[0]==f[2]{continue}
+    for f in m.faces { if f[0]>=m.vertices.len()||f[1]>=m.vertices.len()||f[2]>=m.vertices.len(){continue} if f[0]==f[1]||f[1]==f[2]||f[0]==f[2]{continue}
         let area=m.vertices[f[1]].sub(m.vertices[f[0]]).cross(m.vertices[f[2]].sub(m.vertices[f[0]])).len(); if area<diag*diag*1e-12{continue}
         let mut k=f;k.sort();if unique.insert(k,()).is_none(){faces.push(f)}
     }
@@ -159,7 +162,7 @@ fn output_obj(m:&Mesh)->String{let mut s=String::from("# FacetForge optimized me
 fn run()->Result<(),String>{
     let args:Vec<String>=env::args().collect();
     if args.len()<3 || args.iter().any(|x|x=="--help"||x=="-h"){println!("FacetForge — local CAD surface tessellation and mesh cleanup\n\nUsage: facetforge <input.step|stp|obj|stl> <output.obj> [--tolerance model-units] [--density 5..100]\n\nSTEP files are tessellated from CAD surfaces using a chord-error tolerance. OBJ/STL inputs use the mesh cleanup path.");return Ok(())}
-    let input=Path::new(&args[1]);let output=Path::new(&args[2]);let mut density=72.0;let mut curve=1.0;let mut tolerance=0.08;let mut i=3;
+    let input=Path::new(&args[1]);let output=Path::new(&args[2]);let mut density=72.0_f64;let mut curve=1.0_f64;let mut tolerance=0.08_f64;let mut i=3;
     while i<args.len(){match args[i].as_str(){"--density"=>{i+=1;density=args.get(i).ok_or("Missing density value")?.parse().map_err(|_|"Invalid density value")?},"--curve-detail"=>{i+=1;curve=args.get(i).ok_or("Missing curve-detail value")?.parse().map_err(|_|"Invalid curve-detail value")?},"--tolerance"=>{i+=1;tolerance=args.get(i).ok_or("Missing tolerance value")?.parse().map_err(|_|"Invalid tolerance value")?},x=>return Err(format!("Unknown option: {x}"))}i+=1;}
     let bytes=fs::read(input).map_err(|e|format!("Cannot read input: {e}"))?;let ext=input.extension().and_then(|x|x.to_str()).unwrap_or("").to_ascii_lowercase();
     if ext=="step"||ext=="stp"{let step=String::from_utf8(bytes).map_err(|_|"STEP input is not UTF-8 text")?;let obj=tessellate_step(&step,tolerance.clamp(0.001,100.0))?;fs::write(output,obj).map_err(|e|format!("Cannot write output: {e}"))?;eprintln!("FacetForge: tessellated STEP with {:.4} model-unit chord tolerance; wrote {}",tolerance,output.display());return Ok(())}
