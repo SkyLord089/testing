@@ -170,7 +170,7 @@ fn run()->Result<(),String>{
 }
 fn main(){if env::args().len()==1{if let Err(e)=launch_app(){eprintln!("facetforge: {e}");process::exit(2)}return}if let Err(e)=run(){eprintln!("facetforge: {e}");process::exit(2)}}
 
-#[cfg(test)]mod uploaded_step_regression{
+#[cfg(test)]mod uploaded_step_regression{use super::*;
 #[test]
 fn user_uploaded_ap203_step_parses_into_brep(){
 let step=include_str!("../SAI-GRY_AR15_2026-11-10-204805.step");
