@@ -1,4 +1,27 @@
-use std::{collections::HashMap, env, fs, path::Path, process};
+use std::{collections::HashMap, env, fs, io::{Read,Write}, net::{TcpListener,TcpStream}, path::Path, process, process::Command};
+
+const APP_HTML:&str=include_str!("../index.html");
+const APP_CSS:&str=include_str!("../style.css");
+const APP_JS:&str=include_str!("../app.js");
+
+fn serve_file(mut stream:TcpStream,path:&str){
+    let (mime,body)=match path{"/"|"/index.html"=>("text/html; charset=utf-8",APP_HTML),"/style.css"=>("text/css; charset=utf-8",APP_CSS),"/app.js"=>("text/javascript; charset=utf-8",APP_JS),_=>{"let _=stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot found");return}};
+    let header=format!("HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",body.len());
+    let _=stream.write_all(header.as_bytes());let _=stream.write_all(body.as_bytes());
+}
+fn launch_app()->Result<(),String>{
+    let listener=TcpListener::bind("127.0.0.1:0").map_err(|e|format!("Cannot start local app server: {e}"))?;
+    let address=listener.local_addr().map_err(|e|e.to_string())?;let url=format!("http://{address}/");
+    #[cfg(target_os="windows")]
+    let opened=Command::new("cmd").args(["/C","start",""]).arg(&url).spawn();
+    #[cfg(target_os="macos")]
+    let opened=Command::new("open").arg(&url).spawn();
+    #[cfg(all(unix,not(target_os="macos")))]
+    let opened=Command::new("xdg-open").arg(&url).spawn();
+    match opened{Ok(_)=>println!("FacetForge is running at {url} — close this window to stop it."),Err(e)=>eprintln!("Could not open a browser automatically ({e}). Open {url} manually.")}
+    for connection in listener.incoming(){if let Ok(mut stream)=connection{let mut request=[0u8;2048];if let Ok(n)=stream.read(&mut request){let line=String::from_utf8_lossy(&request[..n]);let path=line.lines().next().and_then(|l|l.split_whitespace().nth(1)).unwrap_or("/").split('?').next().unwrap_or("/");serve_file(stream,path);}}}
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 struct V { x: f64, y: f64, z: f64 }
@@ -91,7 +114,7 @@ fn run()->Result<(),String>{
     let mesh=if ext=="stl"{parse_stl(&bytes)?}else{parse_obj(&String::from_utf8_lossy(&bytes))?};let original=mesh.faces.len();let out=optimize(mesh,density,curve);fs::write(output,output_obj(&out)).map_err(|e|format!("Cannot write output: {e}"))?;
     eprintln!("FacetForge: {original} → {} triangles; wrote {}",out.faces.len(),output.display());Ok(())
 }
-fn main(){if let Err(e)=run(){eprintln!("facetforge: {e}");process::exit(2)}}
+fn main(){if env::args().len()==1{if let Err(e)=launch_app(){eprintln!("facetforge: {e}");process::exit(2)}return}if let Err(e)=run(){eprintln!("facetforge: {e}");process::exit(2)}}
 
 #[cfg(test)] mod tests { use super::*;
 #[test] fn obj_fan_triangulates_and_cleans(){let m=parse_obj("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3 4\n").unwrap();assert_eq!(m.faces.len(),2);let o=optimize(m,100.0,1.0);assert_eq!(o.faces.len(),2);}

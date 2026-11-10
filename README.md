@@ -6,7 +6,7 @@
 
 ## Browser app
 
-Open `index.html` in a modern browser, or serve this directory with any static HTTP server. Import OBJ or STL, adjust **Density** and **Preserve detail**, inspect the mesh with drag-to-orbit and wheel-to-zoom, and export the processed mesh as triangulated OBJ. The demo model works without an upload. Files stay on your device.
+Run the downloaded `facetforge` executable with no arguments to start the app and open its local browser interface. The Rust executable embeds the UI and serves it only on `127.0.0.1`; no Python installation or internet connection is needed. Alternatively, open `index.html` in a modern browser. Import OBJ or STL, adjust **Density** and **Preserve detail**, inspect the mesh with drag-to-orbit and wheel-to-zoom, and export the processed mesh as triangulated OBJ. The demo model works without an upload. Files stay on your device.
 
 ## Rust CLI
 

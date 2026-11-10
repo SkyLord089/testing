@@ -1,7 +1,8 @@
 # Changelog
 
-## 0.1.2 — Initial preview
+## 0.1.3 — Launchable desktop bundle
 
+- Launching the downloaded executable without arguments opens the embedded local browser app; no separate runtime or unpacked frontend files are required.
 - Local browser interface with OBJ/STL import, orbitable mesh preview, density/detail controls, statistics, and OBJ export.
 - Dependency-free Rust CLI for OBJ and binary/ASCII STL input.
 - Vertex welding, bent-area detail preservation, and degenerate/duplicate triangle cleanup.
