@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 — clearer STEP failure state
+- Hide the empty-workspace prompt as soon as a STEP file is selected.
+- Replace the misleading “launch the executable” warning with distinct local-server disconnect and HTTP 404 diagnostics.
+- Keep the selected STEP in the left panel with a retry status if tessellation does not return a mesh.
+- Add `/api/health` version reporting and return a useful HTTP error if the STEP tessellator panics instead of dropping the connection.
+
 ## 0.2.2 — STEP parser compatibility
 - Accept valid empty aggregates used by STEP exports from HOOPS Exchange / Plasticity through the upstream ruststep parser fix.
 - Add a regression test for the uploaded AP203 file and replace the misleading AP203/AP214 error hint.

@@ -34,10 +34,14 @@ fn handle_connection(mut stream:TcpStream){
         if request.len()>body_end+65536{return}
     }
     let (path,query)=target.split_once('?').unwrap_or((target.as_str(),""));
+    if method=="GET"&&path=="/api/health"{
+        let body=format!("{{\"status\":\"ok\",\"version\":\"{}\"}}",env!("CARGO_PKG_VERSION"));
+        respond(stream,"200 OK","application/json; charset=utf-8",body.as_bytes());return
+    }
     if method=="POST"&&path=="/api/step"{
         let tolerance=query.split('&').find_map(|part|part.strip_prefix("tolerance=")).and_then(|v|v.parse::<f64>().ok()).filter(|v|v.is_finite()).unwrap_or(0.1).clamp(0.001,100.0);
         let data=&request[header_end..body_end];
-        let result=String::from_utf8(data.to_vec()).map_err(|_|"STEP file is not valid UTF-8 text.".to_string()).and_then(|step|tessellate_step(&step,tolerance));
+        let result=String::from_utf8(data.to_vec()).map_err(|_|"STEP file is not valid UTF-8 text.".to_string()).and_then(|step|match std::panic::catch_unwind(std::panic::AssertUnwindSafe(||tessellate_step(&step,tolerance))){Ok(result)=>result,Err(_)=>Err("STEP tessellation panicked while processing this model. Try a coarser tolerance; the app server remains available.".to_string())});
         match result{Ok(obj)=>respond(stream,"200 OK","text/plain; charset=utf-8",obj.as_bytes()),Err(e)=>respond(stream,"422 Unprocessable Content","text/plain; charset=utf-8",e.as_bytes())}
         return
     }
@@ -170,6 +174,9 @@ fn run()->Result<(),String>{
 }
 fn main(){if env::args().len()==1{if let Err(e)=launch_app(){eprintln!("facetforge: {e}");process::exit(2)}return}if let Err(e)=run(){eprintln!("facetforge: {e}");process::exit(2)}}
 
+#[cfg(test)]mod health_endpoint_regression{use super::*;
+#[test]fn local_health_endpoint_reports_build_version(){let listener=TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();let worker=std::thread::spawn(move||handle_connection(listener.accept().unwrap().0));let mut client=TcpStream::connect(address).unwrap();client.write_all(b"GET /api/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").unwrap();let mut response=Vec::new();client.read_to_end(&mut response).unwrap();worker.join().unwrap();let response=String::from_utf8_lossy(&response);assert!(response.starts_with("HTTP/1.1 200 OK"),"{response}");assert!(response.contains(env!("CARGO_PKG_VERSION")),"{response}");}
+}
 #[cfg(test)]mod uploaded_step_regression{use super::*;
 #[test]
 fn user_uploaded_ap203_step_parses_into_brep(){
