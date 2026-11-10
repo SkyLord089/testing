@@ -174,36 +174,23 @@ fn main(){if env::args().len()==1{if let Err(e)=launch_app(){eprintln!("facetfor
 #[test]
 fn user_uploaded_step_parses(){
 let step=include_str!("../SAI-GRY_AR15_2026-11-10-204805.step");
+if truck_stepio::r#in::ruststep::parser::parse(step).is_err(){
 let data_start=step.find("DATA;").expect("STEP has no DATA section")+5;
 let data_end=data_start+step[data_start..].find("ENDSEC;").expect("STEP DATA section is not closed");
-let header=&step[..data_start];
-let mut records=Vec::<String>::new();
-let mut current=String::new();
+let mut records=Vec::<String>::new();let mut current=String::new();
 for line in step[data_start..data_end].lines(){
 let trimmed=line.trim_start();
 let starts_entity=trimmed.strip_prefix('#').and_then(|s|s.split_once('=')).map(|(id,_)|!id.is_empty()&&id.bytes().all(|b|b.is_ascii_digit())).unwrap_or(false);
-if starts_entity{
-if !current.trim().is_empty(){records.push(std::mem::take(&mut current));}
-}
+if starts_entity&&!current.trim().is_empty(){records.push(std::mem::take(&mut current));}
 current.push_str(line);current.push('\n');
 }
 if !current.trim().is_empty(){records.push(current);}
-let parse_prefix=|count:usize|{
-let mut candidate=header.to_string();candidate.push('\n');
-for record in records.iter().take(count){candidate.push_str(record);}
-candidate.push_str("\nENDSEC;\nEND-ISO-10303-21;\n");
-truck_stepio::r#in::ruststep::parser::parse(&candidate)
-};
-if parse_prefix(records.len()).is_err(){
-let(mut good,mut bad)=(0,records.len());
-while good+1<bad{let mid=good+(bad-good)/2;if parse_prefix(mid).is_ok(){good=mid}else{bad=mid}}
-let record=records.get(good).map(|s|s.trim().chars().take(220).collect::<String>()).unwrap_or_default();
-let isolated_error=records.get(good).and_then(|record_text|{
-let mut isolated=header.to_string();isolated.push('\n');isolated.push_str(record_text);isolated.push_str("\nENDSEC;\nEND-ISO-10303-21;\n");
-truck_stepio::r#in::ruststep::parser::parse(&isolated).err().map(|e|e.to_string().lines().take(8).collect::<Vec<_>>().join(" | "))
-}).unwrap_or_else(||"isolated record parsed".to_string());
-let error=parse_prefix(bad).err().map(|e|e.to_string().lines().take(6).collect::<Vec<_>>().join(" | ")).unwrap_or_default();
-panic!("error: uploaded STEP parser fails near entity {} of {}: {} | isolated: {} | prefix: {}",good+1,records.len(),record,isolated_error,error);
+for (index,record) in records.iter().enumerate(){
+if let Err(error)=truck_stepio::r#in::ruststep::parser::exchange::entity_instance(record){
+panic!("error: STEP entity {} fails individually: {}",index+1,format!("{error:?}").replace('\n'," | "));
+}
+}
+panic!("error: the STEP exchange parser rejects the full file although all {} entity records parse individually",records.len());
 }
 let table=truck_stepio::r#in::Table::from_step(step).expect("error: Truck could not build a table from the uploaded STEP file");
 assert!(!table.shell.is_empty(),"error: uploaded STEP parsed but contains no B-REP shells");
