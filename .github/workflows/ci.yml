@@ -10,5 +10,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --all-targets
+      - name: Test Rust app
+        run: |
+          set +e
+          cargo test --all-targets > cargo-test.log 2>&1
+          result=$?
+          if [ "$result" -ne 0 ]; then sed 's/^/::error::/' cargo-test.log; fi
+          exit "$result"
       - run: cargo build --release
