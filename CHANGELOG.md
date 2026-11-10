@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 — Initial preview
+## 0.1.2 — Initial preview
 
 - Local browser interface with OBJ/STL import, orbitable mesh preview, density/detail controls, statistics, and OBJ export.
 - Dependency-free Rust CLI for OBJ and binary/ASCII STL input.
