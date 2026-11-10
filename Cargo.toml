@@ -10,6 +10,11 @@ truck-meshalgo = "0.4.0"
 truck-polymesh = "0.6.0"
 truck-stepio = "0.3.0"
 
+[patch.crates-io]
+# ruststep 0.4.0 rejects valid empty aggregates such as STYLED_ITEM('',(),...).
+# Use the upstream fix until the next crates.io release includes it.
+ruststep = { git = "https://github.com/ricosjp/ruststep", rev = "cd89e5a7cd9a6baadcb456392a5888f4cbc6b707" }
+
 [[bin]]
 name = "facetforge"
 path = "src/main.rs"

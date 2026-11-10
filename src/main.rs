@@ -172,28 +172,11 @@ fn main(){if env::args().len()==1{if let Err(e)=launch_app(){eprintln!("facetfor
 
 #[cfg(test)]mod uploaded_step_regression{
 #[test]
-fn user_uploaded_step_parses(){
+fn user_uploaded_ap203_step_parses_into_brep(){
 let step=include_str!("../SAI-GRY_AR15_2026-11-10-204805.step");
-if truck_stepio::r#in::ruststep::parser::parse(step).is_err(){
-let data_start=step.find("DATA;").expect("STEP has no DATA section")+5;
-let data_end=data_start+step[data_start..].find("ENDSEC;").expect("STEP DATA section is not closed");
-let mut records=Vec::<String>::new();let mut current=String::new();
-for line in step[data_start..data_end].lines(){
-let trimmed=line.trim_start();
-let starts_entity=trimmed.strip_prefix('#').and_then(|s|s.split_once('=')).map(|(id,_)|!id.is_empty()&&id.bytes().all(|b|b.is_ascii_digit())).unwrap_or(false);
-if starts_entity&&!current.trim().is_empty(){records.push(std::mem::take(&mut current));}
-current.push_str(line);current.push('\n');
-}
-if !current.trim().is_empty(){records.push(current);}
-for (index,record) in records.iter().enumerate(){
-if let Err(error)=truck_stepio::r#in::ruststep::parser::exchange::entity_instance(record.trim_start()){
-panic!("error: STEP entity {} fails individually: {}",index+1,format!("{error:?}").replace('\n'," | "));
-}
-}
-panic!("error: the STEP exchange parser rejects the full file although all {} entity records parse individually",records.len());
-}
-let table=truck_stepio::r#in::Table::from_step(step).expect("error: Truck could not build a table from the uploaded STEP file");
-assert!(!table.shell.is_empty(),"error: uploaded STEP parsed but contains no B-REP shells");
+assert!(step.contains("AP203_CONFIGURATION_CONTROLLED_3D_DESIGN"));
+let table=truck_stepio::r#in::Table::from_step(step).expect("uploaded AP203 STEP should parse");
+assert!(!table.shell.is_empty(),"uploaded AP203 STEP should contain B-REP shells");
 }
 }
 #[cfg(test)]mod tests{use super::*;
