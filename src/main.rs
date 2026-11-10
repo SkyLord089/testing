@@ -189,7 +189,7 @@ current.push_str(line);current.push('\n');
 }
 if !current.trim().is_empty(){records.push(current);}
 let parse_prefix=|count:usize|{
-let mut candidate=header.to_string();
+let mut candidate=header.to_string();candidate.push('\n');
 for record in records.iter().take(count){candidate.push_str(record);}
 candidate.push_str("\nENDSEC;\nEND-ISO-10303-21;\n");
 truck_stepio::r#in::ruststep::parser::parse(&candidate)
@@ -199,7 +199,7 @@ let(mut good,mut bad)=(0,records.len());
 while good+1<bad{let mid=good+(bad-good)/2;if parse_prefix(mid).is_ok(){good=mid}else{bad=mid}}
 let record=records.get(good).map(|s|s.trim().chars().take(220).collect::<String>()).unwrap_or_default();
 let isolated_error=records.get(good).and_then(|record_text|{
-let mut isolated=header.to_string();isolated.push_str(record_text);isolated.push_str("\nENDSEC;\nEND-ISO-10303-21;\n");
+let mut isolated=header.to_string();isolated.push('\n');isolated.push_str(record_text);isolated.push_str("\nENDSEC;\nEND-ISO-10303-21;\n");
 truck_stepio::r#in::ruststep::parser::parse(&isolated).err().map(|e|e.to_string().lines().take(8).collect::<Vec<_>>().join(" | "))
 }).unwrap_or_else(||"isolated record parsed".to_string());
 let error=parse_prefix(bad).err().map(|e|e.to_string().lines().take(6).collect::<Vec<_>>().join(" | ")).unwrap_or_default();
