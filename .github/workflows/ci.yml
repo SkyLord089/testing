@@ -15,6 +15,6 @@ jobs:
           set +e
           cargo test --all-targets > cargo-test.log 2>&1
           result=$?
-          if [ "$result" -ne 0 ]; then grep -iE 'error:|caused by:|failed|timeout|denied|requires rust|not found|unable to' cargo-test.log | tail -n 10 | sed 's/^/::error::/'; fi
+          if [ "$result" -ne 0 ]; then tail -n 15 cargo-test.log | sed 's/^/::error::/'; fi
           exit "$result"
       - run: cargo build --release
