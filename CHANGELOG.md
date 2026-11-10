@@ -1,15 +1,15 @@
 # Changelog
 
-## 0.1.3 — Launchable desktop bundle
+## 0.2.0 — CAD-first rebuild
 
-- Launching the downloaded executable without arguments opens the embedded local browser app; no separate runtime or unpacked frontend files are required.
-- Local browser interface with OBJ/STL import, orbitable mesh preview, density/detail controls, statistics, and OBJ export.
-- Dependency-free Rust CLI for OBJ and binary/ASCII STL input.
-- Vertex welding, bent-area detail preservation, and degenerate/duplicate triangle cleanup.
-- GitHub Actions checks and release builds for Linux, macOS, and Windows.
+- Rebuilt the UI around native STEP import rather than mesh-first OBJ/STL upload.
+- Added local STEP B-REP parsing and adaptive tessellation through the Rust `truck` CAD kernel, with a configurable chord-error tolerance.
+- Added quality presets, interactive model preview, planar-patch consolidation for OBJ export, and OBJ/STL export.
+- Added richer import errors and an explicit distinction between STEP CAD and already-triangulated mesh inputs.
 
-### Known limitations
+### Scope that remains incomplete
 
-- This is mesh cleanup and vertex clustering, not CAD-surface reconstruction, quad-dominant retopology, or a production-grade adaptive remesher.
-- There is no circle/arc recognition, so the tool cannot promise circle edge counts divisible by four.
-- Density is approximate and is not a requested exact triangle count. Always validate the result in your target CAD/DCC application.
+- STEP assembly transforms and all vendor-specific AP242 extensions need broader fixture testing.
+- This is adaptive surface tessellation, not a full remeshing/edge-collapse optimizer. Mesh-only OBJ/STL input can be previewed and exported but does not receive CAD-aware regeneration.
+- Exact circular-loop segment counts divisible by four are not yet measured and enforced after tessellation. The chord-error tessellator naturally increases sampling with circle radius, but that is not a formal per-loop guarantee.
+- Always inspect output in the target CAD/DCC/CAM application before production use.

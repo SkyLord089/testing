@@ -1,23 +1,47 @@
 use std::{collections::HashMap, env, fs, io::{Read,Write}, net::{TcpListener,TcpStream}, path::Path, process, process::Command};
+use truck_meshalgo::prelude::*;
+use truck_stepio::r#in::*;
+use truck_polymesh::{obj,PolygonMesh};
 
 const APP_HTML:&str=include_str!("../index.html");
 const APP_CSS:&str=include_str!("../style.css");
 const APP_JS:&str=include_str!("../app.js");
 
-fn serve_file(mut stream:TcpStream,path:&str){
-    let (mime,body)=match path {
-        "/"|"/index.html"=> ("text/html; charset=utf-8",APP_HTML),
-        "/style.css"=> ("text/css; charset=utf-8",APP_CSS),
-        "/app.js"=> ("text/javascript; charset=utf-8",APP_JS),
-        _=> {
-            let _=stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot found");
-            return
-        }
-    };
-    let header=format!("HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",body.len());
-    let _=stream.write_all(header.as_bytes());
-    let _=stream.write_all(body.as_bytes());
+fn respond(mut stream:TcpStream,status:&str,mime:&str,body:&[u8]){
+    let header=format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",body.len());
+    let _=stream.write_all(header.as_bytes());let _=stream.write_all(body);
 }
+fn handle_connection(mut stream:TcpStream){
+    let _=stream.set_read_timeout(Some(std::time::Duration::from_secs(180)));
+    let mut request=Vec::new();let mut chunk=[0u8;8192];let header_end;
+    loop{
+        if request.len()>65536 {respond(stream,"431 Request Header Fields Too Large","text/plain",b"Request headers too large");return}
+        let n=match stream.read(&mut chunk){Ok(0)|Err(_)=>return,Ok(n)=>n};request.extend_from_slice(&chunk[..n]);
+        if let Some(pos)=request.windows(4).position(|w|w==b"\r\n\r\n"){header_end=pos+4;break}
+    }
+    let headers=String::from_utf8_lossy(&request[..header_end]);let mut lines=headers.lines();
+    let mut first=lines.next().unwrap_or("").split_whitespace();let method=first.next().unwrap_or("");let target=first.next().unwrap_or("/");
+    let mut content_length=0usize;
+    for line in lines{if let Some((key,value))=line.split_once(':'){if key.eq_ignore_ascii_case("content-length"){content_length=value.trim().parse().unwrap_or(0)}}}
+    const MAX_STEP_BYTES:usize=100*1024*1024;
+    if content_length>MAX_STEP_BYTES {respond(stream,"413 Payload Too Large","text/plain",b"STEP file exceeds the 100 MB limit.");return}
+    let body_end=header_end.saturating_add(content_length);
+    while request.len()<body_end{
+        let n=match stream.read(&mut chunk){Ok(0)|Err(_)=>return,Ok(n)=>n};request.extend_from_slice(&chunk[..n]);
+        if request.len()>body_end+65536{return}
+    }
+    let (path,query)=target.split_once('?').unwrap_or((target,""));
+    if method=="POST"&&path=="/api/step"{
+        let tolerance=query.split('&').find_map(|part|part.strip_prefix("tolerance=")).and_then(|v|v.parse::<f64>().ok()).filter(|v|v.is_finite()).unwrap_or(0.1).clamp(0.001,100.0);
+        let data=&request[header_end..body_end];
+        let result=String::from_utf8(data.to_vec()).map_err(|_|"STEP file is not valid UTF-8 text.".to_string()).and_then(|step|tessellate_step(&step,tolerance));
+        match result{Ok(obj)=>respond(stream,"200 OK","text/plain; charset=utf-8",obj.as_bytes()),Err(e)=>respond(stream,"422 Unprocessable Content","text/plain; charset=utf-8",e.as_bytes())}
+        return
+    }
+    let (mime,body)=match path{"/"|"/index.html"=>("text/html; charset=utf-8",APP_HTML),"/style.css"=>("text/css; charset=utf-8",APP_CSS),"/app.js"=>("text/javascript; charset=utf-8",APP_JS),_=>{respond(stream,"404 Not Found","text/plain",b"Not found");return}};
+    respond(stream,"200 OK",mime,body.as_bytes());
+}
+
 fn launch_app()->Result<(),String>{
     let listener=TcpListener::bind("127.0.0.1:0").map_err(|e|format!("Cannot start local app server: {e}"))?;
     let address=listener.local_addr().map_err(|e|e.to_string())?;
@@ -32,17 +56,22 @@ fn launch_app()->Result<(),String>{
         Ok(_)=>println!("FacetForge is running at {url} — close this window to stop it."),
         Err(e)=>eprintln!("Could not open a browser automatically ({e}). Open {url} manually.")
     }
-    for connection in listener.incoming(){
-        if let Ok(mut stream)=connection {
-            let mut request=[0u8;2048];
-            if let Ok(n)=stream.read(&mut request){
-                let line=String::from_utf8_lossy(&request[..n]);
-                let path=line.lines().next().and_then(|l|l.split_whitespace().nth(1)).unwrap_or("/").split('?').next().unwrap_or("/");
-                serve_file(stream,path);
-            }
-        }
-    }
+    for connection in listener.incoming(){if let Ok(stream)=connection{handle_connection(stream)}}
     Ok(())
+}
+
+fn tessellate_step(step:&str,tolerance:f64)->Result<String,String>{
+    let table=Table::from_step(step).ok_or_else(||"This STEP file could not be parsed. Try AP203 or AP214 from Plasticity.".to_string())?;
+    let mut combined=PolygonMesh::default();let mut shells=0usize;
+    for shell in table.shell.values(){
+        let compressed=table.to_compressed_shell(shell).map_err(|e|format!("Could not read a STEP surface or boundary: {e}"))?;
+        let mut mesh=compressed.robust_triangulation(tolerance).to_polygon();
+        mesh.put_together_same_attrs(5.0e-5).remove_degenerate_faces().remove_unused_attrs();
+        combined.merge(mesh);shells+=1;
+    }
+    if shells==0||combined.faces().is_empty(){return Err("No supported solid or shell geometry was found in the STEP file.".into())}
+    let mut bytes=Vec::new();obj::write(&combined,&mut bytes).map_err(|e|format!("Could not export tessellated geometry: {e}"))?;
+    String::from_utf8(bytes).map_err(|e|format!("Could not encode generated mesh: {e}"))
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -129,10 +158,11 @@ fn optimize(mut m:Mesh,density:f64,curve_detail:f64)->Mesh{
 fn output_obj(m:&Mesh)->String{let mut s=String::from("# FacetForge optimized mesh\n");for v in &m.vertices{s.push_str(&format!("v {:.7} {:.7} {:.7}\n",v.x,v.y,v.z));}for f in &m.faces{s.push_str(&format!("f {} {} {}\n",f[0]+1,f[1]+1,f[2]+1));}s}
 fn run()->Result<(),String>{
     let args:Vec<String>=env::args().collect();
-    if args.len()<3 || args.iter().any(|x|x=="--help"||x=="-h"){println!("FacetForge — clean and density-control OBJ/STL meshes\n\nUsage: facetforge <input.obj|input.stl> <output.obj> [--density 5..100] [--curve-detail 0.5..2]\n\nExports triangulated OBJ. Density 100 preserves source sampling; lower values merge nearby vertices and remove degenerate faces.");return Ok(())}
-    let input=Path::new(&args[1]);let output=Path::new(&args[2]);let mut density=72.0;let mut curve=1.0;let mut i=3;
-    while i<args.len(){match args[i].as_str(){"--density"=>{i+=1;density=args.get(i).ok_or("Missing density value")?.parse().map_err(|_|"Invalid density value")?},"--curve-detail"=>{i+=1;curve=args.get(i).ok_or("Missing curve-detail value")?.parse().map_err(|_|"Invalid curve-detail value")?},x=>return Err(format!("Unknown option: {x}"))}i+=1;}
+    if args.len()<3 || args.iter().any(|x|x=="--help"||x=="-h"){println!("FacetForge — local CAD surface tessellation and mesh cleanup\n\nUsage: facetforge <input.step|stp|obj|stl> <output.obj> [--tolerance model-units] [--density 5..100]\n\nSTEP files are tessellated from CAD surfaces using a chord-error tolerance. OBJ/STL inputs use the mesh cleanup path.");return Ok(())}
+    let input=Path::new(&args[1]);let output=Path::new(&args[2]);let mut density=72.0;let mut curve=1.0;let mut tolerance=0.08;let mut i=3;
+    while i<args.len(){match args[i].as_str(){"--density"=>{i+=1;density=args.get(i).ok_or("Missing density value")?.parse().map_err(|_|"Invalid density value")?},"--curve-detail"=>{i+=1;curve=args.get(i).ok_or("Missing curve-detail value")?.parse().map_err(|_|"Invalid curve-detail value")?},"--tolerance"=>{i+=1;tolerance=args.get(i).ok_or("Missing tolerance value")?.parse().map_err(|_|"Invalid tolerance value")?},x=>return Err(format!("Unknown option: {x}"))}i+=1;}
     let bytes=fs::read(input).map_err(|e|format!("Cannot read input: {e}"))?;let ext=input.extension().and_then(|x|x.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ext=="step"||ext=="stp"{let step=String::from_utf8(bytes).map_err(|_|"STEP input is not UTF-8 text")?;let obj=tessellate_step(&step,tolerance.clamp(0.001,100.0))?;fs::write(output,obj).map_err(|e|format!("Cannot write output: {e}"))?;eprintln!("FacetForge: tessellated STEP with {:.4} model-unit chord tolerance; wrote {}",tolerance,output.display());return Ok(())}
     let mesh=if ext=="stl"{parse_stl(&bytes)?}else{parse_obj(&String::from_utf8_lossy(&bytes))?};let original=mesh.faces.len();let out=optimize(mesh,density,curve);fs::write(output,output_obj(&out)).map_err(|e|format!("Cannot write output: {e}"))?;
     eprintln!("FacetForge: {original} → {} triangles; wrote {}",out.faces.len(),output.display());Ok(())
 }

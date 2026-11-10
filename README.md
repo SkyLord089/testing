@@ -1,32 +1,32 @@
 # FacetForge
 
-**FacetForge** is a small, local-first mesh cleanup and density-control tool for triangulated CAD exports. It includes a dependency-free Rust CLI and a browser UI (no build step or upload service). Models are processed locally.
+FacetForge is a local CAD-to-mesh workbench. The preferred input is **STEP/STP**, because it retains analytic surfaces; OBJ/STL are also accepted as already-triangulated mesh inputs. The Rust application embeds a browser UI and serves it only on `127.0.0.1`. Source files are processed locally and are not uploaded.
 
-> This first release is a practical mesh-cleanup prototype, not a full CAD-aware remesher. It welds nearby vertices, removes degenerate/duplicate triangles, and retains more samples around bends. It does not recover exact CAD surfaces or guarantee that detected circular loops have a vertex count divisible by four. Results depend on the input tessellation exported from Plasticity; inspect the result before manufacturing or production use.
+## What is implemented
 
-## Browser app
+- STEP B-REP parsing and adaptive CAD-surface tessellation in Rust using the `truck` CAD kernel.
+- A chord-error tolerance with quick, balanced, and fine presets. At a fixed absolute tolerance, larger-radius curved surfaces are sampled more densely while planar regions do not need curve-driven refinement.
+- Interactive orbit/zoom preview, wireframe inspection, planar-region consolidation in OBJ export, and OBJ or STL mesh export.
+- Direct OBJ/STL preview and export. Those formats no longer contain the original CAD surfaces, so the app cannot adaptively rebuild their topology from exact geometry.
 
-Run the downloaded `facetforge` executable with no arguments to start the app and open its local browser interface. The Rust executable embeds the UI and serves it only on `127.0.0.1`; no Python installation or internet connection is needed. Alternatively, open `index.html` in a modern browser. Import OBJ or STL, adjust **Density** and **Preserve detail**, inspect the mesh with drag-to-orbit and wheel-to-zoom, and export the processed mesh as triangulated OBJ. The demo model works without an upload. Files stay on your device.
+## Run the app
 
-## Rust CLI
+Download the archive for your OS from [GitHub Releases](https://github.com/SkyLord089/testing/releases). Extract it, then run `facetforge` (Windows: `facetforge.exe`). With no command-line arguments it starts the embedded local UI and opens your browser. Keep the launcher window open while using the app.
 
-Rust 2021, standard library only:
+To import a Plasticity model, export it as STEP/STP and open that file in the app. Output is a mesh in OBJ or STL format.
+
+## CLI
+
+Rust 2021:
 
 ```sh
-cargo run --release -- input.stl output.obj --density 72 --curve-detail 1.2
-```
-
-OBJ and binary/ASCII STL are accepted. Output is triangulated OBJ. `--density` ranges from 5 (more vertex merging) to 100 (keep source sampling); `--curve-detail` ranges from 0.5 (merge more aggressively) to 2 (merge less). For example:
-
-```sh
+cargo run --release -- chair.step chair.obj --tolerance 0.08
+cargo run --release -- scan.stl cleaned.obj --density 85
 cargo test
-cargo run --release -- chair.obj chair-clean.obj --density 85
 ```
 
-## Build
+For STEP, `--tolerance` is the maximum chord deviation in the model's coordinate units. For an already tessellated OBJ/STL, `--density` controls conservative vertex clustering and cleanup; it cannot reconstruct exact CAD surfaces.
 
-```sh
-cargo build --release
-```
+## Known limitations
 
-Prebuilt CLI binaries for Linux, macOS, and Windows are attached to tagged GitHub releases by the release workflow. See [CHANGELOG](CHANGELOG.md) for scope and known limitations.
+This is an early CAD-first rebuild, not yet the full topology optimizer requested. In particular, it does not yet measure and enforce the per-circle vertex-count-divisible-by-four rule, guarantee a target polygon count, or perform production-grade feature-aware edge collapse. Some STEP assembly/vendor extensions still need testing. See [CHANGELOG](CHANGELOG.md).
