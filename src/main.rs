@@ -227,8 +227,8 @@ assert!(!table.shell.is_empty(),"uploaded AP203 STEP should contain B-REP shells
 #[test]
 fn uploaded_ap203_step_tessellates_at_requested_tolerance(){
 let step=include_str!("../SAI-GRY_AR15_2026-11-10-204805.step");
-let obj=tessellate_step(step,0.08).expect("uploaded STEP should tessellate at the requested tolerance");
-assert!(obj.contains("effective tolerance=0.080000000"));
+let obj=tessellate_step(step,0.02).expect("uploaded STEP should tessellate at the requested tolerance");
+assert!(obj.contains("effective tolerance=0.020000000"));
 assert!(obj.lines().any(|line|line.starts_with("f ")),"mesh output should contain faces");
 }
 }
