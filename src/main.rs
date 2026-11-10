@@ -174,4 +174,5 @@ fn main(){if env::args().len()==1{if let Err(e)=launch_app(){eprintln!("facetfor
 #[test]fn obj_fan_triangulates_and_cleans(){let m=parse_obj("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3 4\n").unwrap();assert_eq!(m.faces.len(),2);let o=optimize(m,100.0,1.0);assert_eq!(o.faces.len(),2);}
 #[test]fn binary_stl_is_read(){let mut b=vec![0u8;84+50];b[80..84].copy_from_slice(&1u32.to_le_bytes());let pts=[[0f32,0.,0.],[1.,0.,0.],[0.,1.,0.]];for (i,p) in pts.iter().enumerate(){let at=96+i*12;for j in 0..3{b[at+j*4..at+j*4+4].copy_from_slice(&p[j].to_le_bytes());}}assert_eq!(parse_stl(&b).unwrap().faces.len(),1);}
 #[test]fn full_circle_divisions_round_up_to_four(){let step="#1 = CIRCLE('', #2, 2.0);\n#3 = CIRCLE('', #2, 10.0);";let tol=align_circle_tolerance(step,0.08);for r in circle_radii(step){assert_eq!(circle_divisions(r,tol)%4,0)}assert!(tol<=0.08);}
+#[test]fn step_cube_tessellates_from_brep(){let step=include_str!("../tests/fixtures/occt-cube.step");let obj=tessellate_step(step,0.2).unwrap();assert!(obj.lines().any(|l|l.starts_with("v ")));assert!(obj.lines().any(|l|l.starts_with("f ")));}
 }
