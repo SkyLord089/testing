@@ -5,21 +5,43 @@ const APP_CSS:&str=include_str!("../style.css");
 const APP_JS:&str=include_str!("../app.js");
 
 fn serve_file(mut stream:TcpStream,path:&str){
-    let (mime,body)=match path{"/"|"/index.html"=>("text/html; charset=utf-8",APP_HTML),"/style.css"=>("text/css; charset=utf-8",APP_CSS),"/app.js"=>("text/javascript; charset=utf-8",APP_JS),_=>{"let _=stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot found");return}};
+    let (mime,body)=match path {
+        "/"|"/index.html"=> ("text/html; charset=utf-8",APP_HTML),
+        "/style.css"=> ("text/css; charset=utf-8",APP_CSS),
+        "/app.js"=> ("text/javascript; charset=utf-8",APP_JS),
+        _=> {
+            let _=stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot found");
+            return
+        }
+    };
     let header=format!("HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",body.len());
-    let _=stream.write_all(header.as_bytes());let _=stream.write_all(body.as_bytes());
+    let _=stream.write_all(header.as_bytes());
+    let _=stream.write_all(body.as_bytes());
 }
 fn launch_app()->Result<(),String>{
     let listener=TcpListener::bind("127.0.0.1:0").map_err(|e|format!("Cannot start local app server: {e}"))?;
-    let address=listener.local_addr().map_err(|e|e.to_string())?;let url=format!("http://{address}/");
+    let address=listener.local_addr().map_err(|e|e.to_string())?;
+    let url=format!("http://{address}/");
     #[cfg(target_os="windows")]
     let opened=Command::new("cmd").args(["/C","start",""]).arg(&url).spawn();
     #[cfg(target_os="macos")]
     let opened=Command::new("open").arg(&url).spawn();
     #[cfg(all(unix,not(target_os="macos")))]
     let opened=Command::new("xdg-open").arg(&url).spawn();
-    match opened{Ok(_)=>println!("FacetForge is running at {url} — close this window to stop it."),Err(e)=>eprintln!("Could not open a browser automatically ({e}). Open {url} manually.")}
-    for connection in listener.incoming(){if let Ok(mut stream)=connection{let mut request=[0u8;2048];if let Ok(n)=stream.read(&mut request){let line=String::from_utf8_lossy(&request[..n]);let path=line.lines().next().and_then(|l|l.split_whitespace().nth(1)).unwrap_or("/").split('?').next().unwrap_or("/");serve_file(stream,path);}}}
+    match opened {
+        Ok(_)=>println!("FacetForge is running at {url} — close this window to stop it."),
+        Err(e)=>eprintln!("Could not open a browser automatically ({e}). Open {url} manually.")
+    }
+    for connection in listener.incoming(){
+        if let Ok(mut stream)=connection {
+            let mut request=[0u8;2048];
+            if let Ok(n)=stream.read(&mut request){
+                let line=String::from_utf8_lossy(&request[..n]);
+                let path=line.lines().next().and_then(|l|l.split_whitespace().nth(1)).unwrap_or("/").split('?').next().unwrap_or("/");
+                serve_file(stream,path);
+            }
+        }
+    }
     Ok(())
 }
 
