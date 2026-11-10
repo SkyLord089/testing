@@ -180,7 +180,9 @@ let header=&step[..data_start];
 let mut records=Vec::<String>::new();
 let mut current=String::new();
 for line in step[data_start..data_end].lines(){
-if line.trim_start().starts_with('#'){
+let trimmed=line.trim_start();
+let starts_entity=trimmed.strip_prefix('#').and_then(|s|s.split_once('=')).map(|(id,_)|!id.is_empty()&&id.bytes().all(|b|b.is_ascii_digit())).unwrap_or(false);
+if starts_entity{
 if !current.trim().is_empty(){records.push(std::mem::take(&mut current));}
 }
 current.push_str(line);current.push('\n');
