@@ -1,6 +1,6 @@
 [package]
 name = "facetforge"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 description = "Adaptive mesh cleanup and density control for CAD exports"
 license = "MIT"

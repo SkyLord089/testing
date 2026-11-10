@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, fs, io::{Read,Write}, net::{TcpListener,TcpStream}, path::Path, process, process::Command};
+use std::{collections::HashMap, env, fs, io::{Read,Write}, net::{TcpListener,TcpStream}, path::Path, process, process::{Command,Stdio}};
 use truck_meshalgo::prelude::*;
 use truck_stepio::r#in::*;
 use truck_polymesh::{obj,PolygonMesh};
@@ -10,6 +10,21 @@ const APP_JS:&str=include_str!("../app.js");
 fn respond(mut stream:TcpStream,status:&str,mime:&str,body:&[u8]){
     let header=format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",body.len());
     let _=stream.write_all(header.as_bytes());let _=stream.write_all(body);
+}
+#[cfg(test)]
+fn run_step_worker(step:&str,tolerance:f64)->Result<String,String>{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(||tessellate_step(step,tolerance))){Ok(result)=>result,Err(_)=>Err("STEP tessellator panicked while processing this model.".into())}
+}
+#[cfg(not(test))]
+fn run_step_worker(step:&str,tolerance:f64)->Result<String,String>{
+    let executable=env::current_exe().map_err(|e|format!("Cannot locate the FacetForge executable: {e}"))?;
+    let mut child=Command::new(executable).arg("--step-worker").arg(tolerance.to_string()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e|format!("Cannot start isolated STEP worker: {e}"))?;
+    let mut stdin=child.stdin.take().ok_or("Cannot open isolated STEP worker input")?;
+    if let Err(e)=stdin.write_all(step.as_bytes()){drop(stdin);let _=child.kill();let _=child.wait();return Err(format!("Could not send STEP data to worker: {e}"))}
+    drop(stdin);
+    let output=child.wait_with_output().map_err(|e|format!("Could not collect STEP worker output: {e}"))?;
+    if !output.status.success(){let detail=String::from_utf8_lossy(&output.stderr);let detail=detail.lines().take(12).collect::<Vec<_>>().join(" | ");return Err(format!("Isolated STEP worker exited with {}: {}",output.status,detail))}
+    String::from_utf8(output.stdout).map_err(|e|format!("STEP worker returned invalid UTF-8 mesh data: {e}"))
 }
 fn handle_connection(mut stream:TcpStream){
     let _=stream.set_read_timeout(Some(std::time::Duration::from_secs(180)));
@@ -41,7 +56,7 @@ fn handle_connection(mut stream:TcpStream){
     if method=="POST"&&path=="/api/step"{
         let tolerance=query.split('&').find_map(|part|part.strip_prefix("tolerance=")).and_then(|v|v.parse::<f64>().ok()).filter(|v|v.is_finite()).unwrap_or(0.1).clamp(0.001,100.0);
         let data=&request[header_end..body_end];
-        let result=String::from_utf8(data.to_vec()).map_err(|_|"STEP file is not valid UTF-8 text.".to_string()).and_then(|step|match std::panic::catch_unwind(std::panic::AssertUnwindSafe(||tessellate_step(&step,tolerance))){Ok(result)=>result,Err(_)=>Err("STEP tessellation panicked while processing this model. Try a coarser tolerance; the app server remains available.".to_string())});
+        let result=String::from_utf8(data.to_vec()).map_err(|_|"STEP file is not valid UTF-8 text.".to_string()).and_then(|step|run_step_worker(&step,tolerance));
         match result{Ok(obj)=>respond(stream,"200 OK","text/plain; charset=utf-8",obj.as_bytes()),Err(e)=>respond(stream,"422 Unprocessable Content","text/plain; charset=utf-8",e.as_bytes())}
         return
     }
@@ -189,7 +204,16 @@ fn run()->Result<(),String>{
     if ext=="step"||ext=="stp"{let step=String::from_utf8(bytes).map_err(|_|"STEP input is not UTF-8 text")?;let obj=tessellate_step(&step,tolerance.clamp(0.001,100.0))?;fs::write(output,obj).map_err(|e|format!("Cannot write output: {e}"))?;eprintln!("FacetForge: tessellated STEP with {:.4} model-unit chord tolerance; wrote {}",tolerance,output.display());return Ok(())}
     let mesh=if ext=="stl"{parse_stl(&bytes)?}else{parse_obj(&String::from_utf8_lossy(&bytes))?};let original=mesh.faces.len();let out=optimize(mesh,density,curve);fs::write(output,output_obj(&out)).map_err(|e|format!("Cannot write output: {e}"))?;eprintln!("FacetForge: {original} → {} triangles; wrote {}",out.faces.len(),output.display());Ok(())
 }
-fn main(){if env::args().len()==1{if let Err(e)=launch_app(){eprintln!("facetforge: {e}");process::exit(2)}return}if let Err(e)=run(){eprintln!("facetforge: {e}");process::exit(2)}}
+fn main(){
+let args:Vec<String>=env::args().collect();
+if args.get(1).map(|s|s.as_str())==Some("--step-worker"){
+let tolerance=args.get(2).and_then(|s|s.parse::<f64>().ok()).unwrap_or(0.08);
+let result=(||{let mut step=String::new();std::io::stdin().read_to_string(&mut step).map_err(|e|format!("Cannot read STEP worker input: {e}"))?;let mesh=tessellate_step(&step,tolerance)?;std::io::stdout().write_all(mesh.as_bytes()).map_err(|e|format!("Cannot write STEP worker output: {e}"))})());
+if let Err(e)=result{eprintln!("STEP worker: {e}");process::exit(2)}return
+}
+if args.len()==1{if let Err(e)=launch_app(){eprintln!("facetforge: {e}");process::exit(2)}return}
+if let Err(e)=run(){eprintln!("facetforge: {e}");process::exit(2)}
+}
 
 #[cfg(test)]mod health_endpoint_regression{use super::*;
 #[test]fn local_health_endpoint_reports_build_version(){let listener=TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();let worker=std::thread::spawn(move||handle_connection(listener.accept().unwrap().0));let mut client=TcpStream::connect(address).unwrap();client.write_all(b"GET /api/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").unwrap();let mut response=Vec::new();client.read_to_end(&mut response).unwrap();worker.join().unwrap();let response=String::from_utf8_lossy(&response);assert!(response.starts_with("HTTP/1.1 200 OK"),"{response}");assert!(response.contains(env!("CARGO_PKG_VERSION")),"{response}");}
