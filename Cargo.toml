@@ -1,0 +1,10 @@
+[package]
+name = "facetforge"
+version = "0.1.0"
+edition = "2021"
+description = "Adaptive mesh cleanup and density control for CAD exports"
+license = "MIT"
+
+[[bin]]
+name = "facetforge"
+path = "src/main.rs"

@@ -1,0 +1,55 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            suffix: macos-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Package release archive
+        shell: bash
+        run: |
+          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME}"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            7z a "dist/facetforge-${VERSION}-${{ matrix.suffix }}.zip" "target/${{ matrix.target }}/release/facetforge.exe" README.md CHANGELOG.md LICENSE
+          else
+            tar -czf "dist/facetforge-${VERSION}-${{ matrix.suffix }}.tar.gz" -C "target/${{ matrix.target }}/release" facetforge
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: facetforge-${{ matrix.suffix }}
+          path: dist/*
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

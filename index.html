@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#111318"><title>FacetForge — CAD mesh studio</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar"><a class="brand" href="#"><span class="brand-mark">F</span><span>FACET<span class="muted">FORGE</span><small>MESH STUDIO · 0.1.0</small></span></a><div class="top-actions"><span class="local-badge"><i></i> Файлы остаются на устройстве</span><a class="github" href="https://github.com/SkyLord089/testing" target="_blank" rel="noreferrer">GitHub ↗</a></div></header>
+<main class="layout">
+<aside class="sidebar">
+<div class="section-title"><span>01</span> ИСХОДНАЯ МОДЕЛЬ</div>
+<label class="dropzone" id="dropzone"><input id="fileInput" type="file" accept=".obj,.stl"><span class="upload-icon">↑</span><b>Перетащите OBJ или STL</b><small>или <u>выберите файл</u> на устройстве</small><em>OBJ · STL · до 30 МБ</em></label>
+<div class="model-card hidden" id="modelCard"><div class="model-icon">◈</div><div class="model-meta"><b id="modelName">model.obj</b><small id="modelInfo">—</small></div><button id="removeModel" class="icon-btn" title="Удалить модель">×</button></div>
+<button class="demo-btn" id="demoBtn"><span>✳</span> Открыть демо-модель</button>
+<div class="section-title controls-heading"><span>02</span> НАСТРОЙКИ СЕТКИ</div>
+<div class="control"><div class="control-label"><label for="density">Плотность сетки</label><output id="densityValue">72%</output></div><input id="density" type="range" min="5" max="100" value="72"><div class="range-ends"><span>Меньше полигонов</span><span>Больше деталей</span></div></div>
+<div class="control"><div class="control-label"><label for="curve">Сохранение деталей</label><output id="curveValue">1.0×</output></div><input id="curve" type="range" min="50" max="200" value="100"><div class="range-ends"><span>Сильнее упрощать</span><span>Сохранять форму</span></div></div>
+<div class="toggle-row"><div><b>Каркас</b><small>Показать рёбра полигонов</small></div><label class="switch"><input id="wireToggle" type="checkbox"><span></span></label></div>
+<div class="toggle-row"><div><b>Плоское затенение</b><small>Подчеркнуть плоскости</small></div><label class="switch"><input id="flatToggle" type="checkbox" checked><span></span></label></div>
+<button class="optimize-btn" id="optimizeBtn" disabled><span>✦</span> Оптимизировать сетку</button>
+<button class="export-btn" id="exportBtn" disabled>↓　Экспортировать OBJ</button>
+<div class="footnote">Обработка локальная — модель не отправляется на сервер. Импорт: триангулируемые OBJ и STL. Экспорт: OBJ.</div>
+</aside>
+<section class="workspace">
+<div class="viewport-toolbar"><div class="view-title"><span class="live-dot"></span><span id="viewName">Сцена готова</span></div><div class="view-actions"><button class="tool-btn active" id="solidBtn" title="Заливка">◧</button><button class="tool-btn" id="wireBtn" title="Каркас">▱</button><span class="separator"></span><button class="tool-btn" id="fitBtn" title="Вписать в окно">⌗</button><button class="tool-btn" id="resetBtn" title="Сбросить вид">↺</button></div></div>
+<div class="canvas-wrap" id="canvasWrap"><canvas id="view"></canvas><div class="empty-state" id="emptyState"><div class="empty-cube"><span></span></div><h2>Ваша геометрия,<br><strong>без лишнего шума.</strong></h2><p>Загрузите CAD-экспорт из Plasticity,<br>чтобы начать настройку сетки.</p><button id="emptyUpload">Выбрать модель <span>↑</span></button><small>Поддерживаются файлы OBJ и STL</small></div><div class="view-hint hidden" id="viewHint">ЛКМ — вращение <span>·</span> колесо — масштаб</div></div>
+<div class="statsbar"><div><small>ВЕРШИНЫ</small><b id="verticesStat">—</b></div><div><small>ТРЕУГОЛЬНИКИ</small><b id="facesStat">—</b></div><div><small>СОКРАЩЕНИЕ</small><b id="reductionStat">—</b></div><div class="status-message" id="statusMessage">Импортируйте модель, чтобы увидеть статистику</div></div>
+<div class="disclaimer"><span>ⓘ</span> FacetForge очищает и упрощает существующую триангуляцию. Это не CAD-ремешер: исходная форма и плотность STL влияют на результат.</div>
+</section>
+</main><script src="app.js"></script>
+</body></html>
