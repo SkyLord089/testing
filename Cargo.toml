@@ -1,6 +1,6 @@
 [package]
 name = "facetforge"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "Adaptive mesh cleanup and density control for CAD exports"
 license = "MIT"
@@ -9,6 +9,7 @@ license = "MIT"
 truck-meshalgo = "0.4.0"
 truck-polymesh = "0.6.0"
 truck-stepio = "0.3.0"
+rayon = "1.12.0"
 
 [patch.crates-io]
 # ruststep 0.4.0 rejects valid empty aggregates such as STYLED_ITEM('',(),...).

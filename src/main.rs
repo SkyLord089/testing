@@ -94,9 +94,11 @@ fn tessellate_step(step:&str,tolerance:f64)->Result<String,String>{
     let used_tolerance=align_circle_tolerance(step,tolerance);
     let table=Table::from_step(step).ok_or_else(||"STEP syntax could not be parsed. This error does not identify the AP schema; check the file is complete ISO-10303-21 text.".to_string())?;
     let mut combined=PolygonMesh::default();let mut shells=0usize;
+    let workers=std::thread::available_parallelism().map(|n|n.get().min(2)).unwrap_or(1);
+    let pool=rayon::ThreadPoolBuilder::new().num_threads(workers).stack_size(8*1024*1024).build().map_err(|e|format!("Could not start bounded tessellation workers: {e}"))?;
     for shell in table.shell.values(){
         let compressed=table.to_compressed_shell(shell).map_err(|e|format!("Could not read a STEP surface or boundary: {e}"))?;
-        let mut mesh=compressed.robust_triangulation(used_tolerance).to_polygon();
+        let mut mesh=pool.install(||compressed.robust_triangulation(used_tolerance)).to_polygon();
         mesh.put_together_same_attrs(5.0e-5).remove_degenerate_faces().remove_unused_attrs();
         combined.merge(mesh);shells+=1;
     }

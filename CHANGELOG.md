@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.4 — bounded STEP tessellation resources
+- Limit Truck/Rayon tessellation to at most two workers with larger worker stacks to reduce memory spikes and stack-related crashes on complex STEP assemblies.
+
 ## 0.2.3 — clearer STEP failure state
 - Hide the empty-workspace prompt as soon as a STEP file is selected.
 - Replace the misleading “launch the executable” warning with distinct local-server disconnect and HTTP 404 diagnostics.
