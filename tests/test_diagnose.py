@@ -74,6 +74,18 @@ class TensileSearchTests(unittest.TestCase):
             ("TensileLibrary_lazy_%s.dat", "TensileLibrary_%s.dat", "TensileLibrary.dat"),
         )
 
+    def test_generic_filename_needs_no_substitution(self):
+        """TensileLibrary.dat без %s ронял проверку с TypeError на живой машине."""
+        names = diagnose.tensile_filenames("gfx803")
+        self.assertEqual(
+            names,
+            [
+                "TensileLibrary_lazy_gfx803.dat",
+                "TensileLibrary_gfx803.dat",
+                "TensileLibrary.dat",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

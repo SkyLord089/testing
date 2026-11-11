@@ -171,13 +171,45 @@ def check_device(apply_patch: bool) -> bool:
 
 
 def check_matmul(apply_patch: bool) -> bool:
-    """fp32 и fp16 проверяются раздельно.
+    """Умножение матриц: сначала точный известный ответ, потом статистика.
 
-    На живом RX 580 fp16-вариант упал с CUBLAS_STATUS_NOT_SUPPORTED: ZLUDA не
-    поддерживает CUBLAS_GEMM_DEFAULT_TENSOR_OP для half. Если fp32 при этом
-    работает, ComfyUI можно запускать с --force-fp32.
+    fp32 и fp16 проверяются раздельно. Абсолютная ошибка сама по себе ничего
+    не значит: у произведения матриц 256x256 из randn элементы достигают ~70,
+    поэтому на живой машине «расхождение 70.77» означало не неточность, а
+    полностью посторонний результат. Метрика сделана относительной, а перед
+    ней считается произведение с заведомо известным ответом - оно отличает
+    «считает неточно» от «не считает вовсе» и от «транспонирует вывод».
     """
     torch = _torch()
+
+    # 1) точный ответ: [[1,2],[3,4]] @ [[5,6],[7,8]] = [[19,22],[43,50]]
+    expected = [[19.0, 22.0], [43.0, 50.0]]
+    try:
+        a = torch.tensor([[1.0, 2.0], [3.0, 4.0]], device="cuda")
+        b = torch.tensor([[5.0, 6.0], [7.0, 8.0]], device="cuda")
+        got = (a @ b).cpu().tolist()
+        _info("2x2 с известным ответом: %s (ожидается %s)" % (got, expected))
+        # Значения должны читаться с GPU одинаково дважды. Если нет - дело
+        # не в GEMM, а в передаче данных, и чинить надо её.
+        a_again = a.cpu().tolist()
+        b_again = b.cpu().tolist()
+        stable = a_again == [[1.0, 2.0], [3.0, 4.0]] and b_again == [[5.0, 6.0], [7.0, 8.0]]
+        _info("операнды читаются с GPU стабильно: %s" % stable)
+        if not stable:
+            _detail("операнды изменились между записью и чтением: %s / %s" % (a_again, b_again))
+        flat_expected = [value for row in expected for value in row]
+        flat_got = [value for row in got for value in row]
+        if flat_got != flat_expected:
+            transposed = [value for row in zip(*expected) for value in row]
+            if flat_got == transposed:
+                _detail("результат транспонирован - cuBLAS-сопоставление ZLUDA путает порядок")
+            else:
+                _detail("GEMM вернул посторонние значения - ядро rocBLAS не сработало")
+            return False
+    except Exception as exc:
+        _detail("2x2 matmul: %s: %s" % (type(exc).__name__, str(exc).splitlines()[0][:160]))
+        return False
+
     fp32_ok = False
     for dtype in (torch.float32, torch.float16):
         label = "float32" if dtype == torch.float32 else "float16"
@@ -187,10 +219,20 @@ def check_matmul(apply_patch: bool) -> bool:
             c = (a @ b).float()
             torch.cuda.synchronize()
             reference = a.float().cpu() @ b.float().cpu()
-            error = (c.cpu() - reference).abs().max().item()
-            _info("matmul %-8s max |GPU - CPU| = %.6g" % (label, error))
-            if error >= 1.0:
-                _detail("matmul %s: расхождение с CPU слишком велико" % label)
+            # Относительная ошибка: абсолютная растёт вместе с самими значениями
+            scale = float(reference.abs().max())
+            absolute = float((c.cpu() - reference).abs().max())
+            relative = absolute / scale if scale else 0.0
+            _info(
+                "matmul %-8s max|GPU-CPU| = %.6g при max|эталон| = %.6g, отн. = %.3g"
+                % (label, absolute, scale, relative)
+            )
+            tolerance = 1e-2 if dtype == torch.float32 else 5e-2
+            if relative > tolerance:
+                _detail(
+                    "matmul %s: относительная ошибка %.3g выше допуска %.3g"
+                    % (label, relative, tolerance)
+                )
                 if dtype == torch.float32:
                     return False
                 continue
@@ -292,7 +334,17 @@ def check_roundtrip(apply_patch: bool) -> bool:
 # library/src/tensile_host.cpp:622-696. Отклоняться от него нельзя: если
 # проверка будет искать не там, где ищет rocBLAS, её результат ничего не стоит.
 TENSILE_CANDIDATES = ("../../Tensile/library", "library", "rocblas/library")
+# Третий вариант без подстановки архитектуры: "%s" в нём нет, и попытка
+# применить к нему "%" падала с TypeError на живой машине.
 TENSILE_FILENAMES = ("TensileLibrary_lazy_%s.dat", "TensileLibrary_%s.dat", "TensileLibrary.dat")
+
+
+def tensile_filenames(arch: str) -> List[str]:
+    """Имена файлов в том порядке, в котором их пробует rocBLAS."""
+    return [
+        template % arch if "%s" in template else template
+        for template in TENSILE_FILENAMES
+    ]
 
 
 def check_blas(apply_patch: bool) -> bool:
@@ -357,16 +409,29 @@ def check_blas(apply_patch: bool) -> bool:
                 _detail("    не прочитать %s: %s" % (directory, exc))
                 continue
             found_any = True
-            for template in TENSILE_FILENAMES:
-                name = template % arch
-                _info(
-                    "    %-38s %s" % (name, "ЕСТЬ" if name in present else "нет")
-                )
+            for name in tensile_filenames(arch):
+                _info("    %-38s %s" % (name, "ЕСТЬ" if name in present else "нет"))
             archs = sorted({n.split("_")[-1][:-4] for n in present if n.count("_") == 1})
             if archs:
-                _info("    архивы под архитектуры: %s" % ", ".join(archs))
+                _info("    индексные файлы под архитектуры: %s" % ", ".join(archs))
             else:
                 _info("    TensileLibrary*.dat в каталоге нет вовсе")
+            # Tensile с ленивой загрузкой держит сами ядра в .co рядом с .dat.
+            # Если индексы есть, а кодовых объектов нет - библиотека
+            # инициализируется, но считать нечем, и результат будет мусорным.
+            try:
+                everything = os.listdir(directory)
+            except OSError:
+                everything = []
+            code_objects = [n for n in everything if n.lower().endswith(".co")]
+            _info("    кодовых объектов (.co) в каталоге: %d" % len(code_objects))
+            arch_specific = [n for n in code_objects if arch in n.lower()]
+            _info("    из них с %s в имени: %d" % (arch, len(arch_specific)))
+            if present and not code_objects:
+                _detail(
+                    "индекс TensileLibrary есть, а .co нет - ядрам неоткуда "
+                    "загрузиться, GEMM будет возвращать посторонние значения"
+                )
             if not any(arch in name for name in present):
                 _detail(
                     "в %s нет ни одного файла для %s" % (directory, arch)
