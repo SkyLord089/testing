@@ -44,6 +44,8 @@ CHECKS: List[Tuple[str, str]] = [
     ("roundtrip", "сверка значений .item() и .cpu()"),
     ("shim", "Python-заплатки вместо выделения pinned-памяти"),
     ("patch", "все проверки памяти после подмены cudaHostAlloc"),
+    ("libs", "чьи DLL в torch/lib - NVIDIA или ZLUDA"),
+    ("imports", "откуда torch берёт cudaHostAlloc: IAT или GetProcAddress"),
 ]
 CHECK_NAMES = [name for name, _ in CHECKS]
 
@@ -168,15 +170,42 @@ def check_device(apply_patch: bool) -> bool:
 
 
 def check_matmul(apply_patch: bool) -> bool:
+    """fp32 и fp16 проверяются раздельно.
+
+    На живом RX 580 fp16-вариант упал с CUBLAS_STATUS_NOT_SUPPORTED: ZLUDA не
+    поддерживает CUBLAS_GEMM_DEFAULT_TENSOR_OP для half. Если fp32 при этом
+    работает, ComfyUI можно запускать с --force-fp32.
+    """
     torch = _torch()
-    a = torch.randn(256, 256, device="cuda", dtype=torch.float16)
-    b = torch.randn(256, 256, device="cuda", dtype=torch.float16)
-    c = (a @ b).float()
-    torch.cuda.synchronize()
-    reference = (a.float().cpu() @ b.float().cpu())
-    error = (c.cpu() - reference).abs().max().item()
-    _info("max |GPU - CPU| = %.6g" % error)
-    return error < 1.0
+    fp32_ok = False
+    for dtype in (torch.float32, torch.float16):
+        label = "float32" if dtype == torch.float32 else "float16"
+        try:
+            a = torch.randn(256, 256, device="cuda", dtype=dtype)
+            b = torch.randn(256, 256, device="cuda", dtype=dtype)
+            c = (a @ b).float()
+            torch.cuda.synchronize()
+            reference = a.float().cpu() @ b.float().cpu()
+            error = (c.cpu() - reference).abs().max().item()
+            _info("matmul %-8s max |GPU - CPU| = %.6g" % (label, error))
+            if error >= 1.0:
+                _detail("matmul %s: расхождение с CPU слишком велико" % label)
+                if dtype == torch.float32:
+                    return False
+                continue
+            if dtype == torch.float32:
+                fp32_ok = True
+        except Exception as exc:
+            message = str(exc).splitlines()[0]
+            _info("matmul %-8s не работает: %s" % (label, message[:160]))
+            if dtype == torch.float32:
+                _detail("float32 matmul - обязательный минимум, без него генерация невозможна")
+                return False
+            _detail(
+                "float16 matmul недоступен - запускайте ComfyUI с --force-fp32, "
+                "иначе модель в fp16 упадёт на первом же слое"
+            )
+    return fp32_ok
 
 
 def check_item(apply_patch: bool) -> bool:
@@ -256,6 +285,98 @@ def check_roundtrip(apply_patch: bool) -> bool:
         _detail("; ".join(problems))
         return False
     return True
+
+
+def check_libs(apply_patch: bool) -> bool:
+    """Чьи на самом деле DLL лежат в torch/lib: NVIDIA или ZLUDA.
+
+    install_comfyui.bat подменяет cublas/cusparse/nvrtc файлами из архива
+    ZLUDA. У NVIDIA cublas64_11.dll весит сотни мегабайт, у ZLUDA - доли
+    мегабайта, поэтому размер отвечает на вопрос однозначно.
+    """
+    if os.name != "nt":
+        _detail("актуально только для Windows")
+        return False
+    torch = _torch()
+    lib_dir = os.path.join(os.path.dirname(os.path.abspath(torch.__file__)), "lib")
+    zluda_dir = os.environ.get("ZLRX_ROOT", "")
+    interesting = (
+        "cublas64_11.dll",
+        "cublasLt64_11.dll",
+        "cusparse64_11.dll",
+        "cufft64_10.dll",
+        "nvrtc64_112_0.dll",
+        "nvrtc_cuda.dll",
+        "cudart64_110.dll",
+    )
+    replaced = 0
+    for name in interesting:
+        path = os.path.join(lib_dir, name)
+        if not os.path.exists(path):
+            _info("%-22s отсутствует" % name)
+            continue
+        size = os.path.getsize(path)
+        # ZLUDA-заглушки на порядок меньше настоящих библиотек NVIDIA
+        origin = "ZLUDA?" if size < 32 * 1024 * 1024 else "NVIDIA"
+        if name in ("cublas64_11.dll", "cusparse64_11.dll", "nvrtc64_112_0.dll") and size < 32 * 1024 * 1024:
+            replaced += 1
+        _info("%-22s %10.2f MiB  %s" % (name, size / 1024 ** 2, origin))
+    _info("подменено на ZLUDA: %d из 3 (cublas, cusparse, nvrtc)" % replaced)
+    if replaced == 0:
+        _detail(
+            "в torch/lib лежат оригинальные библиотеки NVIDIA - подмена не выполнена. "
+            "Запустите install_comfyui.bat: он напечатает, что заменил, а что пропустил"
+        )
+    if zluda_dir:
+        _info("ZLRX_ROOT = %s" % zluda_dir)
+    return True
+
+
+def check_imports(apply_patch: bool) -> bool:
+    """Откуда torch берёт функции pinned-памяти.
+
+    Прошлый прогон показал 0 слотов IAT в 38 модулях. Это либо правда, либо
+    сбой разбора PE. Проверка печатает по каждому интересному модулю таблицу
+    импорта и ищет имена в сырых байтах файла: имя без записи в IAT означает
+    GetProcAddress, и тогда подмена IAT невозможна в принципе.
+    """
+    if os.name != "nt":
+        _detail("актуально только для Windows")
+        return False
+    _torch()  # модули должны быть загружены
+
+    from zluda_rx580.pinpatch import import_summary, loaded_modules
+
+    wanted = ("torch_cuda.dll", "c10_cuda.dll", "cudart64_110.dll", "torch_cpu.dll")
+    paths = {os.path.basename(path).lower(): path for _base, path in loaded_modules() if path}
+    missing = [name for name in wanted if name not in paths]
+    if missing:
+        _detail("в процессе нет: %s" % ", ".join(missing))
+
+    iat_total = 0
+    for name in wanted:
+        path = paths.get(name)
+        if not path:
+            continue
+        summary = import_summary(path)
+        _info("--- %s" % name)
+        _info("    импортирует DLL: %s" % (", ".join(summary.import_dlls) or "<нет>"))
+        if summary.delay_dlls:
+            _info("    delay-load: %s" % ", ".join(summary.delay_dlls))
+        _info("    записей импорта: %d" % summary.descriptor_count)
+        _info("    слоты pinned-памяти: %s" % (", ".join(summary.iat_matches) or "<нет>"))
+        _info("    имена в сырых байтах: %s" % (", ".join(summary.raw_name_hits) or "<нет>"))
+        _info("    вывод: %s" % summary.verdict())
+        iat_total += len(summary.iat_matches)
+
+    if iat_total:
+        _info("итого слотов для подмены: %d" % iat_total)
+        return True
+    _detail(
+        "слотов IAT нет. Если при этом имена в байтах есть - PyTorch получает их "
+        "через GetProcAddress, и уровень 3 (подмена IAT) на этой машине не работает"
+    )
+    return False
 
 
 def check_patch(apply_patch: bool) -> bool:
@@ -353,6 +474,8 @@ CHECK_FUNCTIONS: Dict[str, Callable[[bool], bool]] = {
     "roundtrip": check_roundtrip,
     "shim": check_shim,
     "patch": check_patch,
+    "libs": check_libs,
+    "imports": check_imports,
 }
 
 
@@ -409,7 +532,12 @@ def _run_one(name: str, apply_patch: bool, timeout: int) -> Tuple[str, List[str]
             errors="replace",
         )
     except subprocess.TimeoutExpired:
-        return "TIMEOUT", [], ["process did not finish in %d s" % timeout]
+        return "TIMEOUT", [], [
+            "process did not finish in %d s" % timeout,
+            "первый запуск компилирует ядра ZLUDA и кэширует их в ZLUDA_CACHE_DIR; "
+            "повторите проверку - со второй попытки обычно быстрее, "
+            "или поднимите лимит: run_diagnose.bat --timeout 3600",
+        ]
     info: List[str] = []
     details: List[str] = []
     status = "CRASH"
@@ -444,9 +572,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         index = argv.index("--check")
         names = [argv[index + 1]]
     apply_patch = "--patch" in argv
-    timeout = 120
+    # Первый запуск ZLUDA компилирует PTX в AMDGCN, это минуты на ядро.
+    # 120 с на живой машине не хватило: item/nonzero/roundtrip/shim отвалились
+    # по TIMEOUT, хотя GPU к тому моменту уже работал.
+    timeout = int(os.environ.get("ZLRX580_TIMEOUT", "1800"))
     if "--timeout" in argv:
         timeout = int(argv[argv.index("--timeout") + 1])
+    print("таймаут на проверку: %d с (первый запуск компилирует ядра ZLUDA)" % timeout)
 
     print("=" * 72)
     print("zluda_rx580 diagnostics%s" % ("  (with cudaHostAlloc patch)" if apply_patch else ""))

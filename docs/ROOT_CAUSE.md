@@ -297,3 +297,27 @@ pub(crate) unsafe fn cuMemHostAlloc(
 * patientx/ComfyUI-Zluda — issues #10, #32, #441; `install-n.bat`, `patchzluda.bat`,
   `fixforrx580.bat`, `comfy/customzluda/zluda-default.py`
 * lshqqytiger/ZLUDA — issues #38, #115, #138
+
+---
+
+## Подтверждение на живом железе
+
+Прогон `run_diagnose.bat` на RX 580 (Python 3.12.10, torch 2.7.1+cu118,
+ZLUDA 3.9.6 rocm5) дал ровно то, что предсказывала цепочка выше:
+
+```
+[pin] pin_memory() - прямой вызов cudaHostAlloc
+  ! RuntimeError: CUDA error: out of memory
+```
+
+Карта при этом видна и работает (`Radeon RX 580 Series [ZLUDA]`, 8 ГиБ),
+то есть это не «нет драйвера» и не настоящая нехватка памяти: `hipHostMalloc`
+возвращает `nullptr` из-за `CL_MEM_SVM_ATOMICS`, что и превращается в
+`hipErrorOutOfMemory == CUDA_ERROR_OUT_OF_MEMORY`.
+
+Отдельный результат, который **опровергает** один из запланированных способов
+лечения: опрос таблицы импорта 38 загруженных модулей не нашёл ни одного слота
+`cudaHostAlloc` / `cudaFreeHost` из `cudart*`. Значит `torch_cuda.dll` не
+импортирует эти функции через IAT, и уровень 3 (подмена слота) неприменим.
+Проверка `imports` уточняет механизм: имена ищутся ещё и в сырых байтах файла,
+и их наличие без записи в IAT означает разрешение через `GetProcAddress`.

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import tempfile
 import re
 import sys
 import pathlib
@@ -185,3 +186,66 @@ class UndoTests(unittest.TestCase):
         finally:
             pinpatch.write_pointer = original
         self.assertEqual(written, [(0x2000, 0xBEEF)])
+
+
+class ImportSummaryTests(unittest.TestCase):
+    """Сканер обязан находить слоты, когда они есть.
+
+    На живой машине опрос дал 0 слотов в 38 модулях. Чтобы считать это
+    результатом, а не сбоем разбора, нужен положительный контроль: образ,
+    который точно импортирует cudaHostAlloc из cudart64_110.dll.
+    """
+
+    def setUp(self):
+        from tests.test_pe import build_synthetic_pe
+
+        self.image = build_synthetic_pe()
+        self.path = pathlib.Path(tempfile.gettempdir()) / "zlrx_synthetic_module.dll"
+        self.path.write_bytes(self.image)
+
+    def tearDown(self):
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
+
+    def test_detects_iat_slots_in_a_module_that_has_them(self):
+        summary = pinpatch.import_summary(str(self.path))
+        self.assertTrue(summary.parsed, summary.error)
+        self.assertIn("cudart64_110.dll", summary.import_dlls)
+        # Фикстура собирается с delay_load=True, поэтому cudaHostAlloc
+        # встречается дважды: обычный импорт и отложенный.
+        self.assertEqual(
+            sorted(summary.iat_matches),
+            [
+                "cudart64_110.dll!cudaFreeHost",
+                "cudart64_110.dll!cudaHostAlloc",
+                "cudart64_110.dll!cudaHostAlloc (delay)",
+            ],
+        )
+        self.assertEqual(summary.delay_dlls, ["cudart64_110.dll"])
+        self.assertIn("есть слоты IAT", summary.verdict())
+
+    def test_find_target_slots_agrees_with_the_summary(self):
+        slots = pinpatch.find_target_slots(str(self.path), 0x10000)
+        self.assertEqual(
+            sorted(name for _d, name, _a, _dl in slots),
+            ["cudaFreeHost", "cudaHostAlloc", "cudaHostAlloc"],
+        )
+        # отложенный импорт помечен отдельно - его слот заполняет загрузчик позже
+        self.assertEqual([delay for _d, _n, _a, delay in slots].count(True), 1)
+
+    def test_raw_hits_without_iat_mean_dynamic_resolution(self):
+        summary = pinpatch.ImportSummary("m.dll", parsed=True, import_dlls=["kernel32.dll"])
+        summary.raw_name_hits = ["cudaHostAlloc"]
+        self.assertIn("GetProcAddress", summary.verdict())
+
+    def test_cudart_itself_is_not_reported_as_dynamic(self):
+        summary = pinpatch.ImportSummary("cudart64_110.dll", parsed=True, import_dlls=["kernel32.dll"])
+        summary.raw_name_hits = ["cudaHostAlloc"]
+        self.assertIn("экспортирует", summary.verdict())
+
+    def test_missing_file_is_reported_not_crashing(self):
+        summary = pinpatch.import_summary(str(self.path) + ".absent")
+        self.assertFalse(summary.parsed)
+        self.assertIn("не разобран", summary.verdict())

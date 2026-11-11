@@ -340,6 +340,97 @@ def find_target_slots(
     return found
 
 
+# Имена, по которым PyTorch добирается до pinned-памяти. Если имя лежит в
+# файле, но не в таблице импорта - его получают через GetProcAddress, и тогда
+# подмена IAT невозможна в принципе.
+HOST_ALLOC_NAMES = (
+    "cudaHostAlloc",
+    "cudaFreeHost",
+    "cudaMallocHost",
+    "cudaHostRegister",
+    "cuMemHostAlloc",
+    "cuMemAllocHost",
+    "cuMemFreeHost",
+)
+
+
+@dataclass
+class ImportSummary:
+    module_path: str
+    parsed: bool = False
+    is_pe32_plus: bool = False
+    import_dlls: List[str] = field(default_factory=list)
+    delay_dlls: List[str] = field(default_factory=list)
+    iat_matches: List[str] = field(default_factory=list)
+    raw_name_hits: List[str] = field(default_factory=list)
+    error: str = ""
+
+    @property
+    def descriptor_count(self) -> int:
+        return len(self.import_dlls) + len(self.delay_dlls)
+
+    def verdict(self) -> str:
+        """Что означает сочетание признаков."""
+        if os.path.basename(self.module_path).lower().startswith(RUNTIME_DLL_PREFIXES):
+            # cudart сам экспортирует эти функции, поэтому их имена лежат в
+            # файле и без записей в таблице импорта. Это не динамическое
+            # разрешение, и слоты IAT здесь не нужны.
+            return "это сама cudart: она экспортирует эти функции, слоты IAT тут не при чём"
+        if not self.parsed:
+            return "PE не разобран (%s) - по этому модулю выводов нет" % (self.error or "?")
+        if self.iat_matches:
+            return "есть слоты IAT: %s" % ", ".join(self.iat_matches)
+        if self.raw_name_hits:
+            return (
+                "имена %s в файле есть, но в таблице импорта их нет - "
+                "значит их получают через GetProcAddress, подмена IAT не сработает"
+                % "/".join(self.raw_name_hits)
+            )
+        if not self.import_dlls:
+            return "таблица импорта пуста - разбор скорее всего не удался"
+        return "модуль не обращается к pinned-памяти"
+
+
+def import_summary(module_path: str, names: Sequence[str] = HOST_ALLOC_NAMES) -> ImportSummary:
+    """Читает PE и отвечает: откуда модуль берёт функции pinned-памяти.
+
+    Отдельно ищет имена в сырых байтах файла. Имя в файле без записи в IAT
+    означает динамическое разрешение через ``GetProcAddress``.
+    """
+    summary = ImportSummary(module_path)
+    try:
+        with open(module_path, "rb") as handle:
+            data = handle.read()
+    except OSError as exc:
+        summary.error = str(exc)
+        return summary
+
+    for name in names:
+        if name.encode("ascii") in data:
+            summary.raw_name_hits.append(name)
+
+    try:
+        image = pe_mod.PEImage(data, module_path)
+    except pe_mod.PEFormatError as exc:
+        summary.error = str(exc)
+        return summary
+
+    summary.parsed = True
+    summary.is_pe32_plus = image.is_pe32_plus
+
+    for descriptor in image.import_descriptors():
+        summary.import_dlls.append(descriptor.dll)
+        for slot in descriptor.slots:
+            if slot.name in names:
+                summary.iat_matches.append("%s!%s" % (descriptor.dll, slot.name))
+    for descriptor in image.delay_import_descriptors():
+        summary.delay_dlls.append(descriptor.dll)
+        for slot in descriptor.slots:
+            if slot.name in names:
+                summary.iat_matches.append("%s!%s (delay)" % (descriptor.dll, slot.name))
+    return summary
+
+
 def write_pointer(address: int, value: int) -> int:
     """Пишет 8-байтный указатель, на время снимая защиту страницы.
 

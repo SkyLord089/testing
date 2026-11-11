@@ -66,6 +66,31 @@ D:\Apps\Rx-580-ComfyUI\
 
 Другую папку можно задать аргументом: `install.bat E:\Games\Comfy`.
 
+### Что показал прогон на живом RX 580
+
+Данные получены на реальной машине: Python 3.12.10, torch 2.7.1+cu118,
+ZLUDA 3.9.6 rocm5, `Radeon RX 580 Series [ZLUDA]`, 8 ГиБ.
+
+| наблюдение | вывод |
+|---|---|
+| `device` PASS, карта видна как `[ZLUDA]` | связка ZLUDA + torch 2.7.1+cu118 работает |
+| `pin_memory()` → `CUDA error: out of memory` | **корневая причина подтверждена на железе**, а не только по исходникам |
+| 0 слотов IAT в 38 модулях | подмена `cudaHostAlloc` через IAT **не работает** — torch её так не импортирует |
+| fp16 matmul → `CUBLAS_STATUS_NOT_SUPPORTED` | ZLUDA не поддерживает `CUBLAS_GEMM_DEFAULT_TENSOR_OP` для half |
+| `item` / `nonzero` / `shim` → TIMEOUT 120 с | не поломка: первый запуск компилирует ядра ZLUDA, лимит был мал |
+
+Практические следствия:
+
+- Уровень 3 (подмена IAT) на этой машине мёртв. Рабочими остаются уровень 1
+  (`ZLUDA_RX580_HOST_REGISTER=1`) и уровень 2 (Python-заплатки, включены по
+  умолчанию). Проверка `imports` покажет, почему именно: если имена
+  `cudaHostAlloc` в файле есть, а в таблице импорта нет, их получают через
+  `GetProcAddress`, и перехватывать слот бессмысленно.
+- ComfyUI нужно запускать с `--force-fp32`: fp16-умножение не поддерживается.
+- Таймаут проверки поднят до 1800 с и настраивается через `ZLRX580_TIMEOUT`
+  или `run_diagnose.bat --timeout 3600`. Ядра кэшируются в `ZLUDA_CACHE_DIR`,
+  поэтому второй запуск быстрее первого.
+
 ### Если ZLUDA не скачался
 
 Отдельный скрипт повторяет только шаг с ZLUDA — `venv` и `ComfyUI` не тронутся:
@@ -247,6 +272,8 @@ run_diagnose.bat --no-zluda       :: без zluda.exe, для сравнения
 | `roundtrip` | сверка значений `.item()` и `.cpu()`, целостность данных |
 | `shim` | Python-заплатки: значения не должны меняться |
 | `patch` | подмена `cudaHostAlloc` и повтор всех проверок памяти |
+| `libs` | чьи DLL в `torch\lib` — NVIDIA или ZLUDA (по размеру) |
+| `imports` | откуда torch берёт `cudaHostAlloc`: IAT или `GetProcAddress` |
 
 `env` печатает, по каким именно признакам найден ZLUDA. Файл `nvrtc_cuda.dll`
 в `torch/lib` признаком **не** считается: `install_comfyui.bat` создаёт его
