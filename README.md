@@ -116,6 +116,37 @@ GEMM у неё нет. Поэтому после подмены библиоте
 по всей установке ROCm, чтобы библиотеку для gfx803 можно было найти и
 подсказать через `ROCBLAS_TENSILE_LIBPATH` (заготовка есть в `env.bat`).
 
+### Почему умножение возвращало нули
+
+Библиотека Tensile для gfx803 на машине есть (`TensileLibrary_lazy_gfx803.dat`
+и 8 кодовых объектов `.co`), операнды читаются с GPU стабильно, а
+`[[1,2],[3,4]] @ [[5,6],[7,8]]` возвращало `[[0,0],[0,0]]`. То есть GEMM
+отчитывался об успехе, но ядро не исполнялось.
+
+Причина в выборе ветки загрузки ядер. ZLUDA вызывает `rocblas_initialize()`
+только из своей `init()` (`zluda_blas/src/lib.rs:280-281`), которая
+соответствует `cublasInit`. PyTorch `cublasInit` не вызывает никогда:
+`CublasHandlePool.cpp` обращается лишь к `cublasCreate` (:92),
+`cublasSetStream` (:204) и `cublasSetMathMode` (:224).
+
+Для rocBLAS это переключает ветку загрузки ядер в `tensile_host.cpp:722`:
+
+    if(!tensile_lazy_load_enabled || rocblas_initialize_called())
+
+При истинном условии все `*gfx803*co` грузятся сразу через
+`adapter.loadCodeObjectFile`, при ложном включается `initializeLazyLoading`
+(:802-815). Выбор фиксируется в `static int once`, поэтому вызывать нужно
+строго до первого GEMM.
+
+Набор делает это сам: `env.bat` выставляет `ZLUDA_RX580_ROCBLAS_INIT=1`, и
+автоактивация вызывает `rocblas_initialize()` сразу после `import torch`.
+Проверка `matmul` намеренно снимает эту переменную и служит контрольной
+веткой, а `blasinit` — опытной; они выполняются в разных процессах, поэтому
+сравнение честное.
+
+Это гипотеза, подтверждённая чтением исходников rocBLAS, ZLUDA и PyTorch, но
+не проверенная на вашем железе до прогона `blasinit`.
+
 ### Если ZLUDA не скачался
 
 Отдельный скрипт повторяет только шаг с ZLUDA — `venv` и `ComfyUI` не тронутся:
@@ -300,6 +331,7 @@ run_diagnose.bat --no-zluda       :: без zluda.exe, для сравнения
 | `libs` | чьи DLL в `torch\lib` — NVIDIA или ZLUDA (по размеру) |
 | `imports` | откуда torch берёт `cudaHostAlloc`: IAT или `GetProcAddress` |
 | `blas` | найдёт ли rocBLAS `TensileLibrary.dat` для gfx803 |
+| `blasinit` | то же умножение после явного `rocblas_initialize()` |
 
 `env` печатает, по каким именно признакам найден ZLUDA. Файл `nvrtc_cuda.dll`
 в `torch/lib` признаком **не** считается: `install_comfyui.bat` создаёт его

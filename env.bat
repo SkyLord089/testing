@@ -32,6 +32,10 @@ rem Кэш скомпилированных ядер ZLUDA.
 rem Поддерживается только в ZLUDA 3.9.6 и новее: в 3.9.5 путь жёстко
 rem зашит как dirs::cache_dir()/ZLUDA/ComputeCache, то есть %LocalAppData%.
 set "ZLUDA_CACHE_DIR=%ZLRX_ROOT%\cache\zluda"
+rem PyTorch никогда не вызывает cublasInit, а только через него ZLUDA доходит
+rem до rocblas_initialize(). Без него rocBLAS остаётся в режиме ленивой
+rem загрузки ядер, и на RX 580 умножение матриц возвращает нули.
+set "ZLUDA_RX580_ROCBLAS_INIT=1"
 rem rocBLAS ищет TensileLibrary рядом с rocblas.dll. Если HIP SDK лежит
 rem нестандартно или библиотеку для gfx803 пришлось положить отдельно,
 rem раскомментируйте и укажите свой каталог:

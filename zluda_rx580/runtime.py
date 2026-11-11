@@ -27,6 +27,7 @@ ENV_HOST_REGISTER_KEY = "ZLUDA_RX580_HOST_REGISTER"
 ENV_HIDE_ROCM_KEY = "ZLUDA_RX580_HIDE_ROCM"
 ENV_NO_PIN_PATCH_KEY = "ZLUDA_RX580_NO_PIN_PATCH"
 ENV_NO_PIN_SHIM_KEY = "ZLUDA_RX580_NO_PIN_SHIM"
+ENV_ROCBLAS_INIT_KEY = "ZLUDA_RX580_ROCBLAS_INIT"
 
 
 def is_disabled() -> bool:
@@ -174,6 +175,57 @@ def install_pinned_memory_patch(torch_module: Any) -> Optional[str]:
 
 
 _installed: List[Any] = []
+
+
+def initialize_rocblas() -> str:
+    """Вызывает ``rocblas_initialize()`` до первого умножения матриц.
+
+    Почему это нужно
+    ----------------
+    ZLUDA вызывает ``rocblas_initialize()`` только из своей ``init()``
+    (``zluda_blas/src/lib.rs:280-281``), а она соответствует ``cublasInit``.
+    PyTorch ``cublasInit`` не вызывает никогда: ``CublasHandlePool.cpp``
+    обращается только к ``cublasCreate`` (:92), ``cublasSetStream`` (:204) и
+    ``cublasSetMathMode`` (:224).
+
+    Для rocBLAS это меняет ветку загрузки ядер. В ``tensile_host.cpp:722``:
+
+        if(!tensile_lazy_load_enabled || rocblas_initialize_called())
+
+    истинное условие ведёт к немедленной загрузке всех ``*gfx803*co`` через
+    ``adapter.loadCodeObjectFile``, ложное - к ``initializeLazyLoading``
+    (:802-815). Выбор делается один раз и запоминается в ``static int once``,
+    поэтому вызывать нужно строго до первого GEMM.
+
+    На живой машине без этого вызова ``[[1,2],[3,4]] @ [[5,6],[7,8]]`` вернуло
+    нули при корректных операндах - то есть ядро не исполнилось.
+    """
+    if os.name != "nt":
+        return "не применимо вне Windows"
+
+    import ctypes
+
+    candidates: List[str] = []
+    for var in ("HIP_PATH", "ROCM_PATH"):
+        root = os.environ.get(var, "")
+        if root:
+            candidates.append(os.path.join(root, "bin", "rocblas.dll"))
+    candidates.append("rocblas.dll")
+
+    tried: List[str] = []
+    for candidate in candidates:
+        try:
+            library = ctypes.CDLL(candidate)
+        except OSError as exc:
+            tried.append("%s: %s" % (candidate, exc))
+            continue
+        try:
+            library.rocblas_initialize()
+        except (AttributeError, OSError) as exc:
+            tried.append("%s: нет rocblas_initialize (%s)" % (candidate, exc))
+            continue
+        return "rocblas_initialize() вызвана через %s" % candidate
+    return "не удалось вызвать rocblas_initialize: %s" % ("; ".join(tried) or "нет кандидатов")
 
 
 def pinned_shims_active(torch_module: Any) -> bool:
@@ -420,6 +472,13 @@ def on_torch_imported(torch_module: Any = None) -> None:
         return
 
     # Стадии независимы: сбой одной не должен отменять остальные.
+    # rocBLAS должна быть инициализирована до первого GEMM, поэтому раньше всех.
+    if _flag(ENV_ROCBLAS_INIT_KEY):
+        try:
+            LOG.info("zluda_rx580: %s", initialize_rocblas())
+        except Exception as exc:  # pragma: no cover
+            LOG.warning("zluda_rx580: rocblas_initialize failed: %r", exc)
+
     try:
         report = install_pinned_memory_patch(torch_module)
         if report:

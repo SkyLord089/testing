@@ -86,6 +86,31 @@ class TensileSearchTests(unittest.TestCase):
             ],
         )
 
+class BlasInitWiringTests(unittest.TestCase):
+    """Инициализация rocBLAS должна успевать до импорта torch."""
+
+    def test_matmul_disables_init_before_importing_torch(self):
+        src = Path(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        ) / "zluda_rx580" / "diagnose.py"
+        body = src.read_text(encoding="utf-8")
+        body = body[body.index("def check_matmul(") :]
+        body = body[: body.index("\ndef ")]
+        self.assertLess(
+            body.index('pop("ZLUDA_RX580_ROCBLAS_INIT"'),
+            body.index("_torch()"),
+            "контрольная ветка снимает переменную уже после импорта torch",
+        )
+
+    def test_blasinit_calls_initialize_before_any_matmul(self):
+        src = Path(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        ) / "zluda_rx580" / "diagnose.py"
+        body = src.read_text(encoding="utf-8")
+        body = body[body.index("def check_blasinit(") :]
+        body = body[: body.index("\ndef ")]
+        self.assertLess(body.index("initialize_rocblas()"), body.index("a @ b"))
+
 
 if __name__ == "__main__":
     unittest.main()

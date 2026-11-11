@@ -47,6 +47,7 @@ CHECKS: List[Tuple[str, str]] = [
     ("libs", "чьи DLL в torch/lib - NVIDIA или ZLUDA"),
     ("imports", "откуда torch берёт cudaHostAlloc: IAT или GetProcAddress"),
     ("blas", "найдёт ли rocBLAS библиотеку Tensile для gfx803"),
+    ("blasinit", "то же умножение после явного rocblas_initialize()"),
 ]
 CHECK_NAMES = [name for name, _ in CHECKS]
 
@@ -180,7 +181,14 @@ def check_matmul(apply_patch: bool) -> bool:
     ней считается произведение с заведомо известным ответом - оно отличает
     «считает неточно» от «не считает вовсе» и от «транспонирует вывод».
     """
+    # Контрольная ветка: здесь rocBLAS намеренно НЕ инициализируется, иначе
+    # сравнивать blasinit будет не с чем. Снять переменную нужно до import
+    # torch - автоактивация читает её в момент импорта.
+    import os as _os
+
+    _os.environ.pop("ZLUDA_RX580_ROCBLAS_INIT", None)
     torch = _torch()
+    _info("rocblas_initialize() НЕ вызывалась - это контрольная ветка")
 
     # 1) точный ответ: [[1,2],[3,4]] @ [[5,6],[7,8]] = [[19,22],[43,50]]
     expected = [[19.0, 22.0], [43.0, 50.0]]
@@ -361,6 +369,54 @@ def tensile_filenames(arch: str) -> List[str]:
         template % arch if "%s" in template else template
         for template in TENSILE_FILENAMES
     ]
+
+
+def check_blasinit(apply_patch: bool) -> bool:
+    """То же умножение, но после явного ``rocblas_initialize()``.
+
+    Сравнение с проверкой ``matmul`` даёт ответ A/B за один прогон: обе
+    выполняются в отдельных процессах, значит в одной ветке rocBLAS
+    инициализирована, а в другой нет. Порядок важен - ``rocblas_initialize()``
+    обязана успеть до первого GEMM, иначе выбор ветки уже зафиксирован в
+    ``static int once`` внутри rocBLAS.
+    """
+    if os.name != "nt":
+        _detail("актуально только для Windows")
+        return False
+
+    torch = _torch()  # сначала грузим torch: он подтягивает rocblas.dll
+
+    from zluda_rx580.runtime import initialize_rocblas
+
+    outcome = initialize_rocblas()
+    _info("%s" % outcome)
+    if not outcome.startswith("rocblas_initialize() вызвана"):
+        _detail("без успешного вызова сравнение не имеет смысла")
+        return False
+
+    expected = [[19.0, 22.0], [43.0, 50.0]]
+    a = torch.tensor([[1.0, 2.0], [3.0, 4.0]], device="cuda")
+    b = torch.tensor([[5.0, 6.0], [7.0, 8.0]], device="cuda")
+    got = (a @ b).cpu().tolist()
+    _info("2x2 после инициализации: %s (ожидается %s)" % (got, expected))
+    if got != expected:
+        _detail(
+            "rocblas_initialize() не исправила GEMM - причина глубже, "
+            "чем выбор ветки загрузки ядер"
+        )
+        return False
+
+    c = torch.randn(256, 256, device="cuda")
+    d = torch.randn(256, 256, device="cuda")
+    product = (c @ d).cpu()
+    reference = c.cpu() @ d.cpu()
+    scale = float(reference.abs().max())
+    absolute = float((product - reference).abs().max())
+    _info(
+        "256x256 float32: max|GPU-CPU| = %.6g при max|эталон| = %.6g, отн. = %.3g"
+        % (absolute, scale, absolute / scale if scale else 0.0)
+    )
+    return absolute / scale < 1e-2 if scale else False
 
 
 def check_blas(apply_patch: bool) -> bool:
@@ -710,6 +766,7 @@ CHECK_FUNCTIONS: Dict[str, Callable[[bool], bool]] = {
     "libs": check_libs,
     "imports": check_imports,
     "blas": check_blas,
+    "blasinit": check_blasinit,
 }
 
 
