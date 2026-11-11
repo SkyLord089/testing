@@ -40,6 +40,17 @@ set "ZLUDA_COMGR_LOG_LEVEL=1"
 
 set "ARGS=--auto-launch --use-quad-cross-attention --reserve-vram 0.9"
 
+rem На живом RX 580 fp16-умножение падает: ZLUDA отвечает
+rem CUBLAS_STATUS_NOT_SUPPORTED на cublasGemmEx с CUBLAS_GEMM_DEFAULT_TENSOR_OP.
+rem Поэтому fp32 обязателен, иначе модель упадёт на первом слое.
+findstr /c:"--force-fp32" "%COMFY_DIR%\comfy\cli_args.py" >nul 2>&1
+if !errorlevel! equ 0 (
+    set "ARGS=!ARGS! --force-fp32"
+    echo  :: найден флаг --force-fp32 - работаем в fp32
+) else (
+    echo  :: [!] флага --force-fp32 нет, а fp16 на ZLUDA не работает
+)
+
 for %%F in (disable-pinned-memory disable-async-offload disable-smart-memory) do (
     findstr /c:"--%%F" "%COMFY_DIR%\comfy\cli_args.py" >nul 2>&1
     if !errorlevel! equ 0 (
