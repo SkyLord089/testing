@@ -91,27 +91,53 @@ def setup_env() -> Dict[str, str]:
     return changes
 
 
-def looks_like_zluda_installation(torch_module: Any) -> bool:
-    """Признаки ZLUDA, не требующие инициализации CUDA."""
+def zluda_evidence() -> List[str]:
+    """Что именно указывает на ZLUDA. Пустой список = признаков нет.
+
+    Важно: ``nvrtc_cuda.dll`` в ``torch/lib`` признаком НЕ является —
+    install_comfyui.bat создаёт его копией штатной ``nvrtc64_112_0.dll``
+    независимо от того, скачался ZLUDA или нет.
+    """
+    evidence: List[str] = []
     if _flag(ENV_FORCE_KEY):
-        return True
+        evidence.append("%s=1 (принудительно)" % ENV_FORCE_KEY)
+
+    root = os.environ.get("ZLRX_ROOT", "")
+    candidates = []
+    if root:
+        candidates.append(os.path.join(root, "zluda"))
     try:
-        lib_dir = os.path.join(os.path.dirname(os.path.abspath(torch_module.__file__)), "lib")
-        # patchzluda*.bat копируют оригинальный nvrtc в nvrtc_cuda.dll
-        if os.path.exists(os.path.join(lib_dir, "nvrtc_cuda.dll")):
-            return True
+        import zluda_rx580 as _pkg
+
+        candidates.append(
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(_pkg.__file__))), "zluda")
+        )
     except Exception:
         pass
+
+    for directory in candidates:
+        for name in ("zluda.exe", "zluda.dll", "zluda_with.dll"):
+            path = os.path.join(directory, name)
+            if os.path.exists(path):
+                evidence.append("файл %s" % path)
+
     try:
         import zluda_rx580.pinpatch as pinpatch
 
         for _base, path in pinpatch.loaded_modules():
             name = os.path.basename(path).lower()
             if name.startswith("zluda"):
-                return True
+                evidence.append("в процесс загружен %s" % path)
     except Exception:
         pass
-    return False
+
+    seen = set()
+    return [item for item in evidence if not (item in seen or seen.add(item))]
+
+
+def looks_like_zluda_installation(torch_module: Any = None) -> bool:
+    """Признаки ZLUDA, не требующие инициализации CUDA."""
+    return bool(zluda_evidence())
 
 
 def device_name(torch_module: Any) -> str:

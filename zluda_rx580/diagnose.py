@@ -97,9 +97,18 @@ def check_env(apply_patch: bool) -> bool:
         except OSError as exc:
             _info("cannot list %s: %s" % (lib_dir, exc))
         _info("torch/lib CUDA runtime files: %s" % (", ".join(interesting) or "<none>"))
-        from zluda_rx580.runtime import looks_like_zluda_installation
+        from zluda_rx580.runtime import zluda_evidence
 
-        _info("ZLUDA installation detected: %s" % looks_like_zluda_installation(torch))
+        evidence = zluda_evidence()
+        _info("ZLUDA installation detected: %s" % bool(evidence))
+        for item in evidence:
+            _info("  %s" % item)
+        if not evidence:
+            _detail(
+                "zluda\\zluda.exe не найден. nvrtc_cuda.dll в torch/lib признаком "
+                "не считается - install_comfyui.bat создаёт его копией штатного "
+                "nvrtc64_112_0.dll в любом случае. Запустите install_zluda.bat"
+            )
     except Exception as exc:
         _detail("torch is not importable: %r" % (exc,))
         return False
@@ -253,17 +262,35 @@ def check_patch(apply_patch: bool) -> bool:
     if os.name != "nt":
         _detail("cudaHostAlloc patch is Windows-only")
         return False
-    from zluda_rx580.pinpatch import PatchError, install
+    # Порядок обязателен: torch_cuda.dll появляется в процессе только после
+    # import torch, до этого сканировать нечего (так и было в первом прогоне
+    # на живой машине - "nothing to patch").
+    torch = _torch()
+
+    import zluda_rx580.pinpatch as pinpatch
+
+    report = pinpatch.survey()
+    for line in report.format().splitlines():
+        _info(line)
+    for note in report.notes:
+        _detail(note)
+    if not report.scanned:
+        _detail("в процессе нет модулей torch - опрос не удался")
+        return False
+    if not report.slots:
+        _detail(
+            "ни один из %d модулей не импортирует %s через IAT"
+            % (len(report.scanned), "/".join(pinpatch.TARGET_FUNCTIONS))
+        )
+        return False
 
     try:
-        patch = install()
-    except PatchError as exc:
+        patch = pinpatch.install()
+    except pinpatch.PatchError as exc:
         _detail(str(exc))
         return False
-    for line in patch.report.format().splitlines():
-        _info(line)
+    _info("patch applied: %d slot(s)" % len(patch.report.slots))
 
-    torch = _torch()
     _info("is_pinned(torch.empty(8).pin_memory()) = %s" % torch.empty(8).pin_memory().is_pinned())
     value = torch.arange(1, 17, device="cuda", dtype=torch.float32).sum().item()
     _info("sum().item() after patch = %s (expected 136.0)" % value)

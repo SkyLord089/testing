@@ -78,7 +78,7 @@ class PatchReport:
 
     def format(self) -> str:
         lines = []
-        lines.append("patched %d IAT slot(s)" % len(self.slots))
+        lines.append("IAT slots for %s: %d" % ("/".join(TARGET_FUNCTIONS), len(self.slots)))
         for slot in self.slots:
             lines.append(
                 "  %s!%s  slot=0x%x  was=0x%x  %s"
@@ -92,10 +92,11 @@ class PatchReport:
             )
         for note in self.notes:
             lines.append("  note: %s" % note)
-        if not self.slots:
-            lines.append("  scanned modules:")
+        if self.scanned:
+            lines.append("  scanned %d module(s):" % len(self.scanned))
             for name in self.scanned:
-                lines.append("    %s" % name)
+                mark = "" if name in self.skipped else "  <- слот найден"
+                lines.append("    %s%s" % (name, mark))
         return "\n".join(lines)
 
 
@@ -382,6 +383,9 @@ class HostAllocPatch:
         if self._undone:
             return
         for slot in self.report.slots:
+            if not slot.original:
+                # dry-run: прежнее значение не читали, писать в слот нельзя
+                continue
             write_pointer(slot.slot_address, slot.original)
         self._undone = True
 
@@ -390,6 +394,65 @@ class HostAllocPatch:
             self.undo()
         except Exception:
             pass
+
+
+def _candidate_modules() -> Dict[int, str]:
+    """Модули, в которых имеет смысл искать слоты IAT."""
+    scan_all = os.environ.get("ZLUDA_RX580_SCAN_ALL", "").strip() not in ("", "0", "false", "False")
+    candidates: Dict[int, str] = {}
+    for base, path in loaded_modules():
+        if not path:
+            continue
+        lowered = path.lower()
+        if not lowered.endswith((".dll", ".pyd")):
+            continue
+        if scan_all or "torch" in lowered or "\\nvidia\\" in lowered:
+            candidates[base] = path
+    return candidates
+
+
+def survey(
+    extra_dirs: Sequence[str] = (),
+    functions: Sequence[str] = TARGET_FUNCTIONS,
+) -> PatchReport:
+    """Читает PE-заголовки загруженных модулей и ищет слоты IAT.
+
+    Ничего не пишет и не выделяет памяти, поэтому подходит для диагностики:
+    отчёт возвращается даже тогда, когда слотов не нашлось.
+    """
+    if os.name != "nt":
+        raise PatchError("this scan only applies to Windows")
+
+    report = PatchReport()
+    candidates = _candidate_modules()
+    if os.environ.get("ZLUDA_RX580_SCAN_ALL", "").strip() not in ("", "0", "false", "False"):
+        report.notes.append("ZLUDA_RX580_SCAN_ALL=1 — scanning every loaded module")
+    if extra_dirs:
+        report.notes.append("extra dirs: %s" % ", ".join(extra_dirs))
+
+    if not candidates:
+        report.notes.append(
+            "no torch/nvidia modules are loaded in this process — import torch before scanning"
+        )
+        return report
+
+    for base, path in sorted(candidates.items(), key=lambda item: item[1].lower()):
+        report.scanned.append(os.path.basename(path))
+        slots = find_target_slots(path, base, functions)
+        if not slots:
+            report.skipped.append(os.path.basename(path))
+            continue
+        for dll, function, address, delay_loaded in slots:
+            report.slots.append(
+                PatchedSlot(path, base, dll, function, address, delay_loaded, 0)
+            )
+
+    if not report.slots:
+        report.notes.append(
+            "none of the %d scanned module(s) import %s from cudart*"
+            % (len(report.scanned), "/".join(functions))
+        )
+    return report
 
 
 def install(
@@ -401,54 +464,28 @@ def install(
     if os.name != "nt":
         raise PatchError("this patch only applies to Windows")
 
-    aligned_malloc, aligned_free = resolve_crt_allocators()
-    page = ThunkPage(aligned_malloc, aligned_free)
-
-    report = PatchReport()
-    report.notes.append(
-        "_aligned_malloc=0x%x _aligned_free=0x%x thunks at 0x%x" % (aligned_malloc, aligned_free, page.base)
-    )
-
-    candidates: Dict[int, str] = {}
-    scan_all = os.environ.get("ZLUDA_RX580_SCAN_ALL", "").strip() not in ("", "0", "false", "False")
-    for base, path in loaded_modules():
-        if not path:
-            continue
-        lowered = path.lower()
-        if not lowered.endswith((".dll", ".pyd")):
-            continue
-        if scan_all or "torch" in lowered or "\\nvidia\\" in lowered:
-            candidates[base] = path
-    if scan_all:
-        report.notes.append("ZLUDA_RX580_SCAN_ALL=1 — scanning every loaded module")
-
-    if not candidates:
-        report.notes.append("no torch/nvidia modules are loaded in this process")
+    report = survey(extra_dirs, functions)
+    if not report.scanned:
         raise PatchError("nothing to patch; import torch first")
 
-    for base, path in sorted(candidates.items(), key=lambda item: item[1].lower()):
-        report.scanned.append(os.path.basename(path))
-        slots = find_target_slots(path, base, functions)
-        if not slots:
-            report.skipped.append(os.path.basename(path))
-            continue
-        for dll, function, address, delay_loaded in slots:
-            new_value = page.host_alloc if function == "cudaHostAlloc" else page.host_free
-            if dry_run:
-                report.slots.append(
-                    PatchedSlot(path, base, dll, function, address, delay_loaded, 0)
-                )
-                continue
-            previous = write_pointer(address, new_value)
-            report.slots.append(
-                PatchedSlot(path, base, dll, function, address, delay_loaded, previous)
-            )
+    aligned_malloc, aligned_free = resolve_crt_allocators()
+    page = ThunkPage(aligned_malloc, aligned_free)
+    report.notes.insert(
+        0,
+        "_aligned_malloc=0x%x _aligned_free=0x%x thunks at 0x%x" % (aligned_malloc, aligned_free, page.base),
+    )
+
+    if dry_run:
+        return HostAllocPatch(report, page)
 
     if not report.slots:
-        report.notes.append(
-            "none of the loaded modules import %s from cudart* — nothing to patch"
-            % "/".join(functions)
-        )
         raise PatchError("no cudaHostAlloc/cudaFreeHost import slots found")
+
+    patched: List[PatchedSlot] = []
+    for slot in report.slots:
+        new_value = page.host_alloc if slot.function == "cudaHostAlloc" else page.host_free
+        slot.original = write_pointer(slot.slot_address, new_value)
+        patched.append(slot)
+    report.slots = patched
 
     return HostAllocPatch(report, page)

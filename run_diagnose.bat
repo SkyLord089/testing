@@ -23,15 +23,28 @@ set "KIT_DIR=%~dp0"
 if "%KIT_DIR:~-1%"=="\" set "KIT_DIR=%KIT_DIR:~0,-1%"
 cd /d "%KIT_DIR%"
 
-set "VENV_DIR=%~1"
-set "DARGS=%*"
-if "%VENV_DIR%"=="" set "VENV_DIR=venv"
-if /i not "%VENV_DIR:~0,2%"=="--" (
-    rem первый аргумент - имя окружения, вырезаем его из списка параметров
-    set "DARGS=%2 %3 %4 %5"
-) else (
-    set "VENV_DIR=venv"
+set "VENV_DIR="
+set "DARGS="
+set "FIRST="
+set "USE_ZLUDA=1"
+rem Разбор аргументов: первый не-флаг - имя окружения, остальное идёт в diagnose.py.
+rem --no-zluda вырезается, иначе он попадёт в diagnose.py, который его не знает.
+for %%A in (%*) do (
+    set "ARG=%%~A"
+    if /i "!ARG!"=="--no-zluda" (
+        set "USE_ZLUDA=0"
+    ) else if not defined FIRST (
+        if "!ARG:~0,2!"=="--" (
+            set "DARGS=!DARGS! !ARG!"
+        ) else (
+            set "FIRST=1"
+            set "VENV_DIR=!ARG!"
+        )
+    ) else (
+        set "DARGS=!DARGS! !ARG!"
+    )
 )
+if not defined VENV_DIR set "VENV_DIR=venv"
 
 if not exist "%VENV_DIR%\Scripts\python.exe" (
     echo.
@@ -46,9 +59,7 @@ set "PYTHON=%KIT_DIR%\%VENV_DIR%\Scripts\python.exe"
 call "%KIT_DIR%\env.bat"
 
 set "ZLUDA_EXE=%KIT_DIR%\zluda\zluda.exe"
-set "USE_ZLUDA=1"
 set "ZLUDA_STATE=%ZLUDA_EXE%"
-for %%A in (%*) do if /i "%%A"=="--no-zluda" set "USE_ZLUDA=0"
 if "%USE_ZLUDA%"=="0" set "ZLUDA_STATE=выключен ключом --no-zluda"
 if "%USE_ZLUDA%"=="1" if not exist "%ZLUDA_EXE%" set "ZLUDA_STATE=НЕ НАЙДЕН %ZLUDA_EXE%"
 
@@ -59,8 +70,8 @@ echo *** ZLUDA:     !ZLUDA_STATE!
 if "%USE_ZLUDA%"=="1" if not exist "%ZLUDA_EXE%" (
     echo     [!] Файла zluda\zluda.exe нет. Без него CUDA не появится вовсе и
     echo         все проверки GPU дадут "Found no NVIDIA driver".
-    echo         Проверьте каталог %KIT_DIR%\zluda и запустите install_comfyui.bat
-    echo         ещё раз - он докачает ZLUDA, не трогая venv и ComfyUI.
+    echo         Проверьте каталог %KIT_DIR%\zluda и запустите install_zluda.bat -
+    echo         он скачает и распакует ZLUDA, не трогая venv и ComfyUI.
 )
 if "%USE_ZLUDA%"=="0" echo     [!] Без ZLUDA проверки GPU упрутся в "Found no NVIDIA driver".
 echo.

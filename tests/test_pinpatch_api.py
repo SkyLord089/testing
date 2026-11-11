@@ -20,6 +20,7 @@ import os
 import pathlib
 import re
 import sys
+import pathlib
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -121,3 +122,66 @@ class WindowsGuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SurveyTests(unittest.TestCase):
+    """Опрос не должен ни писать, ни падать, ни молчать."""
+
+    @unittest.skipIf(os.name == "nt", "проверяем поведение вне Windows")
+    def test_survey_raises_patch_error_off_windows(self):
+        with self.assertRaises(pinpatch.PatchError):
+            pinpatch.survey()
+
+    def test_survey_is_called_after_torch_is_imported(self):
+        """check_patch вызывал install() до import torch и падал впустую."""
+        source = pathlib.Path("zluda_rx580/diagnose.py").read_text(encoding="utf-8")
+        body = source[source.index("def check_patch("):]
+        body = body[: body.index("\ndef ")]
+        self.assertLess(
+            body.index("torch = _torch()"),
+            body.index("pinpatch.survey()"),
+            "torch должен быть импортирован до опроса модулей",
+        )
+        self.assertIn("pinpatch.install()", body)
+
+    def test_report_lists_scanned_modules_even_without_slots(self):
+        report = pinpatch.PatchReport()
+        report.scanned = ["torch_cuda.dll", "c10_cuda.dll"]
+        report.skipped = ["torch_cuda.dll", "c10_cuda.dll"]
+        text = report.format()
+        self.assertIn("scanned 2 module(s)", text)
+        self.assertIn("torch_cuda.dll", text)
+        self.assertIn("IAT slots for cudaHostAlloc/cudaFreeHost: 0", text)
+
+
+class UndoTests(unittest.TestCase):
+    def test_dry_run_slots_are_not_zeroed(self):
+        """undo() после dry-run раньше писал 0 в чужой IAT."""
+        report = pinpatch.PatchReport(
+            slots=[pinpatch.PatchedSlot("m.dll", 0x1000, "cudart64_110.dll", "cudaHostAlloc", 0x2000, False, 0)]
+        )
+        patch = pinpatch.HostAllocPatch(report, page=None)
+        written = []
+        original = pinpatch.write_pointer
+        pinpatch.write_pointer = lambda address, value: written.append((address, value))
+        try:
+            patch.undo()
+        finally:
+            pinpatch.write_pointer = original
+        self.assertEqual(written, [], "слот с неизвестным прежним значением перезаписывать нельзя")
+
+    def test_real_slots_are_restored(self):
+        report = pinpatch.PatchReport(
+            slots=[
+                pinpatch.PatchedSlot("m.dll", 0x1000, "cudart64_110.dll", "cudaHostAlloc", 0x2000, False, 0xBEEF)
+            ]
+        )
+        patch = pinpatch.HostAllocPatch(report, page=None)
+        written = []
+        original = pinpatch.write_pointer
+        pinpatch.write_pointer = lambda address, value: written.append((address, value))
+        try:
+            patch.undo()
+        finally:
+            pinpatch.write_pointer = original
+        self.assertEqual(written, [(0x2000, 0xBEEF)])

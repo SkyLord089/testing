@@ -181,35 +181,31 @@ echo.
 echo  ::  5/6  ZLUDA
 rem 3.9.6, а не 3.9.5: только начиная с 3.9.6 ZLUDA понимает ZLUDA_CACHE_DIR
 rem (zluda/src/impl/mod.rs:494-505). В 3.9.5 кэш ядер жёстко уходит в %LocalAppData%.
-set "ZLUDA_REL=rel.854c58e1565c3597e17046d7cc2b1eab96fcdf55"
-set "ZLUDA_URL=https://github.com/lshqqytiger/ZLUDA/releases/download/%ZLUDA_REL%/ZLUDA-windows-rocm5-amd64.zip"
-if exist "zluda\zluda.exe" (
-    echo      использую уже распакованный zluda\
-) else (
-    if not exist zluda mkdir zluda
-    pushd zluda
-    "%CURL%" -sL --ssl-no-revoke "%ZLUDA_URL%" > zluda.zip
-    "%TAR%" -xf zluda.zip
-    del zluda.zip
-    popd
-)
+call "%~dp0install_zluda.bat" --quiet
 if not exist "zluda\zluda.exe" (
-    echo      [!] zluda\zluda.exe НЕ появился. Без него ComfyUI не увидит видеокарту.
-    echo          Каталог: %KIT_DIR%\zluda
-    echo          Адрес:   %ZLUDA_URL%
-    echo          Скачайте архив вручную, распакуйте в zluda\ и запустите скрипт снова.
-) else (
-    echo      zluda\zluda.exe на месте
+    echo      [!] Продолжаю без ZLUDA: torch и ComfyUI установятся,
+    echo          но видеокарта не появится. Запустите install_zluda.bat позже.
 )
 
 set "TLIB=%VENV_DIR%\Lib\site-packages\torch\lib"
 echo      подмена библиотек в %TLIB%
-if exist "zluda\cublas.dll"               copy /y zluda\cublas.dll   "%TLIB%\cublas64_11.dll"   >nul
-if exist "zluda\cusparse.dll"             copy /y zluda\cusparse.dll "%TLIB%\cusparse64_11.dll" >nul
-if exist "%TLIB%\nvrtc64_112_0.dll" if not exist "%TLIB%\nvrtc_cuda.dll" copy /y "%TLIB%\nvrtc64_112_0.dll" "%TLIB%\nvrtc_cuda.dll" >nul
-if exist "zluda\nvrtc.dll"                copy /y zluda\nvrtc.dll    "%TLIB%\nvrtc64_112_0.dll" >nul
-if exist "zluda\cufft.dll" if exist "%TLIB%\cufft64_10.dll"  copy /y zluda\cufft.dll  "%TLIB%\cufft64_10.dll"  >nul
-if exist "zluda\cufftw.dll" if exist "%TLIB%\cufftw64_10.dll" copy /y zluda\cufftw.dll "%TLIB%\cufftw64_10.dll" >nul
+rem Копируем только то, что реально есть в архиве, и говорим об этом явно:
+rem молчаливый пропуск здесь выглядит как успех, но ZLUDA не подменяется.
+set "SWAPPED="
+set "SKIPPED="
+call :swap cublas.dll   cublas64_11.dll
+call :swap cusparse.dll cusparse64_11.dll
+call :swap cufft.dll    cufft64_10.dll
+call :swap cufftw.dll   cufftw64_10.dll
+call :swap nvrtc.dll    nvrtc64_112_0.dll
+rem Оригинальный nvrtc сохраняем рядом: ZLUDA ищет его как nvrtc_cuda.dll.
+if exist "%TLIB%\nvrtc64_112_0.dll" if not exist "%TLIB%\nvrtc_cuda.dll" (
+    copy /y "%TLIB%\nvrtc64_112_0.dll" "%TLIB%\nvrtc_cuda.dll" >nul
+    set "SWAPPED=!SWAPPED! nvrtc_cuda.dll"
+)
+if not "!SWAPPED!"=="" echo      заменено:!SWAPPED!
+if not "!SKIPPED!"=="" echo      пропущено:!SKIPPED!
+if "!SWAPPED!"=="" echo      [!] не заменено ничего - ZLUDA не подменён
 echo      кэш ядер ZLUDA: %ZLUDA_CACHE_DIR%
 
 echo.
@@ -229,3 +225,19 @@ echo   от 10 до 40 минут. Это нормально, не прерыв�
 echo ================================================================
 echo.
 pause
+exit /b 0
+
+rem --- подмена одной библиотеки -------------------------------
+rem %1 - имя в zluda\, %2 - имя в torch\lib
+:swap
+if not exist "zluda\%~1" (
+    set "SKIPPED=!SKIPPED! %~1"
+    goto :eof
+)
+if not exist "%TLIB%\%~2" (
+    set "SKIPPED=!SKIPPED! %~2"
+    goto :eof
+)
+copy /y "zluda\%~1" "%TLIB%\%~2" >nul
+set "SWAPPED=!SWAPPED! %~2"
+goto :eof
