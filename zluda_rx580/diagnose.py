@@ -228,6 +228,22 @@ def check_matmul(apply_patch: bool) -> bool:
                 % (label, absolute, scale, relative)
             )
             tolerance = 1e-2 if dtype == torch.float32 else 5e-2
+            # Одной ошибки мало: 70.77 при эталоне того же порядка означает
+            # «результат не связан с эталоном», но не говорит, почему.
+            # Первые значения и число ненулевых разделяют три разных отказа.
+            sample_gpu = [round(float(v), 4) for v in c[0, :4].cpu().tolist()]
+            sample_cpu = [round(float(v), 4) for v in reference[0, :4].tolist()]
+            _info("    первые 4 значения GPU: %s" % sample_gpu)
+            _info("    первые 4 значения CPU: %s" % sample_cpu)
+            nonzero = int((c != 0).sum().cpu().item())
+            _info("    ненулевых в результате: %d из %d" % (nonzero, c.numel()))
+            if nonzero == 0:
+                _detail("результат целиком нулевой - GEMM отчитался об успехе, но ничего не записал")
+            elif relative > tolerance:
+                transposed = float((c.cpu() - reference.t()).abs().max()) / scale if scale else 0.0
+                _info("    отн. ошибка против ТРАНСПОНИРОВАННОГО эталона: %.3g" % transposed)
+                if transposed < tolerance:
+                    _detail("результат совпадает с транспонированным эталоном - перепутан порядок операндов")
             if relative > tolerance:
                 _detail(
                     "matmul %s: относительная ошибка %.3g выше допуска %.3g"
