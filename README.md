@@ -97,7 +97,7 @@ install_zluda.bat
 | 3 | ComfyUI: `git clone --depth 1`, а без git — архив с `codeload.github.com` |
 | 4 | виртуальное окружение `venv` |
 | 5 | PyTorch 2.7.1 +cu118 (откат на 2.7.0) и `requirements.txt` ComfyUI |
-| 6 | ZLUDA 3.9.6 rocm5 и подмена `cublas64_11.dll` / `cusparse64_11.dll` / `nvrtc64_112_0.dll` |
+| 6 | ZLUDA 3.9.6 rocm5 (отдельно — `install_zluda.bat`) и подмена `cublas64_11.dll` / `cusparse64_11.dll` / `nvrtc64_112_0.dll` |
 | 7 | автоактивация набора через `.pth` |
 
 Скрипт **идемпотентен**: повторный запуск обновит ComfyUI и доустановит

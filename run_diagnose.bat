@@ -25,20 +25,23 @@ cd /d "%KIT_DIR%"
 
 set "VENV_DIR="
 set "DARGS="
-set "FIRST="
+set "FLAG="
 set "USE_ZLUDA=1"
-rem Разбор аргументов: первый не-флаг - имя окружения, остальное идёт в diagnose.py.
-rem --no-zluda вырезается, иначе он попадёт в diagnose.py, который его не знает.
+rem Разбор аргументов: имя окружения может стоять только до первого флага.
+rem Иначе "run_diagnose.bat --check patch" принял бы "patch" за имя окружения.
+rem --no-zluda вырезается: diagnose.py про такой ключ ничего не знает.
 for %%A in (%*) do (
     set "ARG=%%~A"
     if /i "!ARG!"=="--no-zluda" (
         set "USE_ZLUDA=0"
-    ) else if not defined FIRST (
+    ) else if not defined FLAG (
         if "!ARG:~0,2!"=="--" (
+            set "FLAG=1"
             set "DARGS=!DARGS! !ARG!"
-        ) else (
-            set "FIRST=1"
+        ) else if not defined VENV_DIR (
             set "VENV_DIR=!ARG!"
+        ) else (
+            set "DARGS=!DARGS! !ARG!"
         )
     ) else (
         set "DARGS=!DARGS! !ARG!"
