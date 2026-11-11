@@ -16,6 +16,18 @@ cd /d "%~dp0"
 call env.bat
 
 set "ZLUDA_DIR=%~dp0zluda"
+set "QUIET="
+set "VENV_DIR=venv"
+for %%A in (%*) do (
+    if /i "%%~A"=="--quiet" (
+        set "QUIET=1"
+    ) else if "%%~A"=="" (
+        rem пусто
+    ) else if not defined VENV_ARG (
+        set "VENV_ARG=%%~A"
+    )
+)
+if defined VENV_ARG set "VENV_DIR=%VENV_ARG%"
 set "ZLUDA_REL=rel.854c58e1565c3597e17046d7cc2b1eab96fcdf55"
 set "ZLUDA_URL=https://github.com/lshqqytiger/ZLUDA/releases/download/%ZLUDA_REL%/ZLUDA-windows-rocm5-amd64.zip"
 
@@ -102,13 +114,58 @@ for %%F in (zluda.exe zluda.dll zluda_inject.exe nvcuda.dll nvml.dll) do (
 if exist "%ZLUDA_DIR%\zluda.exe" (
     echo [OK] zluda.exe на месте.
     if not "!MISSING!"=="" echo [!] Отсутствуют:!MISSING!
-    echo.
-    echo Дальше:
-    echo   1. install_comfyui.bat   - подменит библиотеки в torch\lib
-    echo   2. run_diagnose.bat      - проверка
-    if /i not "%1"=="--quiet" pause
+) else (
+    goto :manual
+)
+
+rem --- подмена библиотек в torch\lib ---------------------------
+rem Без неё torch вызывает НАСТОЯЩИЙ cuBLAS от NVIDIA поверх ZLUDA, и любое
+rem умножение матриц падает с CUBLAS_STATUS_NOT_SUPPORTED - и в fp32, и в fp16.
+rem Именно это и показал прогон на живом RX 580.
+set "TLIB=%~dp0%VENV_DIR%\Lib\site-packages\torch\lib"
+echo.
+if not exist "%TLIB%" (
+    echo [!] %TLIB% не найден - подмену библиотек пропускаю.
+    echo     Запустите этот скрипт после установки PyTorch.
+    if not defined QUIET pause
     exit /b 0
 )
+
+echo Подмена библиотек в %TLIB%
+set "SWAPPED="
+set "SKIPPED="
+call :swap cublas.dll   cublas64_11.dll
+call :swap cusparse.dll cusparse64_11.dll
+call :swap cufft.dll    cufft64_10.dll
+call :swap cufftw.dll   cufftw64_10.dll
+call :swap nvrtc.dll    nvrtc64_112_0.dll
+rem Оригинальный nvrtc сохраняем рядом: ZLUDA ищет его как nvrtc_cuda.dll.
+if exist "%TLIB%\nvrtc64_112_0.dll" if not exist "%TLIB%\nvrtc_cuda.dll" (
+    copy /y "%TLIB%\nvrtc64_112_0.dll" "%TLIB%\nvrtc_cuda.dll" >nul
+    set "SWAPPED=!SWAPPED! nvrtc_cuda.dll"
+)
+if not "!SWAPPED!"=="" echo   заменено:!SWAPPED!
+if not "!SKIPPED!"=="" echo   пропущено:!SKIPPED!
+if "!SWAPPED!"=="" echo   [!] не заменено ничего - ZLUDA не подменён
+echo.
+echo Дальше: run_diagnose.bat %VENV_DIR%
+if not defined QUIET pause
+exit /b 0
+
+rem --- подмена одной библиотеки -------------------------------
+rem %1 - имя в zluda\, %2 - имя в torch\lib
+:swap
+if not exist "%ZLUDA_DIR%\%~1" (
+    set "SKIPPED=!SKIPPED! %~1"
+    goto :eof
+)
+if not exist "%TLIB%\%~2" (
+    set "SKIPPED=!SKIPPED! %~2"
+    goto :eof
+)
+copy /y "%ZLUDA_DIR%\%~1" "%TLIB%\%~2" >nul
+set "SWAPPED=!SWAPPED! %~2"
+goto :eof
 
 echo [!] zluda.exe так и не появился.
 :manual
@@ -129,5 +186,5 @@ echo.
 echo   Проверка после установки:  dir "%ZLUDA_DIR%\zluda.exe"
 echo ================================================================
 echo.
-if /i not "%1"=="--quiet" pause
+if not defined QUIET pause
 exit /b 1

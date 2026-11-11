@@ -76,8 +76,10 @@ ZLUDA 3.9.6 rocm5, `Radeon RX 580 Series [ZLUDA]`, 8 ГиБ.
 | `device` PASS, карта видна как `[ZLUDA]` | связка ZLUDA + torch 2.7.1+cu118 работает |
 | `pin_memory()` → `CUDA error: out of memory` | **корневая причина подтверждена на железе**, а не только по исходникам |
 | 0 слотов IAT в 38 модулях | подмена `cudaHostAlloc` через IAT **не работает** — torch её так не импортирует |
-| fp16 matmul → `CUBLAS_STATUS_NOT_SUPPORTED` | ZLUDA не поддерживает `CUBLAS_GEMM_DEFAULT_TENSOR_OP` для half |
+| `cublas64_11.dll` 84.56 МиБ, `cusparse64_11.dll` 264.59 МиБ | **подмена библиотек не выполнена**, в `torch\lib` лежат оригиналы NVIDIA |
+| `cublasSgemm` → `CUBLAS_STATUS_NOT_SUPPORTED` | следствие предыдущего: torch зовёт настоящий cuBLAS от NVIDIA поверх ZLUDA |
 | `item` / `nonzero` / `shim` → TIMEOUT 120 с | не поломка: первый запуск компилирует ядра ZLUDA, лимит был мал |
+| `item`, `nonzero`, `roundtrip` PASS при неработающем `pin_memory()` | Python-заплатки уровня 2 действительно уводят эти операции от pinned-памяти |
 
 Практические следствия:
 
@@ -86,7 +88,13 @@ ZLUDA 3.9.6 rocm5, `Radeon RX 580 Series [ZLUDA]`, 8 ГиБ.
   умолчанию). Проверка `imports` покажет, почему именно: если имена
   `cudaHostAlloc` в файле есть, а в таблице импорта нет, их получают через
   `GetProcAddress`, и перехватывать слот бессмысленно.
-- ComfyUI нужно запускать с `--force-fp32`: fp16-умножение не поддерживается.
+- **Матричное умножение падает не из-за точности, а из-за неподменённых
+  библиотек.** `cublasSgemm` (fp32) и `cublasGemmEx` (fp16) отвечают
+  `CUBLAS_STATUS_NOT_SUPPORTED`, потому что загружен настоящий cuBLAS от
+  NVIDIA, а не заглушка ZLUDA поверх rocBLAS. Лечится подменой DLL, а не
+  сменой точности; `--force-fp32` в `run_comfyui.bat` оставлен как страховка,
+  но сам по себе он проблему не решает. Подмену теперь делает
+  `install_zluda.bat` — одной командой, вместе с установкой ZLUDA.
 - Таймаут проверки поднят до 1800 с и настраивается через `ZLRX580_TIMEOUT`
   или `run_diagnose.bat --timeout 3600`. Ядра кэшируются в `ZLUDA_CACHE_DIR`,
   поэтому второй запуск быстрее первого.

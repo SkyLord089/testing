@@ -139,5 +139,28 @@ class PinnedShimTests(unittest.TestCase):
         self.assertTrue(bool(torch.tensor(1)))
 
 
+
+
+    def test_active_flag_distinguishes_installed_from_failed(self):
+        """Повторный вызов возвращает [], но заплатки при этом работают.
+
+        На живой машине check_shim печатал "no shims were applied" и падал,
+        хотя автоактивация через .pth уже поставила заплатки при старте.
+        """
+        from zluda_rx580.runtime import apply_pinned_shims, pinned_shims_active
+
+        self.assertFalse(pinned_shims_active(torch))
+        first = apply_pinned_shims(torch)
+        self.assertTrue(first)
+        self.assertTrue(pinned_shims_active(torch))
+
+        second = apply_pinned_shims(torch)
+        self.assertEqual(second, [], "идемпотентность: второй вызов ничего не ставит")
+        self.assertTrue(
+            pinned_shims_active(torch),
+            "пустой список не должен означать, что заплаток нет",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -316,10 +316,18 @@ def check_libs(apply_patch: bool) -> bool:
             _info("%-22s отсутствует" % name)
             continue
         size = os.path.getsize(path)
-        # ZLUDA-заглушки на порядок меньше настоящих библиотек NVIDIA
-        origin = "ZLUDA?" if size < 32 * 1024 * 1024 else "NVIDIA"
-        if name in ("cublas64_11.dll", "cusparse64_11.dll", "nvrtc64_112_0.dll") and size < 32 * 1024 * 1024:
-            replaced += 1
+        # ZLUDA-заглушки на порядок меньше настоящих библиотек NVIDIA.
+        # Исключение - cudart64_110.dll: у NVIDIA он и так весит доли мегабайта,
+        # и ZLUDA его не подменяет, поэтому по размеру о нём судить нельзя.
+        swappable = name in ("cublas64_11.dll", "cusparse64_11.dll", "nvrtc64_112_0.dll")
+        if name == "cudart64_110.dll":
+            origin = "NVIDIA (ZLUDA его не подменяет)"
+        elif size < 32 * 1024 * 1024:
+            origin = "ZLUDA?" if swappable else "маленькая"
+            if swappable:
+                replaced += 1
+        else:
+            origin = "NVIDIA"
         _info("%-22s %10.2f MiB  %s" % (name, size / 1024 ** 2, origin))
     _info("подменено на ZLUDA: %d из 3 (cublas, cusparse, nvrtc)" % replaced)
     if replaced == 0:
@@ -429,17 +437,24 @@ def check_patch(apply_patch: bool) -> bool:
 
 def check_shim(apply_patch: bool) -> bool:
     """Проверяет Python-заплатки: значения должны совпадать, pinned не выделяется."""
-    from zluda_rx580.runtime import apply_pinned_shims
+    from zluda_rx580.runtime import apply_pinned_shims, pinned_shims_active
 
     torch = _torch()
     baseline_sum = torch.arange(1, 1025, device="cuda", dtype=torch.float32).sum().cpu().item()
     baseline_count = int(torch.count_nonzero(torch.arange(0, 64, device="cuda") > 7).cpu().item())
 
+    already = pinned_shims_active(torch)
     applied = apply_pinned_shims(torch)
     for name in applied:
         _info("shim: %s" % name)
-    if not applied:
-        _detail("no shims were applied")
+    if applied:
+        _info("заплатки установлены сейчас: %d" % len(applied))
+    elif already:
+        # Автоактивация через .pth ставит их при старте интерпретатора,
+        # поэтому повторный вызов ничего не возвращает. Это не отказ.
+        _info("заплатки уже активны - их поставила автоактивация при старте")
+    else:
+        _detail("заплатки не установлены и не были установлены раньше")
         return False
 
     gpu_sum = torch.arange(1, 1025, device="cuda", dtype=torch.float32).sum()

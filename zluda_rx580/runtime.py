@@ -176,6 +176,16 @@ def install_pinned_memory_patch(torch_module: Any) -> Optional[str]:
 _installed: List[Any] = []
 
 
+def pinned_shims_active(torch_module: Any) -> bool:
+    """Установлены ли Python-заплатки (в том числе при старте интерпретатора).
+
+    ``apply_pinned_shims`` идемпотентна и при повторном вызове возвращает
+    пустой список, поэтому по её результату нельзя отличить «уже стоит» от
+    «не поставилось». Флаг ставится один раз и живёт в модуле torch.
+    """
+    return bool(getattr(torch_module, "_zluda_rx580_pin_shims", False))
+
+
 def apply_pinned_shims(torch_module: Any) -> List[str]:
     """Убирает внутренние выделения pinned-памяти из частых операций.
 
