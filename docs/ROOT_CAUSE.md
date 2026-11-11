@@ -77,7 +77,8 @@ if (c10::cuda::CUDACachingAllocator::CUDAAllocatorConfig::
 
 ### 3. ZLUDA передаёт флаги в HIP без изменений
 
-`zluda/src/cuda.rs:675-681`, ZLUDA v3.9.5 (коммит `5e71745`):
+`zluda/src/cuda.rs:675-681`, ZLUDA v3.9.5 (коммит `5e71745`); в v3.9.6
+(коммит `854c58e`) тот же код на строках 681-687:
 
 ```rust
 pub(crate) unsafe fn cuMemHostAlloc(
@@ -288,7 +289,8 @@ pub(crate) unsafe fn cuMemHostAlloc(
   `aten/src/ATen/native/cuda/CUDAScalar.cu`, `Nonzero.cu`, `TensorShape.cu`,
   `aten/src/ATen/cuda/CachingHostAllocator.cpp`, `aten/src/ATen/core/CachingHostAllocator.h`
 * pytorch/pytorch коммит `579999a7313cbd05d46bd1dbd7b26a271cb43818` (PR #119202)
-* lshqqytiger/ZLUDA `5e71745` (v3.9.5) — `zluda/src/cuda.rs`
+* lshqqytiger/ZLUDA `5e71745` (v3.9.5) и `854c58e` (v3.9.6) — `zluda/src/cuda.rs`;
+  в v3.9.6 также `zluda/src/impl/mod.rs:494-505` (`ZLUDA_CACHE_DIR`)
 * ROCm/clr `rocm-5.7.1` — `hipamd/src/hip_memory.cpp`,
   `rocclr/platform/context.cpp`, `rocclr/device/pal/paldevice.cpp`
 * ROCm/HIP `rocm-5.7.1` — `include/hip/hip_runtime_api.h`

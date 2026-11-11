@@ -33,8 +33,7 @@ if not exist "%VENV_DIR%\Scripts\python.exe" (
 )
 
 set "PYTHON=%KIT_DIR%\%VENV_DIR%\Scripts\python.exe"
-set "PYTHONPATH=%KIT_DIR%;%PYTHONPATH%"
-set "PYTHONIOENCODING=utf-8"
+call "%KIT_DIR%\env.bat"
 
 echo.
 echo *** Окружение: %VENV_DIR%

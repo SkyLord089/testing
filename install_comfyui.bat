@@ -33,6 +33,9 @@ set "COMFY_ZIP=https://codeload.github.com/comfyanonymous/ComfyUI/zip/refs/heads
 set "CURL=%SystemRoot%\system32\curl.exe"
 set "TAR=%SystemRoot%\system32\tar.exe"
 
+rem Все кэши и временные файлы - внутри %KIT_DIR%
+call "%KIT_DIR%\env.bat"
+
 echo.
 echo ================================================================
 echo   ComfyUI + ZLUDA для AMD RX 480 / 570 / 580
@@ -136,10 +139,8 @@ if not exist "%VENV_DIR%\Scripts\activate.bat" (
     )
 )
 call "%VENV_DIR%\Scripts\activate.bat"
-python.exe -m pip install --upgrade pip --quiet
+python.exe -m pip install --upgrade pip --quiet --no-cache-dir
 
-set "PYTHONPATH=%KIT_DIR%;%PYTHONPATH%"
-set "PYTHONIOENCODING=utf-8"
 set "TORCH_INDEX=https://download.pytorch.org/whl/cu118"
 
 echo.
@@ -147,13 +148,13 @@ echo  ::  4/6  PyTorch 2.7 +cu118
 set "TORCH_VER=2.7.1"
 set "TVISION_VER=0.22.1"
 set "TAUDIO_VER=2.7.1"
-pip install torch==%TORCH_VER% torchvision==%TVISION_VER% torchaudio==%TAUDIO_VER% --index-url %TORCH_INDEX% --quiet
+pip install torch==%TORCH_VER% torchvision==%TVISION_VER% torchaudio==%TAUDIO_VER% --index-url %TORCH_INDEX% --quiet --no-cache-dir
 if errorlevel 1 (
     echo      %TORCH_VER% не установлен - пробую 2.7.0
     set "TORCH_VER=2.7.0"
     set "TVISION_VER=0.22.0"
     set "TAUDIO_VER=2.7.0"
-    pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url %TORCH_INDEX% --quiet
+    pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url %TORCH_INDEX% --quiet --no-cache-dir
 )
 if errorlevel 1 (
     echo [!] Не удалось установить PyTorch с %TORCH_INDEX%
@@ -163,7 +164,7 @@ if errorlevel 1 (
 )
 
 echo  ::  4/6  Зависимости ComfyUI ^(requirements.txt^)
-pip install -r "%COMFY_DIR%\requirements.txt" --quiet
+pip install -r "%COMFY_DIR%\requirements.txt" --quiet --no-cache-dir
 if errorlevel 1 echo      [!] часть пакетов не установилась - смотрите вывод pip выше
 
 rem requirements.txt содержит "torch" без версии, поэтому проверяем,
@@ -173,12 +174,15 @@ echo      установлено: torch !TORCH_NOW!
 echo !TORCH_NOW! | findstr "cu118" >nul
 if errorlevel 1 (
     echo      [!] torch подменён на !TORCH_NOW! - возвращаю сборку cu118
-    pip install --force-reinstall torch==%TORCH_VER% torchvision==%TVISION_VER% torchaudio==%TAUDIO_VER% --index-url %TORCH_INDEX% --quiet
+    pip install --force-reinstall torch==%TORCH_VER% torchvision==%TVISION_VER% torchaudio==%TAUDIO_VER% --index-url %TORCH_INDEX% --quiet --no-cache-dir
 )
 
 echo.
 echo  ::  5/6  ZLUDA
-set "ZLUDA_URL=https://github.com/lshqqytiger/ZLUDA/releases/download/rel.5e717459179dc272b7d7d23391f0fad66c7459cf/ZLUDA-windows-rocm5-amd64.zip"
+rem 3.9.6, а не 3.9.5: только начиная с 3.9.6 ZLUDA понимает ZLUDA_CACHE_DIR
+rem (zluda/src/impl/mod.rs:494-505). В 3.9.5 кэш ядер жёстко уходит в %LocalAppData%.
+set "ZLUDA_REL=rel.854c58e1565c3597e17046d7cc2b1eab96fcdf55"
+set "ZLUDA_URL=https://github.com/lshqqytiger/ZLUDA/releases/download/%ZLUDA_REL%/ZLUDA-windows-rocm5-amd64.zip"
 if exist "zluda\zluda.exe" (
     echo      использую уже распакованный zluda\
 ) else (
@@ -197,7 +201,9 @@ if exist "zluda\cublas.dll"               copy /y zluda\cublas.dll   "%TLIB%\cub
 if exist "zluda\cusparse.dll"             copy /y zluda\cusparse.dll "%TLIB%\cusparse64_11.dll" >nul
 if exist "%TLIB%\nvrtc64_112_0.dll" if not exist "%TLIB%\nvrtc_cuda.dll" copy /y "%TLIB%\nvrtc64_112_0.dll" "%TLIB%\nvrtc_cuda.dll" >nul
 if exist "zluda\nvrtc.dll"                copy /y zluda\nvrtc.dll    "%TLIB%\nvrtc64_112_0.dll" >nul
-echo      cufft/cufftw не подменяются: в сборке ZLUDA rocm5 их обычно нет
+if exist "zluda\cufft.dll" if exist "%TLIB%\cufft64_10.dll"  copy /y zluda\cufft.dll  "%TLIB%\cufft64_10.dll"  >nul
+if exist "zluda\cufftw.dll" if exist "%TLIB%\cufftw64_10.dll" copy /y zluda\cufftw.dll "%TLIB%\cufftw64_10.dll" >nul
+echo      кэш ядер ZLUDA: %ZLUDA_CACHE_DIR%
 
 echo.
 echo  ::  6/6  Автоактивация zluda_rx580

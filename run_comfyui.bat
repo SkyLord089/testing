@@ -35,8 +35,7 @@ if not exist "%COMFY_DIR%\main.py" (
 )
 
 set "PYTHON=%KIT_DIR%\%VENV_DIR%\Scripts\python.exe"
-set "PYTHONPATH=%KIT_DIR%;%PYTHONPATH%"
-set "PYTHONIOENCODING=utf-8"
+call "%KIT_DIR%\env.bat"
 set "ZLUDA_COMGR_LOG_LEVEL=1"
 
 set "ARGS=--auto-launch --use-quad-cross-attention --reserve-vram 0.9"
