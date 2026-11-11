@@ -113,6 +113,7 @@ def _raise(message: str) -> None:
 
 def resolve_crt_allocators() -> Tuple[int, int]:
     """Адреса ``_aligned_malloc`` и ``_aligned_free`` в ``ucrtbase.dll``."""
+    require_windows()
     kernel32 = _kernel32()
     kernel32.LoadLibraryW.restype = ctypes.c_void_p
     kernel32.LoadLibraryW.argtypes = [ctypes.c_wchar_p]
@@ -136,6 +137,7 @@ class ThunkPage:
     """Страница с машинным кодом заглушек."""
 
     def __init__(self, aligned_malloc: int, aligned_free: int):
+        require_windows()
         kernel32 = _kernel32()
         kernel32.VirtualAlloc.restype = ctypes.c_void_p
         kernel32.VirtualAlloc.argtypes = [
@@ -191,8 +193,21 @@ class ThunkPage:
             )
 
 
+# Какой DLL экспортирует нужную функцию. Ошибка здесь стоит дорого:
+# GetModuleFileNameExW живёт в psapi.dll, а в kernel32.dll есть только
+# K32GetModuleFileNameExW, поэтому брать её из kernel32 нельзя.
+PSAPI_FUNCTIONS = ("EnumProcessModulesEx", "GetModuleFileNameExW")
+
+
+def require_windows() -> None:
+    """Чистая ошибка вместо AttributeError из недр ctypes на не-Windows."""
+    if os.name != "nt":
+        raise PatchError("Windows-only: this platform is %r" % (os.name,))
+
+
 def loaded_modules() -> List[Tuple[int, str]]:
     """Список ``(base, path)`` для всех загруженных в процесс модулей."""
+    require_windows()
     kernel32 = _kernel32()
     psapi = _psapi()
 
@@ -204,8 +219,8 @@ def loaded_modules() -> List[Tuple[int, str]]:
         ctypes.POINTER(ctypes.c_uint32),
         ctypes.c_uint32,
     ]
-    kernel32.GetModuleFileNameExW.restype = ctypes.c_uint32
-    kernel32.GetModuleFileNameExW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32]
+    psapi.GetModuleFileNameExW.restype = ctypes.c_uint32
+    psapi.GetModuleFileNameExW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32]
 
     needed = ctypes.c_uint32(0)
     capacity = 1024
@@ -223,7 +238,7 @@ def loaded_modules() -> List[Tuple[int, str]]:
         handle = handles[i]
         if not handle:
             continue
-        length = kernel32.GetModuleFileNameExW(None, handle, buffer, 1024)
+        length = psapi.GetModuleFileNameExW(None, handle, buffer, 1024)
         path = buffer.value[:length] if length else ""
         modules.append((int(handle), path))
     return modules
@@ -281,6 +296,7 @@ def write_pointer(address: int, value: int) -> int:
 
     Возвращает прежнее значение.
     """
+    require_windows()
     kernel32 = _kernel32()
     kernel32.VirtualProtect.restype = ctypes.c_int
     kernel32.VirtualProtect.argtypes = [

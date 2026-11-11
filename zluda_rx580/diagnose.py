@@ -105,6 +105,28 @@ def check_env(apply_patch: bool) -> bool:
         return False
 
     if os.name == "nt":
+        injected = []
+        try:
+            from zluda_rx580.pinpatch import loaded_modules
+
+            injected = [
+                os.path.basename(path)
+                for _base, path in loaded_modules()
+                if os.path.basename(path).lower().startswith("zluda")
+            ]
+        except Exception as exc:
+            _detail("cannot list loaded modules: %s" % exc)
+        if injected:
+            _info("ZLUDA injected into this process: %s" % ", ".join(sorted(set(injected))))
+        else:
+            _info("ZLUDA injected into this process: NO")
+            _detail(
+                "процесс запущен БЕЗ zluda.exe - CUDA здесь не появится, "
+                "ошибка \"Found no NVIDIA driver\" ожидаема. "
+                "Используйте run_diagnose.bat: он сам запускает проверки через zluda.exe"
+            )
+
+    if os.name == "nt":
         try:
             from zluda_rx580.pinpatch import resolve_crt_allocators
 

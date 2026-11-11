@@ -197,10 +197,18 @@ run_diagnose.bat venv-torch27 --check patch
 ## Диагностика
 
 ```bat
-run_diagnose.bat venv --list          :: список проверок
-run_diagnose.bat venv --check item    :: одна проверка
-run_diagnose.bat venv --patch         :: всё с подменой cudaHostAlloc
+run_diagnose.bat                  :: все проверки
+run_diagnose.bat --list           :: список проверок
+run_diagnose.bat --check item     :: одна проверка
+run_diagnose.bat --patch          :: всё с подменой cudaHostAlloc
+run_diagnose.bat --no-zluda       :: без zluda.exe, для сравнения
 ```
+
+Скрипт запускает проверки **через `zluda\zluda.exe`** — без него CUDA не
+появится вовсе, и вы получите `Found no NVIDIA driver`. Это не поломка, это
+отсутствие ZLUDA; проверка `env` печатает отдельной строкой, внедрён ли ZLUDA
+в процесс. Дочерние процессы наследуют инъекцию, потому что `zluda_redirect`
+перехватывает `CreateProcessW`.
 
 Каждая проверка выполняется в отдельном процессе, поэтому падение драйвера в
 одной не мешает остальным.
@@ -216,6 +224,9 @@ run_diagnose.bat venv --patch         :: всё с подменой cudaHostAllo
 | `roundtrip` | сверка значений `.item()` и `.cpu()`, целостность данных |
 | `shim` | Python-заплатки: значения не должны меняться |
 | `patch` | подмена `cudaHostAlloc` и повтор всех проверок памяти |
+
+Проверка `env` дополнительно сообщает адреса `_aligned_malloc` / `_aligned_free`
+в `ucrtbase.dll` — без них патч `cudaHostAlloc` не применяется.
 
 ---
 
