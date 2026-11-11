@@ -99,6 +99,23 @@ ZLUDA 3.9.6 rocm5, `Radeon RX 580 Series [ZLUDA]`, 8 ГиБ.
   или `run_diagnose.bat --timeout 3600`. Ядра кэшируются в `ZLUDA_CACHE_DIR`,
   поэтому второй запуск быстрее первого.
 
+### Матричное умножение: ZLUDA → rocBLAS → Tensile
+
+`cublas.dll` из архива ZLUDA — это `zluda_blas`, тонкая обёртка над rocBLAS
+(`rocblas-sys`, `rocblas_create_handle` в `zluda_blas/src/lib.rs:50`), своего
+GEMM у неё нет. Поэтому после подмены библиотек умножение уходит в rocBLAS, а
+тот ищет файл `TensileLibrary.dat`.
+
+Порядок поиска задан в `rocBLAS@rocm-5.7.1`, `library/src/tensile_host.cpp:622-696`:
+каталог берётся от пути к загруженной `rocblas.dll`, затем пробуются
+`../../Tensile/library`, `library`, `rocblas/library`, и внутри —
+`TensileLibrary_lazy_<arch>.dat`, `TensileLibrary_<arch>.dat`, `TensileLibrary.dat`.
+Переменная `ROCBLAS_TENSILE_LIBPATH` переопределяет каталог целиком.
+
+Проверка `blas` повторяет этот поиск и дополнительно ищет `TensileLibrary*`
+по всей установке ROCm, чтобы библиотеку для gfx803 можно было найти и
+подсказать через `ROCBLAS_TENSILE_LIBPATH` (заготовка есть в `env.bat`).
+
 ### Если ZLUDA не скачался
 
 Отдельный скрипт повторяет только шаг с ZLUDA — `venv` и `ComfyUI` не тронутся:
@@ -282,6 +299,7 @@ run_diagnose.bat --no-zluda       :: без zluda.exe, для сравнения
 | `patch` | подмена `cudaHostAlloc` и повтор всех проверок памяти |
 | `libs` | чьи DLL в `torch\lib` — NVIDIA или ZLUDA (по размеру) |
 | `imports` | откуда torch берёт `cudaHostAlloc`: IAT или `GetProcAddress` |
+| `blas` | найдёт ли rocBLAS `TensileLibrary.dat` для gfx803 |
 
 `env` печатает, по каким именно признакам найден ZLUDA. Файл `nvrtc_cuda.dll`
 в `torch/lib` признаком **не** считается: `install_comfyui.bat` создаёт его

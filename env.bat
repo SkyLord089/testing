@@ -32,6 +32,10 @@ rem Кэш скомпилированных ядер ZLUDA.
 rem Поддерживается только в ZLUDA 3.9.6 и новее: в 3.9.5 путь жёстко
 rem зашит как dirs::cache_dir()/ZLUDA/ComputeCache, то есть %LocalAppData%.
 set "ZLUDA_CACHE_DIR=%ZLRX_ROOT%\cache\zluda"
+rem rocBLAS ищет TensileLibrary рядом с rocblas.dll. Если HIP SDK лежит
+rem нестандартно или библиотеку для gfx803 пришлось положить отдельно,
+rem раскомментируйте и укажите свой каталог:
+rem set "ROCBLAS_TENSILE_LIBPATH=%ZLRX_ROOT%\cache\rocblas"
 
 set "HF_HUB_DISABLE_TELEMETRY=1"
 set "DO_NOT_TRACK=1"

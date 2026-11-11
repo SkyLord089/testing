@@ -46,6 +46,7 @@ CHECKS: List[Tuple[str, str]] = [
     ("patch", "все проверки памяти после подмены cudaHostAlloc"),
     ("libs", "чьи DLL в torch/lib - NVIDIA или ZLUDA"),
     ("imports", "откуда torch берёт cudaHostAlloc: IAT или GetProcAddress"),
+    ("blas", "найдёт ли rocBLAS библиотеку Tensile для gfx803"),
 ]
 CHECK_NAMES = [name for name, _ in CHECKS]
 
@@ -287,6 +288,142 @@ def check_roundtrip(apply_patch: bool) -> bool:
     return True
 
 
+# Порядок поиска библиотеки Tensile повторяет rocBLAS 5.7.1,
+# library/src/tensile_host.cpp:622-696. Отклоняться от него нельзя: если
+# проверка будет искать не там, где ищет rocBLAS, её результат ничего не стоит.
+TENSILE_CANDIDATES = ("../../Tensile/library", "library", "rocblas/library")
+TENSILE_FILENAMES = ("TensileLibrary_lazy_%s.dat", "TensileLibrary_%s.dat", "TensileLibrary.dat")
+
+
+def check_blas(apply_patch: bool) -> bool:
+    """Найдёт ли rocBLAS свою библиотеку Tensile для gfx803.
+
+    ZLUDA реализует cuBLAS поверх rocBLAS (zluda_blas -> rocblas-sys), поэтому
+    без TensileLibrary.dat умножение матриц не работает вовсе. На живой машине
+    rocBLAS искал C:\\Program Files\\AMD\\ROCm\\5.7\\bin\\rocblas\\library\\TensileLibrary.dat,
+    не нашёл и аварийно завершился.
+    """
+    if os.name != "nt":
+        _detail("актуально только для Windows")
+        return False
+
+    arch = "gfx803"
+    override = os.environ.get("ROCBLAS_TENSILE_LIBPATH", "")
+    if override:
+        _info("ROCBLAS_TENSILE_LIBPATH = %s (rocBLAS возьмёт только его)" % override)
+
+    # Откуда rocBLAS берёт базовый каталог: путь к загруженной rocblas.dll.
+    rocblas_dirs = []
+    try:
+        from zluda_rx580.pinpatch import loaded_modules
+
+        for _base, path in loaded_modules():
+            if os.path.basename(path).lower() == "rocblas.dll":
+                rocblas_dirs.append(os.path.dirname(path))
+    except Exception as exc:
+        _detail("не удалось перечислить модули: %s" % exc)
+
+    for var in ("HIP_PATH", "ROCM_PATH"):
+        value = os.environ.get(var, "")
+        if value:
+            _info("%s = %s" % (var, value))
+            candidate = os.path.join(value, "bin")
+            if os.path.isdir(candidate) and candidate not in rocblas_dirs:
+                rocblas_dirs.append(candidate)
+    for fallback in (r"C:\Program Files\AMD\ROCm\5.7\bin", r"C:\Program Files\AMD\ROCm\6.0\bin"):
+        if os.path.isdir(fallback) and fallback not in rocblas_dirs:
+            rocblas_dirs.append(fallback)
+
+    if not rocblas_dirs:
+        _detail("rocblas.dll не найдена ни среди модулей, ни в ROCm - HIP SDK не виден")
+        return False
+
+    found_any = False
+    for base in rocblas_dirs:
+        _info("--- rocblas.dll в %s" % base)
+        if not os.path.exists(os.path.join(base, "rocblas.dll")):
+            _info("    самой rocblas.dll здесь нет")
+        for relative in TENSILE_CANDIDATES:
+            directory = os.path.normpath(os.path.join(base, relative))
+            exists = os.path.isdir(directory)
+            _info("    %-24s %s" % (relative, "есть" if exists else "нет"))
+            if not exists:
+                continue
+            try:
+                present = sorted(
+                    name for name in os.listdir(directory) if name.lower().startswith("tensilelibrary")
+                )
+            except OSError as exc:
+                _detail("    не прочитать %s: %s" % (directory, exc))
+                continue
+            found_any = True
+            for template in TENSILE_FILENAMES:
+                name = template % arch
+                _info(
+                    "    %-38s %s" % (name, "ЕСТЬ" if name in present else "нет")
+                )
+            archs = sorted({n.split("_")[-1][:-4] for n in present if n.count("_") == 1})
+            if archs:
+                _info("    архивы под архитектуры: %s" % ", ".join(archs))
+            else:
+                _info("    TensileLibrary*.dat в каталоге нет вовсе")
+            if not any(arch in name for name in present):
+                _detail(
+                    "в %s нет ни одного файла для %s" % (directory, arch)
+                )
+    # Отдельно ищем TensileLibrary по всей установке ROCm: если библиотека
+    # есть, но не там, куда смотрит rocBLAS, её можно подсказать через
+    # ROCBLAS_TENSILE_LIBPATH. Без этого проверка только констатирует отказ.
+    hits = _find_tensile_libraries(arch)
+    if hits:
+        _info("найденные TensileLibrary*%s*:" % arch)
+        for path in hits:
+            _info("    %s" % path)
+        if not override:
+            _info(
+                "их можно подсказать rocBLAS: set ROCBLAS_TENSILE_LIBPATH=<каталог>"
+            )
+    else:
+        _detail("ни одной TensileLibrary*%s* в установке ROCm не найдено" % arch)
+
+    if not found_any:
+        _detail(
+            "ни один из каталогов, где rocBLAS ищет библиотеку, не существует. "
+            "Поэтому Tensile не инициализируется и matmul падает"
+        )
+        return False
+    return True
+
+
+def _find_tensile_libraries(arch: str, limit: int = 20) -> List[str]:
+    """Ищет файлы TensileLibrary для нужной архитектуры в установке ROCm."""
+    roots = []
+    for var in ("HIP_PATH", "ROCM_PATH"):
+        value = os.environ.get(var, "")
+        if value and os.path.isdir(value):
+            roots.append(value)
+    for base in (r"C:\Program Files\AMD\ROCm", r"C:\Program Files\AMD\ROCm\5.7"):
+        if os.path.isdir(base) and base not in roots:
+            roots.append(base)
+
+    wanted = ("tensilelibrary_%s" % arch, "tensilelibrary_lazy_%s" % arch, "tensilelibrary.dat")
+    hits: List[str] = []
+    for root in roots:
+        for current, directories, files in os.walk(root):
+            # не спускаться вглубь бесконечно: библиотека лежит неглубоко
+            depth = current[len(root) :].count(os.sep)
+            if depth >= 4:
+                directories[:] = []
+                continue
+            for name in files:
+                lowered = name.lower()
+                if lowered.startswith("tensilelibrary") and any(w in lowered for w in wanted):
+                    hits.append(os.path.join(current, name))
+                    if len(hits) >= limit:
+                        return hits
+    return hits
+
+
 def check_libs(apply_patch: bool) -> bool:
     """Чьи на самом деле DLL лежат в torch/lib: NVIDIA или ZLUDA.
 
@@ -491,6 +628,7 @@ CHECK_FUNCTIONS: Dict[str, Callable[[bool], bool]] = {
     "patch": check_patch,
     "libs": check_libs,
     "imports": check_imports,
+    "blas": check_blas,
 }
 
 
