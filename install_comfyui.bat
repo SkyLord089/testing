@@ -193,7 +193,14 @@ if exist "zluda\zluda.exe" (
     del zluda.zip
     popd
 )
-if not exist "zluda\zluda.exe" echo      [!] zluda\zluda.exe не появился - проверьте сеть
+if not exist "zluda\zluda.exe" (
+    echo      [!] zluda\zluda.exe НЕ появился. Без него ComfyUI не увидит видеокарту.
+    echo          Каталог: %KIT_DIR%\zluda
+    echo          Адрес:   %ZLUDA_URL%
+    echo          Скачайте архив вручную, распакуйте в zluda\ и запустите скрипт снова.
+) else (
+    echo      zluda\zluda.exe на месте
+)
 
 set "TLIB=%VENV_DIR%\Lib\site-packages\torch\lib"
 echo      подмена библиотек в %TLIB%

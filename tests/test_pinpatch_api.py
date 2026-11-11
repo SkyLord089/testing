@@ -29,31 +29,65 @@ from zluda_rx580 import pinpatch  # noqa: E402
 SOURCE = pathlib.Path(pinpatch.__file__).read_text(encoding="utf-8")
 
 
-class PsapiOwnershipTests(unittest.TestCase):
-    def test_module_filename_comes_from_psapi(self):
-        self.assertIn("GetModuleFileNameExW", pinpatch.PSAPI_FUNCTIONS)
-        self.assertIn("EnumProcessModulesEx", pinpatch.PSAPI_FUNCTIONS)
+class ProcessModuleApiTests(unittest.TestCase):
+    """Принадлежность функций DLL и обязательный дескриптор процесса."""
 
-    def test_kernel32_never_provides_psapi_functions(self):
-        for name in pinpatch.PSAPI_FUNCTIONS:
-            self.assertNotIn(
-                "kernel32.%s" % name,
-                SOURCE,
-                "%s is exported by psapi.dll, not kernel32.dll" % name,
+    def test_both_functions_are_declared_with_fallbacks(self):
+        declared = dict(pinpatch.PROCESS_MODULE_FUNCTIONS)
+        self.assertEqual(
+            set(declared), {"EnumProcessModulesEx", "GetModuleFileNameExW"}
+        )
+        for name, candidates in declared.items():
+            dlls = {dll for dll, _export in candidates}
+            self.assertEqual(
+                dlls,
+                {"kernel32", "psapi"},
+                "%s должен искаться и в kernel32 (K32-вариант), и в psapi" % name,
             )
+            for _dll, export in candidates:
+                self.assertTrue(
+                    export.endswith(name) or export == "K32" + name,
+                    "неожиданное имя экспорта %r для %s" % (export, name),
+                )
 
-    def test_psapi_handle_is_used_at_the_call_site(self):
-        self.assertIn("psapi.GetModuleFileNameExW(", SOURCE)
-        self.assertIn("psapi.EnumProcessModulesEx(", SOURCE)
+    def test_resolver_dict_matches_the_tuple(self):
+        self.assertEqual(
+            pinpatch.PROCESS_MODULE_FUNCTIONS_DICT,
+            dict(pinpatch.PROCESS_MODULE_FUNCTIONS),
+        )
 
-    def test_all_winapi_calls_use_a_known_dll_handle(self):
+    def test_process_handle_is_passed_not_null(self):
+        """GetLastError=6 на машине пользователя: NULL вместо дескриптора."""
+        self.assertIn("GetCurrentProcess", SOURCE)
+        self.assertIn("process = current_process()", SOURCE)
+        self.assertIn("process, handles", SOURCE)
+        self.assertIn("module_file_name(process, handle", SOURCE)
+        for forbidden in ("None, handles", "GetModuleFileNameExW(None"):
+            self.assertNotIn(forbidden, SOURCE, "NULL вместо дескриптора процесса")
+
+    def test_only_kernel32_and_psapi_are_consulted(self):
+        """Прямых обращений к атрибутам DLL больше нет - только резолвер."""
+        dlls = {dll for _n, cands in pinpatch.PROCESS_MODULE_FUNCTIONS for dll, _e in cands}
+        self.assertEqual(dlls, {"kernel32", "psapi"})
         handles = set(re.findall(r"\b(\w+)\.[A-Z]\w+\.", SOURCE))
-        self.assertTrue(handles, "no WinAPI calls found — test is out of date")
         self.assertEqual(
             handles,
-            {"kernel32", "psapi"},
-            "unexpected WinAPI handle(s): %s" % sorted(handles - {"kernel32", "psapi"}),
+            {"kernel32"},
+            "прямое обращение к функции DLL в обход резолвера: %s"
+            % sorted(handles - {"kernel32"}),
         )
+
+
+class ResolverTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "проверяем поведение вне Windows")
+    def test_unknown_function_raises_patch_error(self):
+        with self.assertRaises(pinpatch.PatchError):
+            pinpatch._resolve_process_api("NoSuchFunction")
+
+    @unittest.skipIf(os.name == "nt", "проверяем поведение вне Windows")
+    def test_current_process_raises_patch_error(self):
+        with self.assertRaises(pinpatch.PatchError):
+            pinpatch.current_process()
 
 
 class WindowsGuardTests(unittest.TestCase):

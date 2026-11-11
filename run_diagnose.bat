@@ -47,17 +47,22 @@ call "%KIT_DIR%\env.bat"
 
 set "ZLUDA_EXE=%KIT_DIR%\zluda\zluda.exe"
 set "USE_ZLUDA=1"
+set "ZLUDA_STATE=%ZLUDA_EXE%"
 for %%A in (%*) do if /i "%%A"=="--no-zluda" set "USE_ZLUDA=0"
+if "%USE_ZLUDA%"=="0" set "ZLUDA_STATE=выключен ключом --no-zluda"
+if "%USE_ZLUDA%"=="1" if not exist "%ZLUDA_EXE%" set "ZLUDA_STATE=НЕ НАЙДЕН %ZLUDA_EXE%"
 
 echo.
 echo *** Окружение: %VENV_DIR%
 echo *** Python:    "%PYTHON%"
-if "%USE_ZLUDA%"=="1" if exist "%ZLUDA_EXE%" (
-    echo *** ZLUDA:     "%ZLUDA_EXE%"
-) else (
-    echo *** ZLUDA:     ВЫКЛЮЧЕН
-    echo     [!] Без ZLUDA проверки GPU упрутся в "Found no NVIDIA driver".
+echo *** ZLUDA:     !ZLUDA_STATE!
+if "%USE_ZLUDA%"=="1" if not exist "%ZLUDA_EXE%" (
+    echo     [!] Файла zluda\zluda.exe нет. Без него CUDA не появится вовсе и
+    echo         все проверки GPU дадут "Found no NVIDIA driver".
+    echo         Проверьте каталог %KIT_DIR%\zluda и запустите install_comfyui.bat
+    echo         ещё раз - он докачает ZLUDA, не трогая venv и ComfyUI.
 )
+if "%USE_ZLUDA%"=="0" echo     [!] Без ZLUDA проверки GPU упрутся в "Found no NVIDIA driver".
 echo.
 
 if "%USE_ZLUDA%"=="1" if exist "%ZLUDA_EXE%" (

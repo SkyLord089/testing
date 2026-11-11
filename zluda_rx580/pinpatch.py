@@ -205,28 +205,76 @@ def require_windows() -> None:
         raise PatchError("Windows-only: this platform is %r" % (os.name,))
 
 
+# EnumProcessModulesEx и GetModuleFileNameExW требуют валидный дескриптор
+# процесса: NULL не принимается и даёт GetLastError=6 (ERROR_INVALID_HANDLE).
+# Обе функции есть и в psapi.dll, и в kernel32.dll под именами с префиксом K32,
+# поэтому пробуем оба варианта.
+PROCESS_MODULE_FUNCTIONS = (
+    ("EnumProcessModulesEx", (("kernel32", "K32EnumProcessModulesEx"), ("psapi", "EnumProcessModulesEx"))),
+    ("GetModuleFileNameExW", (("kernel32", "K32GetModuleFileNameExW"), ("psapi", "GetModuleFileNameExW"))),
+)
+
+
+def current_process() -> int:
+    """Псевдодескриптор текущего процесса — то, что ждут Process Status API."""
+    require_windows()
+    kernel32 = _kernel32()
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel32.GetCurrentProcess.argtypes = []
+    handle = kernel32.GetCurrentProcess()
+    if not handle:
+        _raise("GetCurrentProcess failed")
+    return int(handle)
+
+
+def _resolve_process_api(name: str):
+    """Возвращает функцию из первой DLL, которая её экспортирует."""
+    candidates = PROCESS_MODULE_FUNCTIONS_DICT.get(name)
+    if not candidates:
+        raise PatchError("no DLL mapping declared for %r" % (name,))
+    errors = []
+    for dll_name, export in candidates:
+        try:
+            library = _kernel32() if dll_name == "kernel32" else _psapi()
+            function = getattr(library, export)
+        except (AttributeError, OSError) as exc:
+            errors.append("%s!%s: %s" % (dll_name, export, exc))
+            continue
+        return function
+    raise PatchError("cannot resolve %s (%s)" % (name, "; ".join(errors)))
+
+
+PROCESS_MODULE_FUNCTIONS_DICT = dict(PROCESS_MODULE_FUNCTIONS)
+
+
 def loaded_modules() -> List[Tuple[int, str]]:
     """Список ``(base, path)`` для всех загруженных в процесс модулей."""
     require_windows()
-    kernel32 = _kernel32()
-    psapi = _psapi()
 
-    psapi.EnumProcessModulesEx.restype = ctypes.c_int
-    psapi.EnumProcessModulesEx.argtypes = [
+    enum_modules = _resolve_process_api("EnumProcessModulesEx")
+    enum_modules.restype = ctypes.c_int
+    enum_modules.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_void_p),
         ctypes.c_uint32,
         ctypes.POINTER(ctypes.c_uint32),
         ctypes.c_uint32,
     ]
-    psapi.GetModuleFileNameExW.restype = ctypes.c_uint32
-    psapi.GetModuleFileNameExW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32]
+    module_file_name = _resolve_process_api("GetModuleFileNameExW")
+    module_file_name.restype = ctypes.c_uint32
+    module_file_name.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+    ]
 
+    process = current_process()
     needed = ctypes.c_uint32(0)
     capacity = 1024
     handles = (ctypes.c_void_p * capacity)()
-    ok = psapi.EnumProcessModulesEx(
-        None, handles, ctypes.sizeof(handles), ctypes.byref(needed), LIST_MODULES_ALL
+    ok = enum_modules(
+        process, handles, ctypes.sizeof(handles), ctypes.byref(needed), LIST_MODULES_ALL
     )
     if not ok:
         _raise("EnumProcessModulesEx failed")
@@ -238,7 +286,7 @@ def loaded_modules() -> List[Tuple[int, str]]:
         handle = handles[i]
         if not handle:
             continue
-        length = psapi.GetModuleFileNameExW(None, handle, buffer, 1024)
+        length = module_file_name(process, handle, buffer, 1024)
         path = buffer.value[:length] if length else ""
         modules.append((int(handle), path))
     return modules
