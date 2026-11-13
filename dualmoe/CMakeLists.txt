@@ -184,7 +184,9 @@ if (DUALMOE_DESKTOP_WINDOW AND WIN32)
         OUTPUT_NAME "DualMoE"
         WIN32_EXECUTABLE ON
     )
-    set_target_properties(DualMoE PROPERTIES LINK_FLAGS "/SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup")
+    # Standard Win32 GUI subsystem; the CRT picks wWinMainCRTStartup automatically
+    # for a UNICODE windowed app, so no custom /ENTRY is needed.
+    set_target_properties(DualMoE PROPERTIES LINK_FLAGS "/SUBSYSTEM:WINDOWS")
     # Self-contained single .exe: static CRT + static WebView2 headers.
     if (MSVC)
         set_property(TARGET DualMoE PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

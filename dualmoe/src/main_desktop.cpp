@@ -190,11 +190,13 @@ int run_desktop(int argc, char ** argv) {
 
 } // namespace
 
-int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+// Unicode GUI entry point: the CRT resolves it to wWinMainCRTStartup for
+// /SUBSYSTEM:WINDOWS + UNICODE, and the raw command line is already wide.
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
-    // WinMain gives us no argv: rebuild it from the wide command line so the
-    // same option parser is shared with main().
+    // Rebuild argv from the wide command line so the console and desktop builds
+    // share exactly one option parser.
     int argc = 0;
     LPWSTR * argv_w = CommandLineToArgvW(GetCommandLineW(), &argc);
     std::vector<std::string> args_storage;
