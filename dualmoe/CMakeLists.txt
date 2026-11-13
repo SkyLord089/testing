@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(DualMoE VERSION 0.3.0 LANGUAGES C CXX)
+project(DualMoE VERSION 0.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -25,17 +25,21 @@ if (NOT LLAMA_SOURCE_DIR)
         GIT_TAG        ${DUALMOE_LLAMA_COMMIT}
         PATCH_COMMAND  git apply --ignore-whitespace ${CMAKE_CURRENT_SOURCE_DIR}/patches/0001-dualmoe-parallel-seam.patch
     )
+    set(LLAMA_BUILD_COMMON   ON  CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
     set(LLAMA_CURL           OFF CACHE BOOL "" FORCE)
+    set(LLAMA_OPENSSL        OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(llama_cpp)
     set(LLAMA_SOURCE_DIR "${llama_cpp_SOURCE_DIR}")
-    set(DUALMOE_LLAMA_LIBS llama ggml cpp-httplib)
+    set(DUALMOE_LLAMA_LIBS llama-common llama ggml cpp-httplib)
 elseif (LLAMA_BUILD_DIR AND EXISTS "${LLAMA_BUILD_DIR}/src/libllama.a")
     add_library(dualmoe_llama_imported INTERFACE)
     target_link_libraries(dualmoe_llama_imported INTERFACE
+        "${LLAMA_BUILD_DIR}/common/libllama-common.a"
+        "${LLAMA_BUILD_DIR}/common/libllama-common-base.a"
         "${LLAMA_BUILD_DIR}/src/libllama.a"
         "${LLAMA_BUILD_DIR}/ggml/src/libggml.a"
         "${LLAMA_BUILD_DIR}/ggml/src/libggml-cpu.a"
@@ -46,6 +50,7 @@ elseif (LLAMA_BUILD_DIR AND EXISTS "${LLAMA_BUILD_DIR}/src/libllama.a")
     )
     set(DUALMOE_LLAMA_LIBS dualmoe_llama_imported)
 else()
+    set(LLAMA_BUILD_COMMON   ON  CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
@@ -56,7 +61,7 @@ else()
     if (NOT TARGET cpp-httplib)
         add_subdirectory("${LLAMA_SOURCE_DIR}/vendor/cpp-httplib" "${CMAKE_CURRENT_BINARY_DIR}/httplib-subbuild")
     endif()
-    set(DUALMOE_LLAMA_LIBS llama ggml cpp-httplib)
+    set(DUALMOE_LLAMA_LIBS llama-common llama ggml cpp-httplib)
     if (TARGET ggml-cpu)
         list(APPEND DUALMOE_LLAMA_LIBS ggml-cpu)
     endif()
@@ -89,6 +94,8 @@ target_include_directories(dualmoe_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${LLAMA_SOURCE_DIR}/include"
+    "${LLAMA_SOURCE_DIR}/common"
+    "${LLAMA_SOURCE_DIR}/vendor"
     "${LLAMA_SOURCE_DIR}/ggml/include"
 )
 target_compile_definitions(dualmoe_core PUBLIC

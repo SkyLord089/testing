@@ -121,6 +121,7 @@ json telemetry_to_json(const dualmoe::TelemetrySnapshot & t) {
         {"active_gpu_layers", t.active_gpu_layers},
         {"active_cpu_share", t.active_cpu_share},
         {"active_ubatch", t.active_ubatch},
+        {"thinking_enabled", t.thinking_enabled},
     };
 }
 
@@ -137,6 +138,9 @@ json summary_to_json(const dualmoe::ModelSummary & s) {
         {"n_expert", s.n_expert},
         {"n_expert_used", s.n_expert_used},
         {"n_ctx_train", s.n_ctx_train},
+        {"n_swa", s.n_swa},
+        {"n_kv_shared_layers", s.n_kv_shared_layers},
+        {"n_swa_layers", s.n_swa_layers},
         {"is_moe", s.is_moe},
         {"expert_bytes", s.expert_bytes},
         {"dense_bytes", s.dense_bytes},
@@ -277,8 +281,10 @@ int main(int argc, char ** argv) {
         else if (arg == "--io-lanes") boot_cfg.io_lanes = std::atoi(next_val().c_str());
         else if (arg == "--ctx" || arg == "-c") boot_cfg.n_ctx = (uint32_t) std::atoi(next_val().c_str());
         else if (arg == "--threads" || arg == "-t") boot_cfg.n_threads = std::atoi(next_val().c_str());
+        else if (arg == "--thinking") boot_cfg.enable_thinking = true;
+        else if (arg == "--no-thinking") boot_cfg.enable_thinking = false;
         else if (arg == "--help" || arg == "-h") {
-            std::cout << "DualMoE v0.3.0 (Zero-HDD VRAM <-> RAM Edition — LearnHarness x Hermes Runtime)\n"
+            std::cout << "DualMoE v0.4.0 (Gemma 4 Jinja2 + SWA KV + Disjoint Multi-Projection Fix)\n"
                       << "  --host <addr>             Bind address (default 0.0.0.0)\n"
                       << "  --port <port>             HTTP/OpenAI port (default 8090)\n"
                       << "  --no-browser              Do not auto-open Web UI on Windows startup\n"
@@ -341,7 +347,7 @@ int main(int argc, char ** argv) {
         const auto cfg = engine.current_config();
         json out = {
             {"ok", true},
-            {"version", "0.2.0"},
+            {"version", "0.4.0"},
             {"default_scan_dir", scan_dir},
             {"roots", list_roots_utf8()},
             {"devices", devs},
@@ -360,6 +366,7 @@ int main(int argc, char ** argv) {
                 {"n_ubatch", cfg.n_ubatch},
                 {"kv_type_k", cfg.kv_type_k},
                 {"kv_type_v", cfg.kv_type_v},
+                {"enable_thinking", cfg.enable_thinking},
             }},
             {"model", summary_to_json(engine.current_model())},
             {"telemetry", telemetry_to_json(engine.telemetry())},
@@ -482,6 +489,7 @@ int main(int argc, char ** argv) {
             cfg.moe_stream           = body.value("moe_stream", true);
             cfg.dense_anon           = body.value("dense_anon", cfg.dense_anon);
             cfg.release_mmap         = body.value("release_mmap", cfg.release_mmap);
+            cfg.enable_thinking      = body.value("enable_thinking", cfg.enable_thinking);
 
             const bool async_mode = body.value("async", false);
             std::string err;
@@ -530,6 +538,19 @@ int main(int argc, char ** argv) {
         add_cors(res);
         engine.request_cancel();
         res.set_content(json{{"ok", true}}.dump(), "application/json; charset=utf-8");
+    });
+
+    svr.Post("/api/settings/thinking", [&](const httplib::Request & req, httplib::Response & res) {
+        add_cors(res);
+        try {
+            const json body = json::parse(req.body);
+            const bool en = body.value("enable_thinking", true);
+            engine.set_thinking_enabled(en);
+            res.set_content(json{{"ok", true}, {"enable_thinking", en}}.dump(), "application/json; charset=utf-8");
+        } catch (const std::exception & e) {
+            res.status = 400;
+            res.set_content(json{{"ok", false}, {"error", e.what()}}.dump(), "application/json; charset=utf-8");
+        }
     });
 
     svr.Get("/api/telemetry/stream", [&](const httplib::Request &, httplib::Response & res) {
@@ -613,12 +634,25 @@ int main(int argc, char ** argv) {
             return;
         }
 
+        if (body.contains("enable_thinking") && body["enable_thinking"].is_boolean()) {
+            engine.set_thinking_enabled(body["enable_thinking"].get<bool>());
+        }
+
         dualmoe::SamplingParams sp = engine.current_config().sampling;
         if (body.contains("temperature") && body["temperature"].is_number()) {
             sp.temperature = body["temperature"].get<float>();
         }
         if (body.contains("top_p") && body["top_p"].is_number()) {
             sp.top_p = body["top_p"].get<float>();
+        }
+        if (body.contains("top_k") && body["top_k"].is_number_integer()) {
+            sp.top_k = body["top_k"].get<int32_t>();
+        }
+        if (body.contains("repeat_penalty") && body["repeat_penalty"].is_number()) {
+            sp.repeat_penalty = body["repeat_penalty"].get<float>();
+        }
+        if (body.contains("dry_multiplier") && body["dry_multiplier"].is_number()) {
+            sp.dry_multiplier = body["dry_multiplier"].get<float>();
         }
         if (body.contains("max_tokens") && body["max_tokens"].is_number_integer()) {
             sp.max_tokens = body["max_tokens"].get<int32_t>();
@@ -734,7 +768,7 @@ int main(int argc, char ** argv) {
 
     const std::string local_url = "http://" + std::string(host == "0.0.0.0" ? "127.0.0.1" : host) + ":" + std::to_string(bound_port);
     std::cout << "\n==================================================================\n"
-              << "  DualMoE v0.3.0 — Zero-HDD VRAM <-> RAM • LearnHarness x Hermes\n"
+              << "  DualMoE v0.4.0 — Gemma 4 Jinja2 • SWA KV • Zero-HDD VRAM ⊕ RAM\n"
               << "  Интерфейс в браузере:           " << local_url << "\n"
               << "  OpenAI / LearnHarness Base URL: " << local_url << "/v1\n"
               << "  Журнал загрузки (Flight Log):   dualmoe-load.log\n"

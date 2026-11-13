@@ -10,11 +10,12 @@ namespace dualmoe {
 
 struct SamplingParams {
     float    temperature    = 0.7f;
-    float    top_p          = 0.92f;
+    float    top_p          = 0.95f;
     float    min_p          = 0.05f;
-    int32_t  top_k          = 40;
-    float    repeat_penalty = 1.05f;
+    int32_t  top_k          = 64;
+    float    repeat_penalty = 1.02f;
     int32_t  repeat_last_n  = 64;
+    float    dry_multiplier = 0.8f;       // Phrase-level anti-repetition loop breaker (0 = off)
     uint32_t seed           = 0xFFFFFFFFu;
     int32_t  max_tokens     = 2048;
 };
@@ -30,6 +31,7 @@ struct EngineConfig {
     bool     zero_hdd_mode        = true;   // Sequential 1-pass HDD preload into VRAM + RAM -> 0 disk reads in chat
     bool     auto_balance_compute = true;   // Live GPU || CPU dynamic load balancer + hot/cold swap hysteresis
     float    swap_hysteresis      = 1.22f;  // CRF threshold multiplier before swapping hot RAM <-> cold VRAM
+    bool     enable_thinking      = true;   // Enable native reasoning channel (<|channel>thought / <think>) when supported
 
     // Host DDR4 + fallback disk controls
     bool     moe_stream           = true;   // Virtual-arena backing for MoE 3D experts (supports disjoint VRAM+RAM)
@@ -51,7 +53,7 @@ struct EngineConfig {
     int32_t  n_threads            = 8;      // Decode CPU threads (physical cores on Ryzen 7 5700X)
     int32_t  n_threads_batch      = 14;     // Prefill CPU threads
     std::string kv_type_k         = "q8_0"; // f16 | q8_0 | q4_0
-    std::string kv_type_v         = "q8_0"; // Auto-falls back to f16 if backend lacks quantized-V FlashAttn
+    std::string kv_type_v         = "f16";  // f16 default preserves Gemma 4 shared-KV precision & Polaris RX 580 compat
     int32_t  n_expert_used_override = 0;    // 0 = model default
 
     SamplingParams sampling;
@@ -80,6 +82,11 @@ struct ModelSummary {
     int32_t     n_expert        = 0;
     int32_t     n_expert_used   = 0;
     int32_t     n_ctx_train     = 0;
+    int32_t     n_swa           = 0;      // Sliding window attention span (e.g. 1024 on Gemma 4)
+    int32_t     n_kv_shared_layers = 0;   // Shared KV layers with 0 own KV allocation (e.g. Gemma 4)
+    int32_t     n_swa_layers    = 0;      // Count of own-KV layers using sliding window
+    int32_t     kv_dim_full     = 0;      // K or V elements per token on full-attention layers
+    int32_t     kv_dim_swa      = 0;      // K or V elements per token on SWA layers
     bool        is_moe          = false;
     uint64_t    expert_bytes    = 0;
     uint64_t    dense_bytes     = 0;
@@ -205,6 +212,7 @@ struct TelemetrySnapshot {
     bool        zero_hdd_active         = false;
     bool        disjoint_swap_active    = false;
     bool        auto_balance_active     = false;
+    bool        thinking_enabled        = true;
     int32_t     active_gpu_layers       = 0;
     float       active_cpu_share        = 0.0f;
     uint32_t    active_ubatch           = 32;

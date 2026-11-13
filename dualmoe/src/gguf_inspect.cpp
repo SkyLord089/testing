@@ -65,7 +65,27 @@ int32_t parse_block_layer(const std::string & name) {
 }
 
 bool is_routed_expert_name(const std::string & name) {
-    return name.find("_exps.") != std::string::npos;
+    return name.find("_exps.weight") != std::string::npos;
+}
+
+int32_t count_swa_own_kv_layers(const gguf_context * ctx, const std::string & arch, int32_t n_layer, int32_t n_shared) {
+    const std::string key = arch + ".attention.sliding_window_pattern";
+    const int64_t id = gguf_find_key(ctx, key.c_str());
+    const int32_t own_kv = std::max<int32_t>(0, n_layer - std::max<int32_t>(0, n_shared));
+    if (id < 0 || gguf_get_kv_type(ctx, id) != GGUF_TYPE_ARRAY) return 0;
+    const size_t n = std::min<size_t>((size_t) own_kv, gguf_get_arr_n(ctx, id));
+    const void * data = gguf_get_arr_data(ctx, id);
+    const auto at = gguf_get_arr_type(ctx, id);
+    int32_t cnt = 0;
+    for (size_t i = 0; i < n; ++i) {
+        bool v = false;
+        if (at == GGUF_TYPE_BOOL) v = ((const int8_t *) data)[i] != 0;
+        else if (at == GGUF_TYPE_UINT8) v = ((const uint8_t *) data)[i] != 0;
+        else if (at == GGUF_TYPE_INT32) v = ((const int32_t *) data)[i] != 0;
+        else if (at == GGUF_TYPE_UINT32) v = ((const uint32_t *) data)[i] != 0;
+        if (v) ++cnt;
+    }
+    return cnt;
 }
 
 std::string path_to_utf8(const fs::path & p) {
@@ -137,6 +157,19 @@ GgufLayout inspect_gguf_layout(const std::string & model_path) {
         s.n_expert      = (int32_t) read_kv_int(ctx0, s.arch + ".expert_count", 0);
         s.n_expert_used = (int32_t) read_kv_int(ctx0, s.arch + ".expert_used_count", 0);
         s.n_ctx_train   = (int32_t) read_kv_int(ctx0, s.arch + ".context_length", 4096);
+        s.n_swa         = (int32_t) read_kv_int(ctx0, s.arch + ".attention.sliding_window", 0);
+        s.n_kv_shared_layers = (int32_t) read_kv_int(ctx0, s.arch + ".attention.shared_kv_layers", 0);
+        s.n_swa_layers  = count_swa_own_kv_layers(ctx0, s.arch, s.n_layer, s.n_kv_shared_layers);
+
+        const int32_t n_head    = (int32_t) read_kv_int(ctx0, s.arch + ".attention.head_count", 0);
+        const int32_t n_head_kv = (int32_t) read_kv_int(ctx0, s.arch + ".attention.head_count_kv", n_head);
+        const int32_t k_len     = (int32_t) read_kv_int(ctx0, s.arch + ".attention.key_length",
+                                     n_head > 0 ? (s.n_embd / n_head) : 128);
+        const int32_t k_len_swa = (int32_t) read_kv_int(ctx0, s.arch + ".attention.key_length_swa", k_len);
+        if (n_head_kv > 0 && k_len > 0) {
+            s.kv_dim_full = n_head_kv * k_len;
+            s.kv_dim_swa  = n_head_kv * (k_len_swa > 0 ? k_len_swa : k_len);
+        }
     }
     gguf_free(ctx0);
 
@@ -162,8 +195,8 @@ GgufLayout inspect_gguf_layout(const std::string & model_path) {
             for (int d = 0; d < 4; ++d) loc.ne[d] = ne[d];
             loc.layer_idx   = parse_block_layer(loc.name);
 
-            if (s.n_expert >= 2 && loc.layer_idx >= 0 && loc.ne[2] == s.n_expert && loc.ne[3] == 1 &&
-                is_routed_expert_name(loc.name)) {
+            if (s.n_expert >= 2 && loc.layer_idx >= 0 && loc.ne[0] > 1 && loc.ne[1] > 1 &&
+                loc.ne[2] == s.n_expert && loc.ne[3] == 1 && is_routed_expert_name(loc.name)) {
                 loc.is_expert = true;
                 s.expert_bytes += loc.nbytes;
                 if ((size_t) loc.layer_idx >= out.layer_expert_names.size()) {

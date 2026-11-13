@@ -285,6 +285,7 @@ void VirtualExpertArena::shutdown() {
     layers_.clear();
     tensor_to_proj_.clear();
     slot_meta_.clear();
+    pending_promoted_.clear();
     prewarm_ra_         = PrewarmReadAhead{};
     prewarm_disk_bytes_ = 0;
     prewarm_disk_ns_    = 0;
@@ -747,50 +748,93 @@ void VirtualExpertArena::mark_preload_complete() {
     ssd_active_ns_.store(0, std::memory_order_relaxed);
 }
 
-void * VirtualExpertArena::prepare_vram_eviction_dst(int32_t evicted_il,
+void * VirtualExpertArena::prepare_vram_readback_dst(int32_t il,
                                                      const char * tensor_name,
-                                                     int32_t evicted_exp,
-                                                     size_t nbytes) {
-    if (evicted_exp < 0 || evicted_exp >= n_expert_ || !has_layer(evicted_il)) return nullptr;
-    const int32_t pi = find_proj_by_name(evicted_il, tensor_name);
+                                                     int32_t exp,
+                                                     size_t nbytes,
+                                                     bool keep_in_vram) {
+    if (exp < 0 || exp >= n_expert_ || !has_layer(il)) return nullptr;
+    const int32_t pi = find_proj_by_name(il, tensor_name);
     if (pi < 0) return nullptr;
 
     std::lock_guard<std::mutex> lk(mu_);
-    StreamedLayer & L      = layers_[(size_t) evicted_il];
+    // Any earlier layer's async DMA promotion has already completed past llama_moe_cache::copy()'s
+    // router readback synchronization fence, so retire those DDR4 pages before committing new ones!
+    retire_completed_promotions_locked();
+
+    StreamedLayer & L      = layers_[(size_t) il];
     StreamedProjection & P = L.projs[(size_t) pi];
     if (nbytes != P.nb2) return nullptr;
 
-    CacheSlotMeta & m = slot_meta_[(size_t) evicted_il * (size_t) n_expert_ + (size_t) evicted_exp];
-    m.in_vram = false;
+    CacheSlotMeta & m = slot_meta_[(size_t) il * (size_t) n_expert_ + (size_t) exp];
+    if (!keep_in_vram) {
+        m.in_vram = false;
+    }
 
-    // Mirrored mode: clean weights already reside in DDR4 RAM — no PCIe readback needed!
-    if (m.resident && P.state[(size_t) evicted_exp].load(std::memory_order_acquire) == kStateReady) {
+    // Check strictly THIS projection's state BEFORE modifying sibling projections!
+    // In Mirrored mode (or if already rescued), THIS projection already holds valid weights in DDR4 RAM.
+    if (m.resident && P.state[(size_t) exp].load(std::memory_order_acquire) == kStateReady) {
         return nullptr;
     }
 
-    // Disjoint mode: commit DDR4 slice to receive cold victim directly from RX 580 VRAM (0 HDD reads!)
+    // Disjoint mode: commit DDR4 slice for all projections of (il, exp) once on ip=0, while leaving
+    // sibling projections (ip=1, ip=2) in non-ready state until their own evict_cb / rescue_cb copies them!
     if (!m.resident) {
         const uint64_t epoch = ++pin_epoch_;
         m.pin_epoch = epoch;
-        // Note: if committed_bytes is momentarily near budget, allow 1-expert temporary headroom because
-        // on_experts_promoted_to_vram immediately decommits the newly promoted expert right after upload!
-        if (budget_bytes_ > 0 && committed_bytes_.load(std::memory_order_relaxed) > budget_bytes_ + L.bytes_per_expert * 2) {
+        if (budget_bytes_ > 0 && committed_bytes_.load(std::memory_order_relaxed) > budget_bytes_ + L.bytes_per_expert * 3) {
             evict_to_budget_locked(L.bytes_per_expert, epoch);
         }
-        if (!commit_expert_locked(evicted_il, evicted_exp, epoch)) {
+        if (!commit_expert_locked(il, exp, epoch)) {
             return nullptr;
         }
         m.resident  = true;
         m.crf       = std::max(0.5f, m.crf);
         m.last_step = step_clock_;
-        for (StreamedProjection & sp : L.projs) {
-            sp.state[(size_t) evicted_exp].store(kStateReady, std::memory_order_release);
+        for (size_t j = 0; j < L.projs.size(); ++j) {
+            if ((int32_t) j != pi) {
+                L.projs[j].state[(size_t) exp].store(keep_in_vram ? kStateInVram : kStateEmpty, std::memory_order_release);
+            }
         }
-    } else {
-        P.state[(size_t) evicted_exp].store(kStateReady, std::memory_order_release);
     }
 
-    return P.arena_base + (uint64_t) evicted_exp * P.nb2;
+    P.state[(size_t) exp].store(kStateReady, std::memory_order_release);
+    return P.arena_base + (uint64_t) exp * P.nb2;
+}
+
+void * VirtualExpertArena::prepare_vram_eviction_dst(int32_t evicted_il,
+                                                     const char * tensor_name,
+                                                     int32_t evicted_exp,
+                                                     size_t nbytes) {
+    return prepare_vram_readback_dst(evicted_il, tensor_name, evicted_exp, nbytes, /*keep_in_vram=*/false);
+}
+
+void * VirtualExpertArena::prepare_vram_rescue_dst(int32_t il,
+                                                   const char * tensor_name,
+                                                   int32_t exp,
+                                                   size_t nbytes) {
+    return prepare_vram_readback_dst(il, tensor_name, exp, nbytes, /*keep_in_vram=*/true);
+}
+
+void VirtualExpertArena::retire_completed_promotions_locked() {
+    if (pending_promoted_.empty()) return;
+    for (const auto & pr : pending_promoted_) {
+        const int32_t old_il  = pr.first;
+        const int32_t old_exp = pr.second;
+        if (!has_layer(old_il) || old_exp < 0 || old_exp >= n_expert_) continue;
+        CacheSlotMeta & m = slot_meta_[(size_t) old_il * (size_t) n_expert_ + (size_t) old_exp];
+        // Only decommit if the expert is STILL live in VRAM (not evicted in the meantime)
+        if (disjoint_vram_mode_ && m.in_vram && m.resident) {
+            evict_expert_locked(old_il, old_exp, kStateInVram);
+            m.in_vram = true;
+        }
+    }
+    pending_promoted_.clear();
+}
+
+void VirtualExpertArena::flush_deferred_promotions() {
+    std::lock_guard<std::mutex> lk(mu_);
+    retire_completed_promotions_locked();
 }
 
 void VirtualExpertArena::on_experts_promoted_to_vram(int32_t il,
@@ -803,18 +847,22 @@ void VirtualExpertArena::on_experts_promoted_to_vram(int32_t il,
     if (n_evicted_to_ram > 0) {
         vram_to_ram_swaps_.fetch_add(n_evicted_to_ram, std::memory_order_relaxed);
     }
-    if (!promoted_experts || n_promoted == 0 || !has_layer(il)) return;
 
     std::lock_guard<std::mutex> lk(mu_);
+    // Retire promotions from previous layer(s) whose async DMA has already crossed copy()'s sync barrier
+    retire_completed_promotions_locked();
+
+    if (!promoted_experts || n_promoted == 0 || !has_layer(il)) return;
+
     for (size_t i = 0; i < n_promoted; ++i) {
         const int32_t e = promoted_experts[i];
         if (e < 0 || e >= n_expert_) continue;
         CacheSlotMeta & m = slot_meta_[(size_t) il * (size_t) n_expert_ + (size_t) e];
         m.in_vram = true;
         if (disjoint_vram_mode_ && m.resident) {
-            // Release physical DDR4 pages of the newly VRAM-resident expert -> net memory delta = 0!
-            evict_expert_locked(il, e, kStateInVram);
-            m.in_vram = true;
+            // Defer DDR4 page decommit until the next layer/decode barrier so async Vulkan DMA upload
+            // reads intact host memory while overlapping parallel CPU compute with 0 extra GPU stalls!
+            pending_promoted_.emplace_back(il, e);
         }
     }
 }

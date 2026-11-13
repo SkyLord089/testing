@@ -15,6 +15,8 @@
 #include <unordered_set>
 #include <vector>
 
+struct common_chat_templates;
+
 namespace dualmoe {
 
 class DualMoeEngine {
@@ -44,6 +46,7 @@ public:
     LoadDiagnosticsSnapshot diagnostics() const;
     std::vector<LoadLogEntry> recent_logs(uint64_t since_seq = 0) const;
     void clear_crash_banner();
+    void set_thinking_enabled(bool enabled);
 
     void request_cancel();
 
@@ -74,6 +77,7 @@ private:
     static void   c_moe_cache_callback(const struct llama_moe_cache_event * ev, void * user_data);
     static bool   c_moe_prewarm_fetch(int32_t il, int32_t ip, int32_t expert_id, const char * tensor_name, void * dst_buf, size_t nbytes, void * user_data);
     static void * c_moe_evict_cb     (int32_t evicted_il, int32_t ip, int32_t evicted_expert, const char * tensor_name, size_t nbytes, void * user_data);
+    static void * c_moe_rescue_cb    (int32_t il, int32_t ip, int32_t expert_id, const char * tensor_name, size_t nbytes, void * user_data);
     static void   c_moe_promoted_cb  (int32_t il, const int32_t * promoted_experts, size_t n_promoted, size_t n_evicted_to_ram, void * user_data);
     static bool   c_abort_callback   (void * user_data);
 
@@ -94,6 +98,7 @@ private:
     std::string format_chat_prompt(const std::vector<ChatMessage> & messages) const;
     bool run_tokens(const std::vector<llama_token> & tokens,
                     const SamplingParams & sp,
+                    const std::vector<std::string> & stop_strings,
                     const TokenCallback & on_token,
                     std::string & full_reply,
                     int32_t & prompt_tokens_out,
@@ -113,6 +118,7 @@ private:
     llama_model *   model_ = nullptr;
     llama_context * ctx_   = nullptr;
     const llama_vocab * vocab_ = nullptr;
+    struct common_chat_templates * chat_templates_ = nullptr;
 
     // Prefix KV cache tracking across turns
     std::vector<llama_token> kv_tokens_;

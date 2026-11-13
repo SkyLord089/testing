@@ -1,5 +1,7 @@
 #include "engine.h"
 
+#include "chat.h"
+#include "common.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 
@@ -656,12 +658,21 @@ LoadDiagnosticsSnapshot DualMoeEngine::diagnostics() const {
     return snap;
 }
 
+void DualMoeEngine::set_thinking_enabled(bool enabled) {
+    std::lock_guard<std::mutex> lk(state_mu_);
+    cfg_.enable_thinking = enabled;
+}
+
 void DualMoeEngine::request_cancel() {
     cancel_flag_.store(true, std::memory_order_release);
 }
 
 void DualMoeEngine::unload_model_locked() {
     install_cpu_expert_hook(nullptr, nullptr);
+    if (chat_templates_) {
+        common_chat_templates_free(chat_templates_);
+        chat_templates_ = nullptr;
+    }
     if (ctx_) {
         llama_set_moe_cache_host_cb(ctx_, nullptr, nullptr);
         llama_set_moe_cache_swap_cbs(ctx_, nullptr, nullptr, 0.0f, nullptr);
@@ -1212,14 +1223,29 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
     size_t target_moe_cache_mb = (lay.summary.is_moe && effective_ngl > 0) ? cfg.vram_cache_mb : 0;
 
     if (has_gpu_device && effective_ngl > 0 && post_weight_mem.vram_free_mb > 0) {
-        // Conservative estimate of KV + compute buffer VRAM so RX 580 never hits vk::OutOfDeviceMemoryError
+        // Exact SWA + Shared-KV + GQA aware KV footprint estimate (unlocks ~900+ MiB extra VRAM on Gemma 4 26B-A4B!)
         const uint64_t kv_elem_b = bytes_per_kv_elem_num(parse_kv_type(cfg.kv_type_k)) +
                                    bytes_per_kv_elem_num(parse_kv_type(cfg.kv_type_v));
-        // GQA models typically use 1/4 to 1/8 of n_embd for K/V; bound conservatively at n_embd / 3
-        const uint64_t kv_dim_est = std::max<uint64_t>(256, (uint64_t) std::max<int32_t>(512, lay.summary.n_embd) / 3);
-        const uint64_t gpu_layers_est = (uint64_t) std::min<int32_t>(effective_ngl, std::max<int32_t>(1, n_layer));
-        const uint64_t est_kv_mb = (gpu_layers_est * (uint64_t) target_ctx * kv_dim_est * kv_elem_b) >> 20;
-        const uint64_t compute_headroom_mb = 420; // Compute graph + Vulkan staging safety margin
+        const int32_t total_L    = std::max<int32_t>(1, n_layer);
+        const int32_t own_kv_L   = std::max<int32_t>(1, total_L - std::max<int32_t>(0, lay.summary.n_kv_shared_layers));
+        const int32_t first_gpu  = effective_ngl >= total_L ? 0 : std::max<int32_t>(0, total_L - effective_ngl);
+        const int32_t gpu_own_kv = std::max<int32_t>(0, own_kv_L - first_gpu);
+
+        uint64_t est_kv_mb = 0;
+        if (lay.summary.kv_dim_full > 0 && gpu_own_kv > 0) {
+            const int32_t swa_L  = (lay.summary.n_swa > 0)
+                ? std::min<int32_t>(gpu_own_kv, (int32_t) ((int64_t) lay.summary.n_swa_layers * gpu_own_kv / own_kv_L))
+                : 0;
+            const int32_t full_L = std::max<int32_t>(0, gpu_own_kv - swa_L);
+            const uint64_t swa_ctx = std::min<uint64_t>(target_ctx, (uint64_t) lay.summary.n_swa + 128ull);
+            const uint64_t full_b  = (uint64_t) full_L * (uint64_t) target_ctx * (uint64_t) lay.summary.kv_dim_full * kv_elem_b;
+            const uint64_t swa_b   = (uint64_t) swa_L  * swa_ctx * (uint64_t) std::max<int32_t>(1, lay.summary.kv_dim_swa) * kv_elem_b;
+            est_kv_mb = (full_b + swa_b + (1ull << 20) - 1) >> 20;
+        } else {
+            const uint64_t kv_dim_est = std::max<uint64_t>(256, (uint64_t) std::max<int32_t>(512, lay.summary.n_embd) / 3);
+            est_kv_mb = ((uint64_t) gpu_own_kv * (uint64_t) target_ctx * kv_dim_est * kv_elem_b) >> 20;
+        }
+        const uint64_t compute_headroom_mb = 360; // Compute graph + Vulkan staging safety margin
 
         if (post_weight_mem.vram_free_mb <= est_kv_mb + compute_headroom_mb) {
             if (target_moe_cache_mb > 0) {
@@ -1332,6 +1358,13 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
         ? "Линейное чтение весов с HDD в VRAM и ОЗУ без рывков головок (подготовка режима 0 чтений диска)..."
         : "Подключение асинхронного маршрутизатора GPU ∥ CPU ∥ Диск...");
 
+    try {
+        auto tmpl_ptr = common_chat_templates_init(model_, "");
+        chat_templates_ = tmpl_ptr.release();
+    } catch (...) {
+        chat_templates_ = nullptr;
+    }
+
     uint64_t prewarmed_vram_b = 0;
     uint64_t preloaded_ram_b  = 0;
     bool     disjoint_active  = false;
@@ -1362,7 +1395,7 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
 
         if (stream_moe) {
             arena_.set_vram_rescue_callback([this](int32_t il, int32_t exp) -> bool {
-                return ctx_ ? llama_moe_cache_rescue_expert(ctx_, il, exp, &DualMoeEngine::c_moe_evict_cb, this) : false;
+                return ctx_ ? llama_moe_cache_rescue_expert(ctx_, il, exp, &DualMoeEngine::c_moe_rescue_cb, this) : false;
             });
         }
     }
@@ -1471,6 +1504,12 @@ void * DualMoeEngine::c_moe_evict_cb(int32_t evicted_il, int32_t ip, int32_t evi
     (void) ip;
     if (!user_data) return nullptr;
     return static_cast<DualMoeEngine *>(user_data)->arena_.prepare_vram_eviction_dst(evicted_il, tensor_name, evicted_expert, nbytes);
+}
+
+void * DualMoeEngine::c_moe_rescue_cb(int32_t il, int32_t ip, int32_t expert_id, const char * tensor_name, size_t nbytes, void * user_data) {
+    (void) ip;
+    if (!user_data) return nullptr;
+    return static_cast<DualMoeEngine *>(user_data)->arena_.prepare_vram_rescue_dst(il, tensor_name, expert_id, nbytes);
 }
 
 void DualMoeEngine::c_moe_promoted_cb(int32_t il, const int32_t * promoted_experts, size_t n_promoted, size_t n_evicted_to_ram, void * user_data) {
@@ -1610,14 +1649,139 @@ bool DualMoeEngine::on_eval_node(struct ggml_tensor * t, bool ask) {
     return true;
 }
 
+namespace {
+
+void split_past_assistant_reasoning(const std::string & raw,
+                                    std::string & reasoning_out,
+                                    std::string & clean_out) {
+    reasoning_out.clear();
+    clean_out = raw;
+
+    // 1. Gemma 4 format: <|channel>thought\n...<channel|>Answer
+    const std::string g4_open  = "<|channel>thought";
+    const std::string g4_close = "<channel|>";
+    const size_t p_g4 = clean_out.find(g4_open);
+    if (p_g4 != std::string::npos && p_g4 <= 4) {
+        const size_t p_end = clean_out.find(g4_close, p_g4 + g4_open.size());
+        if (p_end != std::string::npos) {
+            size_t r_start = p_g4 + g4_open.size();
+            if (r_start < p_end && clean_out[r_start] == '\n') ++r_start;
+            reasoning_out = clean_out.substr(r_start, p_end - r_start);
+            clean_out     = clean_out.substr(p_end + g4_close.size());
+            return;
+        }
+    }
+
+    // 2. Qwen3 / DeepSeek-R1 format: <think>...</think>Answer
+    const std::string q_open  = "<think>";
+    const std::string q_close = "</think>";
+    const size_t p_q = clean_out.find(q_open);
+    if (p_q != std::string::npos && p_q <= 4) {
+        const size_t p_end = clean_out.find(q_close, p_q + q_open.size());
+        if (p_end != std::string::npos) {
+            size_t r_start = p_q + q_open.size();
+            if (r_start < p_end && clean_out[r_start] == '\n') ++r_start;
+            reasoning_out = clean_out.substr(r_start, p_end - r_start);
+            size_t c_start = p_end + q_close.size();
+            while (c_start < clean_out.size() && (clean_out[c_start] == '\n' || clean_out[c_start] == '\r')) {
+                ++c_start;
+            }
+            clean_out = clean_out.substr(c_start);
+        }
+    }
+}
+
+size_t longest_stop_prefix_tail(const std::string & s, const std::vector<std::string> & stops) {
+    size_t hold = 0;
+    for (const auto & st : stops) {
+        if (st.size() <= 1) continue;
+        const size_t max_k = std::min(s.size(), st.size() - 1);
+        for (size_t k = max_k; k >= 1; --k) {
+            if (s.compare(s.size() - k, k, st, 0, k) == 0) {
+                if (k > hold) hold = k;
+                break;
+            }
+        }
+    }
+    return hold;
+}
+
+} // namespace
+
 std::string DualMoeEngine::format_chat_prompt(const std::vector<ChatMessage> & messages) const {
     if (messages.empty()) return "";
+
+    std::string arch;
+    bool enable_thinking = true;
+    {
+        std::lock_guard<std::mutex> slk(state_mu_);
+        arch            = layout_.summary.arch;
+        enable_thinking = cfg_.enable_thinking;
+    }
+
+    // Architecture-native fallback for Gemma 4 if GGUF omitted explicit Jinja metadata
+    if (arch.rfind("gemma4", 0) == 0) {
+        std::ostringstream oss;
+        bool system_emitted = false;
+        for (const auto & m : messages) {
+            std::string reasoning, clean;
+            if (m.role == "assistant") {
+                split_past_assistant_reasoning(m.content, reasoning, clean);
+            } else {
+                clean = m.content;
+            }
+            if (m.role == "system" && !system_emitted) {
+                oss << "<|turn>system\n";
+                if (enable_thinking) {
+                    oss << "<|think|>";
+                    if (!clean.empty()) oss << "\n" << clean;
+                } else {
+                    oss << clean;
+                }
+                oss << "<turn|>\n";
+                system_emitted = true;
+            } else {
+                if (!system_emitted && enable_thinking) {
+                    oss << "<|turn>system\n<|think|><turn|>\n";
+                    system_emitted = true;
+                }
+                const std::string g_role = (m.role == "assistant") ? "model" : m.role;
+                oss << "<|turn>" << g_role << "\n";
+                if (m.role == "assistant") {
+                    oss << "<|channel>thought\n<channel|>" << clean;
+                } else {
+                    oss << clean;
+                }
+                oss << "<turn|>\n";
+            }
+        }
+        if (!system_emitted && enable_thinking) {
+            oss << "<|turn>system\n<|think|><turn|>\n";
+        }
+        oss << "<|turn>model\n";
+        if (!enable_thinking) {
+            oss << "<|channel>thought\n<channel|>";
+        }
+        return oss.str();
+    }
+
+    std::vector<std::pair<std::string, std::string>> cleaned_msgs;
+    cleaned_msgs.reserve(messages.size());
     std::vector<llama_chat_message> raw;
     raw.reserve(messages.size());
     size_t total_chars = 0;
     for (const auto & m : messages) {
-        raw.push_back({m.role.c_str(), m.content.c_str()});
-        total_chars += m.role.size() + m.content.size() + 32;
+        std::string reasoning, clean;
+        if (m.role == "assistant") {
+            split_past_assistant_reasoning(m.content, reasoning, clean);
+        } else {
+            clean = m.content;
+        }
+        cleaned_msgs.emplace_back(m.role, std::move(clean));
+    }
+    for (const auto & cm : cleaned_msgs) {
+        raw.push_back({cm.first.c_str(), cm.second.c_str()});
+        total_chars += cm.first.size() + cm.second.size() + 32;
     }
 
     const char * tmpl = model_ ? llama_model_chat_template(model_, nullptr) : nullptr;
@@ -1632,8 +1796,8 @@ std::string DualMoeEngine::format_chat_prompt(const std::vector<ChatMessage> & m
     }
 
     std::ostringstream oss;
-    for (const auto & m : messages) {
-        oss << "<|im_start|>" << m.role << "\n" << m.content << "<|im_end|>\n";
+    for (const auto & cm : cleaned_msgs) {
+        oss << "<|im_start|>" << cm.first << "\n" << cm.second << "<|im_end|>\n";
     }
     oss << "<|im_start|>assistant\n";
     return oss.str();
@@ -1657,23 +1821,84 @@ bool DualMoeEngine::generate_chat(const std::vector<ChatMessage> & messages,
         return false;
     }
 
-    const std::string prompt = format_chat_prompt(messages);
-    int32_t n_tok = -llama_tokenize(vocab_, prompt.c_str(), (int32_t) prompt.size(), nullptr, 0, true, true);
-    if (n_tok <= 0) {
+    bool enable_thinking = true;
+    {
+        std::lock_guard<std::mutex> slk(state_mu_);
+        enable_thinking = cfg_.enable_thinking;
+    }
+
+    std::vector<llama_token> tokens;
+    std::vector<std::string> stop_strings = {"<turn|>", "<end_of_turn>", "<|eot_id|>", "<|im_end|>"};
+    const bool want_bos = llama_vocab_get_add_bos(vocab_);
+    const llama_token bos_id = llama_vocab_bos(vocab_);
+
+    bool jinja_ok = false;
+    if (chat_templates_ && common_chat_templates_was_explicit(chat_templates_)) {
+        try {
+            common_chat_templates_inputs inputs;
+            inputs.add_generation_prompt = true;
+            inputs.use_jinja             = true;
+            inputs.enable_thinking       = enable_thinking;
+            inputs.add_bos               = want_bos;
+            inputs.add_eos               = llama_vocab_get_add_eos(vocab_);
+            inputs.messages.reserve(messages.size());
+
+            for (const auto & m : messages) {
+                common_chat_msg cm;
+                cm.role = m.role;
+                if (m.role == "assistant") {
+                    split_past_assistant_reasoning(m.content, cm.reasoning_content, cm.content);
+                } else {
+                    cm.content = m.content;
+                }
+                inputs.messages.push_back(std::move(cm));
+            }
+
+            common_chat_params cp = common_chat_templates_apply(chat_templates_, inputs);
+            for (const auto & st : cp.additional_stops) {
+                if (!st.empty() && std::find(stop_strings.begin(), stop_strings.end(), st) == stop_strings.end()) {
+                    stop_strings.push_back(st);
+                }
+            }
+
+            for (const auto & part : cp.prompt.parts) {
+                if (part.text.empty()) continue;
+                auto seg = common_tokenize(vocab_, part.text, /*add_special=*/false, /*parse_special=*/!part.is_input);
+                tokens.insert(tokens.end(), seg.begin(), seg.end());
+            }
+
+            // Guarantee exact single BOS when vocab mandates add_bos (never duplicate, never omit)
+            if (want_bos && bos_id != LLAMA_TOKEN_NULL) {
+                if (tokens.empty() || tokens[0] != bos_id) {
+                    tokens.insert(tokens.begin(), bos_id);
+                } else if (tokens.size() >= 2 && tokens[0] == bos_id && tokens[1] == bos_id) {
+                    tokens.erase(tokens.begin());
+                }
+            }
+            jinja_ok = !tokens.empty();
+        } catch (const std::exception & e) {
+            append_backend_log(GGML_LOG_LEVEL_WARN, (std::string("[Jinja2] Fallback chat formatter: ") + e.what() + "\n").c_str());
+            tokens.clear();
+        } catch (...) {
+            tokens.clear();
+        }
+    }
+
+    if (!jinja_ok) {
+        const std::string prompt = format_chat_prompt(messages);
+        tokens = common_tokenize(vocab_, prompt, /*add_special=*/want_bos, /*parse_special=*/true);
+        if (want_bos && bos_id != LLAMA_TOKEN_NULL && tokens.size() >= 2 && tokens[0] == bos_id && tokens[1] == bos_id) {
+            tokens.erase(tokens.begin());
+        }
+    }
+
+    if (tokens.empty()) {
         err = "Не удалось токенизировать запрос";
         return false;
     }
-    std::vector<llama_token> tokens((size_t) n_tok);
-    const int32_t got = llama_tokenize(vocab_, prompt.c_str(), (int32_t) prompt.size(),
-                                       tokens.data(), (int32_t) tokens.size(), true, true);
-    if (got < 0) {
-        err = "Ошибка буфера токенизатора";
-        return false;
-    }
-    tokens.resize((size_t) got);
 
     const SamplingParams sp = use_override ? sampling_override : cfg_.sampling;
-    return run_tokens(tokens, sp, on_token, full_reply, prompt_tokens_out, completion_tokens_out, err);
+    return run_tokens(tokens, sp, stop_strings, on_token, full_reply, prompt_tokens_out, completion_tokens_out, err);
 }
 
 bool DualMoeEngine::generate_raw(const std::string & prompt,
@@ -1692,14 +1917,9 @@ bool DualMoeEngine::generate_raw(const std::string & prompt,
     llama_memory_seq_rm(llama_get_memory(ctx_), -1, -1, -1);
     kv_tokens_.clear();
 
-    int32_t n_tok = -llama_tokenize(vocab_, prompt.c_str(), (int32_t) prompt.size(), nullptr, 0, true, false);
-    if (n_tok <= 0) n_tok = 1;
-    std::vector<llama_token> tokens((size_t) n_tok);
-    const int32_t got = llama_tokenize(vocab_, prompt.c_str(), (int32_t) prompt.size(),
-                                       tokens.data(), (int32_t) tokens.size(), true, false);
-    if (got > 0) {
-        tokens.resize((size_t) got);
-    } else {
+    const bool want_bos = llama_vocab_get_add_bos(vocab_);
+    std::vector<llama_token> tokens = common_tokenize(vocab_, prompt, /*add_special=*/want_bos, /*parse_special=*/false);
+    if (tokens.empty()) {
         llama_token bos = llama_vocab_bos(vocab_);
         tokens = {bos >= 0 ? bos : 0};
     }
@@ -1710,11 +1930,13 @@ bool DualMoeEngine::generate_raw(const std::string & prompt,
     sp.seed        = seed;
 
     int32_t p_out = 0, c_out = 0;
-    return run_tokens(tokens, sp, on_token, full_reply, p_out, c_out, err);
+    std::vector<std::string> no_stops;
+    return run_tokens(tokens, sp, no_stops, on_token, full_reply, p_out, c_out, err);
 }
 
 bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
                                const SamplingParams & sp,
+                               const std::vector<std::string> & stop_strings,
                                const TokenCallback & on_token,
                                std::string & full_reply,
                                int32_t & prompt_tokens_out,
@@ -1763,6 +1985,7 @@ bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
             batch.logits[i]    = (pos + i + 1 == tokens.size()) ? 1 : 0;
         }
         const int rc = llama_decode(ctx_, batch);
+        arena_.flush_deferred_promotions();
         if (rc != 0) {
             llama_batch_free(batch);
             generating_.store(false, std::memory_order_release);
@@ -1790,26 +2013,38 @@ bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
     prompt_tokens_.fetch_add(evaluated_prompt, std::memory_order_relaxed);
 
     llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    if (sp.repeat_penalty > 1.001f && sp.repeat_last_n > 0) {
-        llama_sampler_chain_add(smpl, llama_sampler_init_penalties(
-            llama_vocab_n_tokens(vocab_), sp.repeat_last_n, sp.repeat_penalty, 0.0f, 0.0f));
-    }
     if (sp.temperature <= 0.0f) {
         llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
     } else {
-        if (sp.top_k > 0) llama_sampler_chain_add(smpl, llama_sampler_init_top_k(sp.top_k));
+        // Put top_k FIRST so 262,144-token vocabularies (Gemma 4 / Qwen3) narrow to ~64 candidates in 1 pass
+        // before running DRY phrase anti-loop & repetition penalties!
+        if (sp.top_k > 0) {
+            llama_sampler_chain_add(smpl, llama_sampler_init_top_k(sp.top_k));
+        }
+        if (sp.dry_multiplier > 0.01f) {
+            static const char * kDryBreakers[] = {"\n"};
+            llama_sampler_chain_add(smpl, llama_sampler_init_dry(
+                vocab_, sp.dry_multiplier, 1.75f, 3, 256, kDryBreakers, 1));
+        }
+        if (sp.repeat_penalty > 1.001f && sp.repeat_last_n > 0) {
+            llama_sampler_chain_add(smpl, llama_sampler_init_penalties(
+                llama_vocab_n_tokens(vocab_), sp.repeat_last_n, sp.repeat_penalty, 0.0f, 0.0f));
+        }
         if (sp.top_p < 1.0f) llama_sampler_chain_add(smpl, llama_sampler_init_top_p(sp.top_p, 1));
         if (sp.min_p > 0.0f) llama_sampler_chain_add(smpl, llama_sampler_init_min_p(sp.min_p, 1));
         llama_sampler_chain_add(smpl, llama_sampler_init_temp(sp.temperature));
         llama_sampler_chain_add(smpl, llama_sampler_init_dist(sp.seed));
     }
 
-    const size_t pen_tail = sp.repeat_last_n > 0 ? std::min<size_t>(tokens.size(), (size_t) sp.repeat_last_n) : 0;
-    for (size_t i = tokens.size() - pen_tail; i < tokens.size(); ++i) {
-        llama_sampler_accept(smpl, tokens[i]);
+    if (sp.temperature > 0.0f) {
+        const size_t pen_tail = std::min<size_t>(tokens.size(), (size_t) std::max<int32_t>(256, sp.repeat_last_n));
+        for (size_t i = tokens.size() - pen_tail; i < tokens.size(); ++i) {
+            llama_sampler_accept(smpl, tokens[i]);
+        }
     }
 
     std::string utf8_pending;
+    bool hit_stop_string = false;
     const auto t_decode_start = std::chrono::steady_clock::now();
 
     for (int32_t step = 0; step < max_new; ++step) {
@@ -1823,21 +2058,30 @@ bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
             break;
         }
 
-        char piece_buf[256];
-        int32_t piece_len = llama_token_to_piece(vocab_, next_tok, piece_buf, sizeof(piece_buf), 0, false);
-        std::string piece;
-        if (piece_len > (int32_t) sizeof(piece_buf)) {
-            std::vector<char> big((size_t) piece_len + 8);
-            piece_len = llama_token_to_piece(vocab_, next_tok, big.data(), (int32_t) big.size(), 0, false);
-            if (piece_len > 0) piece.assign(big.data(), (size_t) piece_len);
-        } else if (piece_len > 0) {
-            piece.assign(piece_buf, (size_t) piece_len);
+        // Preserve non-EOG special delimiters (<|channel>, <channel|>, <think>, </think>) intact!
+        const std::string piece = common_token_to_piece(vocab_, next_tok, /*special=*/true);
+        utf8_pending += piece;
+
+        // Stop-string check before emitting text to UI
+        for (const auto & st : stop_strings) {
+            if (!st.empty()) {
+                const size_t p_st = utf8_pending.find(st);
+                if (p_st != std::string::npos) {
+                    utf8_pending.resize(p_st);
+                    hit_stop_string = true;
+                    break;
+                }
+            }
+        }
+        if (hit_stop_string) {
+            break;
         }
 
-        utf8_pending += piece;
-        const size_t tail = incomplete_utf8_tail(utf8_pending);
-        if (utf8_pending.size() > tail) {
-            const std::string valid_chunk = utf8_pending.substr(0, utf8_pending.size() - tail);
+        const size_t utf8_tail = incomplete_utf8_tail(utf8_pending);
+        const size_t stop_tail = stop_strings.empty() ? 0 : longest_stop_prefix_tail(utf8_pending, stop_strings);
+        const size_t hold_tail = std::max(utf8_tail, stop_tail);
+        if (utf8_pending.size() > hold_tail) {
+            const std::string valid_chunk = utf8_pending.substr(0, utf8_pending.size() - hold_tail);
             utf8_pending.erase(0, valid_chunk.size());
             full_reply += valid_chunk;
             if (on_token && !on_token(valid_chunk)) {
@@ -1865,14 +2109,19 @@ bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
         batch.logits[0]    = 1;
 
         const int rc = llama_decode(ctx_, batch);
+        arena_.flush_deferred_promotions();
         if (rc != 0) break;
         kv_tokens_.push_back(next_tok);
         kv_used_.store((uint32_t) kv_tokens_.size(), std::memory_order_relaxed);
     }
 
     if (!utf8_pending.empty()) {
-        full_reply += utf8_pending;
-        if (on_token) on_token(utf8_pending);
+        const size_t utf8_tail = incomplete_utf8_tail(utf8_pending);
+        const std::string flush_chunk = utf8_pending.substr(0, utf8_pending.size() - utf8_tail);
+        if (!flush_chunk.empty()) {
+            full_reply += flush_chunk;
+            if (on_token) on_token(flush_chunk);
+        }
     }
 
     llama_sampler_free(smpl);
@@ -1911,6 +2160,7 @@ TelemetrySnapshot DualMoeEngine::telemetry() const {
         t.auto_balance_active     = auto_balance_active_;
         t.active_gpu_layers       = active_gpu_layers_;
         t.active_ubatch           = active_ubatch_;
+        t.thinking_enabled        = cfg_.enable_thinking;
         sm                        = diag_.sys_mem;
     }
     t.active_cpu_share = active_cpu_share_.load(std::memory_order_relaxed);

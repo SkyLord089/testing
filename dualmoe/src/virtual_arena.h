@@ -106,10 +106,17 @@ public:
                                      int32_t evicted_exp,
                                      size_t nbytes);
 
+    void * prepare_vram_rescue_dst(int32_t il,
+                                   const char * tensor_name,
+                                   int32_t exp,
+                                   size_t nbytes);
+
     void on_experts_promoted_to_vram(int32_t il,
                                      const int32_t * promoted_experts,
                                      size_t n_promoted,
                                      size_t n_evicted_to_ram);
+
+    void flush_deferred_promotions();
 
     // Synchronous load (for GPU VRAM cache fills that are about to be DMA-uploaded)
     void ensure_experts_sync(int32_t il, const int32_t * experts, size_t count);
@@ -171,6 +178,8 @@ private:
     void close_shards();
     bool pread_exact(int32_t shard_idx, void * dst, size_t len, uint64_t offset);
     int32_t find_proj_by_name(int32_t il, const char * tensor_name) const;
+    void * prepare_vram_readback_dst(int32_t il, const char * tensor_name, int32_t exp, size_t nbytes, bool keep_in_vram);
+    void   retire_completed_promotions_locked();
 
     bool evict_one_lowest_locked(uint64_t current_pin_epoch);
     bool commit_pages_with_recovery_locked(uint8_t * ptr, size_t bytes, uint64_t current_pin_epoch);
@@ -217,6 +226,7 @@ private:
     bool                    stop_workers_ = false;
 
     std::vector<CacheSlotMeta> slot_meta_; // [n_layer * n_expert]
+    std::vector<std::pair<int32_t, int32_t>> pending_promoted_; // Deferred (il, exp) decommits after async DMA
     uint64_t                   step_clock_ = 1;
     uint64_t                   pin_epoch_  = 1;
 

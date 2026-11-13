@@ -748,6 +748,53 @@
     line-height: 1.62;
   }
 
+  /* Collapsible Gemma 4 / Qwen3 / DeepSeek Reasoning Drawer */
+  .think-block {
+    margin-bottom: 10px;
+    border-radius: 7px;
+    border: 1px solid var(--nous-cream-border);
+    background: var(--input);
+    overflow: hidden;
+  }
+  .think-block summary {
+    cursor: pointer;
+    padding: 6px 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--nous-cream);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    user-select: none;
+    list-style: none;
+  }
+  .think-block summary::-webkit-details-marker { display: none; }
+  .think-body {
+    padding: 8px 11px 10px;
+    border-top: 1px solid var(--border);
+    font-size: 12.5px;
+    line-height: 1.52;
+    color: var(--muted);
+    white-space: pre-wrap;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+  .think-toggle-pill {
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--input);
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .think-toggle-pill.on {
+    border-color: var(--nous-cream-border);
+    background: var(--nous-cream-bg);
+    color: var(--nous-cream);
+  }
+
   /* Composer */
   .composer-wrap {
     padding: 12px 22px 14px;
@@ -1074,8 +1121,8 @@
           <circle cx="12" cy="3" r="1.3"/>
         </svg>
       </div>
-      <span class="brand-title mono">DUALMOE <span style="color:var(--nous-cream)">v0.3</span></span>
-      <span class="brand-sub">LearnHarness × Hermes • Без HDD (VRAM ⇄ RAM) • Макс. GPU ∥ CPU</span>
+      <span class="brand-title mono">DUALMOE <span style="color:var(--nous-cream)">v0.4</span></span>
+      <span class="brand-sub">Gemma 4 Jinja2 • SWA KV • Без HDD (VRAM ⊕ RAM) • GPU ∥ CPU</span>
     </div>
 
     <nav class="nav-tabs">
@@ -1301,6 +1348,7 @@
               onkeydown="onComposerKey(event)"
               oninput="autoGrow(this)"
             ></textarea>
+            <button class="think-toggle-pill on" id="btnThinkingToggle" onclick="toggleThinking()" title="Режим глубоких размышлений (Gemma 4 <|think|> / Qwen3 <think>) — переключается на лету без перезагрузки модели!">Мышление: ВКЛ</button>
             <button class="btn btn-sm" onclick="clearConversation()" title="Очистить историю диалога">Сброс</button>
             <button class="btn btn-danger btn-sm" id="btnStopGen" style="display:none" onclick="stopGeneration()">Стоп</button>
             <button class="btn btn-primary" id="btnSendChat" onclick="sendMessage()">Отправить</button>
@@ -1551,6 +1599,7 @@
     messages: [],
     generating: false,
     loading: false,
+    enableThinking: true,
     abortCtrl: null,
     lastLogSeq: 0,
     allLogs: [],
@@ -1558,6 +1607,84 @@
     lastStatus: null,
     browserDir: ''
   };
+
+  function syncThinkingPill() {
+    const btn = document.getElementById('btnThinkingToggle');
+    if (!btn) return;
+    btn.classList.toggle('on', !!state.enableThinking);
+    btn.textContent = state.enableThinking ? 'Мышление: ВКЛ' : 'Мышление: ВЫКЛ';
+  }
+
+  async function toggleThinking() {
+    state.enableThinking = !state.enableThinking;
+    syncThinkingPill();
+    try {
+      await fetch('/api/settings/thinking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enable_thinking: state.enableThinking })
+      });
+    } catch (e) {}
+  }
+
+  function parseAssistantReasoning(raw) {
+    const s = String(raw ?? '');
+    // 1. Gemma 4 format: <|channel>thought\n...<channel|>Answer
+    const g4Open = '<|channel>thought';
+    const g4Close = '<channel|>';
+    const pG4 = s.indexOf(g4Open);
+    if (pG4 !== -1 && pG4 <= 6) {
+      let rStart = pG4 + g4Open.length;
+      if (s[rStart] === '\n') rStart++;
+      const pEnd = s.indexOf(g4Close, rStart);
+      if (pEnd === -1) {
+        return { thinking: s.slice(rStart), answer: '', inProgress: true };
+      }
+      return {
+        thinking: s.slice(rStart, pEnd).trim(),
+        answer: s.slice(pEnd + g4Close.length).replace(/^\r?\n/, ''),
+        inProgress: false
+      };
+    }
+
+    // 2. Qwen3 / DeepSeek-R1 format: <think>...</think>Answer
+    const qOpen = '<think>';
+    const qClose = '</think>';
+    const pQ = s.indexOf(qOpen);
+    if (pQ !== -1 && pQ <= 6) {
+      let rStart = pQ + qOpen.length;
+      if (s[rStart] === '\n') rStart++;
+      const pEnd = s.indexOf(qClose, rStart);
+      if (pEnd === -1) {
+        return { thinking: s.slice(rStart), answer: '', inProgress: true };
+      }
+      return {
+        thinking: s.slice(rStart, pEnd).trim(),
+        answer: s.slice(pEnd + qClose.length).replace(/^(\r?\n)+/, ''),
+        inProgress: false
+      };
+    }
+
+    return { thinking: '', answer: s, inProgress: false };
+  }
+
+  function formatAssistantHtml(raw, isStreaming) {
+    const parsed = parseAssistantReasoning(raw);
+    let html = '';
+    if (parsed.inProgress) {
+      html += `<details class="think-block" open>
+        <summary><span>Ход размышлений модели…</span><span class="mono">${parsed.thinking.length} симв.</span></summary>
+        <div class="think-body">${escapeHtml(parsed.thinking)}</div>
+      </details>`;
+    } else if (parsed.thinking && parsed.thinking.length > 0) {
+      html += `<details class="think-block">
+        <summary><span>Показать ход рассуждений</span><span class="mono">${parsed.thinking.length} симв.</span></summary>
+        <div class="think-body">${escapeHtml(parsed.thinking)}</div>
+      </details>`;
+    }
+    html += `<div>${escapeHtml(parsed.answer)}</div>`;
+    return html;
+  }
 
   function fmtBytesMb(bytes) {
     if (!bytes || bytes <= 0) return '0 МБ';
@@ -1853,6 +1980,7 @@
       ram_cache_mb: parseInt(document.getElementById('inpRam').value, 10),
       zero_hdd_mode: !!document.getElementById('chkZeroHdd').checked,
       auto_balance_compute: !!document.getElementById('chkAutoBalance').checked,
+      enable_thinking: !!state.enableThinking,
       io_lanes: 1,
       n_ctx: parseInt(document.getElementById('inpCtx').value, 10),
       n_threads: parseInt(document.getElementById('inpThreads').value, 10) || 8,
@@ -2166,6 +2294,10 @@
       if (!document.getElementById('scanDirInput').value && d.default_scan_dir) {
         document.getElementById('scanDirInput').value = d.default_scan_dir;
       }
+      if (d.config && typeof d.config.enable_thinking === 'boolean') {
+        state.enableThinking = d.config.enable_thinking;
+        syncThinkingPill();
+      }
       if (d.telemetry) applyTelemetry(d.telemetry);
     } catch (e) {}
   }
@@ -2223,12 +2355,13 @@
     for (const m of state.messages) {
       const div = document.createElement('div');
       div.className = 'msg ' + (m.role === 'user' ? 'user' : 'assistant');
+      const bodyHtml = m.role === 'user' ? escapeHtml(m.content) : formatAssistantHtml(m.content, false);
       div.innerHTML = `
         <div class="msg-head">
           <span class="msg-role">${m.role === 'user' ? 'Вы' : 'DualMoE • Hermes'}</span>
           <span class="mono">${escapeHtml(m.meta || '')}</span>
         </div>
-        <div class="msg-body">${escapeHtml(m.content)}</div>
+        <div class="msg-body">${bodyHtml}</div>
       `;
       wrap.appendChild(div);
     }
@@ -2267,6 +2400,7 @@
         body: JSON.stringify({
           model: 'dualmoe-default',
           stream: true,
+          enable_thinking: !!state.enableThinking,
           messages: state.messages.slice(0, -1).map(x => ({ role: x.role, content: x.content }))
         }),
         signal: state.abortCtrl.signal
@@ -2306,7 +2440,7 @@
               assistantMsg.meta = `${tokCount} фрагм. • ${(tokCount / sec).toFixed(1)} ток/с`;
               const bodies = document.querySelectorAll('.msg.assistant .msg-body');
               const metas = document.querySelectorAll('.msg.assistant .msg-head .mono');
-              if (bodies.length) bodies[bodies.length - 1].textContent = assistantMsg.content;
+              if (bodies.length) bodies[bodies.length - 1].innerHTML = formatAssistantHtml(assistantMsg.content, true);
               if (metas.length) metas[metas.length - 1].textContent = assistantMsg.meta;
               const wrap = document.getElementById('chatScroll');
               wrap.scrollTop = wrap.scrollHeight;

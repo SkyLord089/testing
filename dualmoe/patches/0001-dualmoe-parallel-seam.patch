@@ -221,7 +221,7 @@ index 9688a7e..c0bb61a 100644
  #if _WIN32_WINNT >= 0x602
              BOOL (WINAPI *pPrefetchVirtualMemory) (HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
 diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-index 1070b92..0e09c88 100644
+index 1070b92..5ab771b 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
 @@ -178,6 +178,8 @@ struct moe_cache_lru {
@@ -474,22 +474,21 @@ index 1070b92..0e09c88 100644
          // upload the missing experts, consecutive experts going to consecutive slots are uploaded together
          size_t bytes = 0;
          for (size_t ip = 0; ip < l.experts.size(); ++ip) {
-@@ -849,6 +960,14 @@ struct llama_moe_cache::impl {
+@@ -849,6 +960,13 @@ struct llama_moe_cache::impl {
              }
          }
  
 +        if (promoted_cb != nullptr && (!fills.empty() || n_evicted_to_ram > 0)) {
-+            if (!fills.empty() && evict_cb != nullptr) {
-+                // Disjoint VRAM (+) RAM mode: ensure upload finished reading w->data before host pages are released
-+                ggml_backend_synchronize(backend);
-+            }
++            // Note: host pages of newly promoted experts are retired by VirtualExpertArena on the NEXT layer's
++            // callback (after copy()'s router readback ggml_backend_synchronize has already completed the async DMA
++            // upload), avoiding an extra mid-layer Vulkan fence stall so PCIe upload overlaps parallel CPU compute!
 +            promoted_cb(il, fill_ids_buf.empty() ? nullptr : fill_ids_buf.data(), fill_ids_buf.size(), n_evicted_to_ram, swap_cb_ud);
 +        }
 +
          stats & st = ids.size() <= (size_t) 8*n_expert_used ? stats_small : stats_large;
          st.hits   += n_hit;
          st.misses += fills.size() + cpu.size();
-@@ -970,6 +1089,119 @@ int64_t llama_moe_cache::copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -970,6 +1088,119 @@ int64_t llama_moe_cache::copy_experts(ggml_backend_t backend, const ggml_tensor
      return pimpl->copy_experts(backend, w, dst, e, last);
  }
  
@@ -555,7 +554,7 @@ index 1070b92..0e09c88 100644
 +                const int32_t key = g.lru.make_key(il, exp);
 +                g.lru.key_of[s]         = key;
 +                g.lru.slot_map[il][exp] = s;
-+                g.lru.crf[key]          = 1.5f;
++                g.lru.crf[key]          = 1.0f;
 +                g.lru.last_use[key]     = 0;
 +                g.lru.move(s, g.lru.class_of(key));
 +            }
