@@ -389,6 +389,6 @@ int main(int argc, char ** argv) {
         std::cout << "[PASS] Gate 6: Gemma 4 Jinja2 Chat Template + Single-BOS + Past-Thought Stripping verified!\n";
     }
 
-    std::cout << "ALL DUALMOE v0.4.0 GATES PASSED!\n";
+    std::cout << "ALL DUALMOE v0.4.1 GATES PASSED!\n";
     return 0;
 }

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>DualMoE v0.2 — LearnHarness × Hermes Agent Runtime</title>
+<title>DualMoE v0.4.1 — Локальная MoE-студия (VRAM ⊕ RAM)</title>
 <style>
   /* ==========================================================================
      DualMoE v0.2 — Authentic LearnHarness × Nous Hermes Agent Design System
@@ -287,6 +287,28 @@
     font-weight: 600;
     background: var(--card);
     border: 1px solid var(--border);
+  }
+
+  .shell-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 9px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .2px;
+    color: var(--muted);
+    background: var(--card);
+    border: 1px solid var(--border);
+    cursor: default;
+    user-select: none;
+  }
+
+  .shell-pill.desktop {
+    color: var(--nous-cream);
+    border-color: var(--nous-cream);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, .04) inset;
   }
 
   .dot {
@@ -1121,7 +1143,7 @@
           <circle cx="12" cy="3" r="1.3"/>
         </svg>
       </div>
-      <span class="brand-title mono">DUALMOE <span style="color:var(--nous-cream)">v0.4</span></span>
+      <span class="brand-title mono">DUALMOE <span style="color:var(--nous-cream)">v0.4.1</span></span>
       <span class="brand-sub">Gemma 4 Jinja2 • SWA KV • Без HDD (VRAM ⊕ RAM) • GPU ∥ CPU</span>
     </div>
 
@@ -1136,6 +1158,8 @@
     </nav>
 
     <div class="topbar-right">
+      <span class="shell-pill" id="shellModePill" title="DualMoE работает как отдельное приложение (без браузера)">Нативное окно</span>
+
       <button class="api-chip mono" onclick="copyApiUrl()" title="Нажмите, чтобы скопировать Base URL для LearnHarness">
         <span>API:</span>
         <strong id="apiEndpointLabel" style="color:var(--nous-cream)">/v1</strong>
@@ -1161,7 +1185,10 @@
       <section class="panel">
         <div class="panel-head">
           <span class="panel-title">1. Файл модели (.GGUF)</span>
-          <button class="btn btn-sm btn-cream" onclick="openBrowserModal()">Обзор дисков…</button>
+          <span style="display:flex;gap:5px">
+            <button class="btn btn-sm btn-cream" id="btnPickFile" onclick="pickModelFile()" title="Открыть системное окно выбора файла">Файл модели…</button>
+            <button class="btn btn-sm" onclick="openBrowserModal()" title="Встроенный обзор диска (работает и в браузере)">Диски…</button>
+          </span>
         </div>
 
         <div class="row-gap" style="margin-bottom:6px">
@@ -1605,7 +1632,9 @@
     allLogs: [],
     lastDiag: null,
     lastStatus: null,
-    browserDir: ''
+    browserDir: '',
+    shellMode: 'browser',
+    apiBaseUrl: ''
   };
 
   function syncThinkingPill() {
@@ -1717,7 +1746,7 @@
   }
 
   function copyApiUrl() {
-    const url = window.location.origin + '/v1';
+    const url = state.apiBaseUrl || (window.location.origin + '/v1');
     navigator.clipboard.writeText(url);
     const lbl = document.getElementById('apiEndpointLabel');
     const prev = lbl.textContent;
@@ -1896,6 +1925,38 @@
   }
 
   // Built-In Drive & Folder Browser
+  // Native Windows "Open file" dialog (desktop shell). Falls back to the
+  // in-app drive browser when the endpoint is unavailable (browser mode).
+  async function pickModelFile() {
+    try {
+      const r = await fetch('/api/app/pick-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: document.getElementById('scanDirInput').value || '' })
+      });
+      if (!r.ok) throw new Error('native picker unavailable');
+      const d = await r.json();
+      if (!d.ok) {
+        if (!d.canceled) openBrowserModal();
+        return;
+      }
+      const path = d.path || '';
+      if (!path) return;
+      document.getElementById('modelPathInput').value = path;
+      const slash = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'));
+      if (slash > 0) {
+        const dir = path.slice(0, slash);
+        document.getElementById('scanDirInput').value = dir;
+        await scanModels(dir);
+        const found = (state.models || []).find(m => m.path === path);
+        if (found) selectModel(found);
+      }
+      evaluatePreLoadRisk();
+    } catch (e) {
+      openBrowserModal();
+    }
+  }
+
   async function openBrowserModal(dir) {
     document.getElementById('browserModal').classList.add('open');
     const target = dir || state.browserDir || document.getElementById('scanDirInput').value || '';
@@ -2467,12 +2528,32 @@
     }
   }
 
+  // Desktop shell detection: DualMoE.exe renders this page in its own native
+  // window (Edge WebView2), so nothing is opened in a browser.
+  async function detectShell() {
+    try {
+      const r = await fetch('/api/app/info');
+      const d = await r.json();
+      state.shellMode = d.mode === 'desktop' ? 'desktop' : 'browser';
+      if (d.openai_base_url) state.apiBaseUrl = d.openai_base_url;
+    } catch (e) {
+      state.shellMode = 'plain';
+    }
+  }
+
   // Boot
   (async function init() {
     const savedTheme = localStorage.getItem('dualmoe_theme') || 'graphite';
     setTheme(savedTheme);
-    document.getElementById('apiEndpointLabel').textContent = window.location.host + '/v1';
-    document.getElementById('lhUrlHint').textContent = window.location.origin + '/v1';
+    await detectShell();
+    const baseUrl = state.apiBaseUrl || (window.location.origin + '/v1');
+    document.getElementById('apiEndpointLabel').textContent = baseUrl.replace(/^https?:\/\//, '');
+    document.getElementById('lhUrlHint').textContent = baseUrl;
+    const shellPill = document.getElementById('shellModePill');
+    if (shellPill) {
+      shellPill.textContent = state.shellMode === 'desktop' ? 'Нативное окно' : 'В браузере';
+      shellPill.classList.toggle('desktop', state.shellMode === 'desktop');
+    }
     syncSliders();
 
     await refreshStatus();

@@ -11,3 +11,6 @@ dualmoe-load.log
 dualmoe-load.status
 dualmoe-crash*.txt
 Obsidian-Learning-Path.zip
+
+# Generated icon sources (regenerate with dualmoe/scripts/make_icon.py)
+dualmoe/assets/icon_source.png

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(DualMoE VERSION 0.4.0 LANGUAGES C CXX)
+project(DualMoE VERSION 0.4.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -108,19 +108,92 @@ if (WIN32)
     target_link_libraries(dualmoe_core PUBLIC ws2_32 shell32)
 endif()
 
-add_executable(dualmoe-server
-    src/http_server.cpp
+add_library(dualmoe_app STATIC
+    src/app_http.cpp
+    src/win_dialogs.cpp
     "${EMBEDDED_WEBUI_H}"
 )
-if (WIN32)
-    set_target_properties(dualmoe-server PROPERTIES OUTPUT_NAME "DualMoE")
-endif()
-target_include_directories(dualmoe-server PRIVATE
+target_include_directories(dualmoe_app PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
     "${LLAMA_SOURCE_DIR}/vendor"
     "${LLAMA_SOURCE_DIR}/vendor/cpp-httplib"
 )
-target_link_libraries(dualmoe-server PRIVATE dualmoe_core)
+target_link_libraries(dualmoe_app PUBLIC dualmoe_core)
+
+# ---------------------------------------------------------------------------
+# Native desktop window (Edge WebView2) — no browser required.
+# Automatically enabled on Windows x64 when the webview dependency can be
+# fetched; set -DDUALMOE_DESKTOP_WINDOW=OFF to build only the console server.
+# ---------------------------------------------------------------------------
+option(DUALMOE_DESKTOP_WINDOW "Build the native window app (DualMoE.exe, WebView2)" ON)
+set(DUALMOE_WEBVIEW_TAG "0.12.0" CACHE STRING "webview/webview release tag")
+
+if (DUALMOE_DESKTOP_WINDOW AND WIN32)
+    include(FetchContent)
+    set(WEBVIEW_BUILD               OFF CACHE BOOL "" FORCE)
+    set(WEBVIEW_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+    set(WEBVIEW_BUILD_STATIC_LIBRARY ON  CACHE BOOL "" FORCE)
+    set(WEBVIEW_BUILD_TESTS         OFF CACHE BOOL "" FORCE)
+    set(WEBVIEW_BUILD_EXAMPLES      OFF CACHE BOOL "" FORCE)
+    set(WEBVIEW_BUILD_DOCS          OFF CACHE BOOL "" FORCE)
+    set(WEBVIEW_INSTALL_TARGETS     OFF CACHE BOOL "" FORCE)
+    set(WEBVIEW_USE_BUILTIN_MSWEBVIEW2 ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        webview_lib
+        GIT_REPOSITORY https://github.com/webview/webview.git
+        GIT_TAG        ${DUALMOE_WEBVIEW_TAG}
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(webview_lib)
+
+    if (DEFINED microsoft_web_webview2_SOURCE_DIR)
+        set(MSWebView2_ROOT "${microsoft_web_webview2_SOURCE_DIR}")
+    endif()
+
+    # Icon + version metadata (title bar / taskbar / Explorer properties).
+    set(DUALMOE_RC "${CMAKE_CURRENT_SOURCE_DIR}/assets/dualmoe.rc")
+    if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/dualmoe.ico")
+        find_package(Python3 COMPONENTS Interpreter)
+        execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/make_icon.py"
+                        RESULT_VARIABLE _icon_rc OUTPUT_QUIET ERROR_QUIET)
+    endif()
+
+    add_executable(DualMoE WIN32
+        src/main_desktop.cpp
+        ${DUALMOE_RC}
+    )
+    set_source_files_properties(${DUALMOE_RC} PROPERTIES
+        COMPILE_DEFINITIONS ""
+    )
+    if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/dualmoe.ico")
+        message(WARNING "DualMoE: assets/dualmoe.ico missing — EXE will use the default icon")
+    endif()
+    target_compile_definitions(DualMoE PRIVATE DUALMOE_DESKTOP=1 UNICODE _UNICODE)
+    target_link_libraries(DualMoE PRIVATE dualmoe_app)
+    set_target_properties(DualMoE PROPERTIES
+        OUTPUT_NAME "DualMoE"
+        WIN32_EXECUTABLE ON
+    )
+    set_target_properties(DualMoE PROPERTIES LINK_FLAGS "/SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup")
+    # Self-contained single .exe: static CRT + static WebView2 headers.
+    if (MSVC)
+        set_property(TARGET DualMoE PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_link_options(DualMoE PRIVATE /MANIFEST:EMBED)
+    endif()
+    message(STATUS "DualMoE: native window app enabled (webview ${DUALMOE_WEBVIEW_TAG}, WebView2 headers)")
+else()
+    message(STATUS "DualMoE: native window app disabled — building console server only")
+endif()
+
+# Headless console build (same UI in a browser) — always available, also on Linux.
+add_executable(dualmoe-server
+    src/main_desktop.cpp
+)
+target_link_libraries(dualmoe-server PRIVATE dualmoe_app)
+if (WIN32)
+    set_target_properties(dualmoe-server PROPERTIES OUTPUT_NAME "DualMoE-server")
+endif()
 
 add_executable(dualmoe-cli
     cli/main.cpp

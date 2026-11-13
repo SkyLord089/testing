@@ -1,3 +1,6 @@
+#include "app_http.h"
+#include "win_dialogs.h"
+
 #include "engine.h"
 #include "embedded_webui.h"
 
@@ -12,6 +15,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -246,50 +250,54 @@ void add_cors(httplib::Response & res) {
 
 } // namespace
 
-int main(int argc, char ** argv) {
-#if defined(_WIN32)
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
-#endif
+namespace dualmoe {
 
-    std::string host          = "0.0.0.0";
-    int         port          = 8090;
-    bool        port_explicit = false;
-    bool        no_browser    = (std::getenv("DUALMOE_NO_BROWSER") != nullptr);
-    std::string scan_dir      = default_exe_dir_utf8();
-    dualmoe::EngineConfig boot_cfg;
+std::string default_app_dir() {
+    return default_exe_dir_utf8();
+}
+
+int parse_app_options(int argc, char ** argv, AppOptions & opt, bool desktop_defaults) {
+    // The desktop build listens on loopback only (the native window is the UI),
+    // while the headless build may expose the OpenAI API to the LAN.
+    opt.host = desktop_defaults ? "127.0.0.1" : "0.0.0.0";
+    opt.scan_dir = default_exe_dir_utf8();
+    if (std::getenv("DUALMOE_NO_BROWSER") != nullptr) opt.open_browser = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next_val = [&]() -> std::string {
             return (i + 1 < argc) ? std::string(argv[++i]) : "";
         };
-        if (arg == "--host") host = next_val();
-        else if (arg == "--port" || arg == "-p") { port = std::atoi(next_val().c_str()); port_explicit = true; }
-        else if (arg == "--no-browser") no_browser = true;
-        else if (arg == "--model" || arg == "-m") boot_cfg.model_path = next_val();
-        else if (arg == "--models-dir") scan_dir = next_val();
-        else if (arg == "--ngl" || arg == "--gpu-layers") boot_cfg.n_gpu_layers = std::atoi(next_val().c_str());
-        else if (arg == "--vram-cache-mb") boot_cfg.vram_cache_mb = (size_t) std::atoll(next_val().c_str());
-        else if (arg == "--ram-cache-mb") boot_cfg.ram_cache_mb = (size_t) std::atoll(next_val().c_str());
-        else if (arg == "--cpu-share") boot_cfg.cpu_share = std::strtof(next_val().c_str(), nullptr);
-        else if (arg == "--zero-hdd") boot_cfg.zero_hdd_mode = true;
-        else if (arg == "--no-zero-hdd") boot_cfg.zero_hdd_mode = false;
-        else if (arg == "--auto-balance") boot_cfg.auto_balance_compute = true;
-        else if (arg == "--no-auto-balance") boot_cfg.auto_balance_compute = false;
-        else if (arg == "--swap-hysteresis") boot_cfg.swap_hysteresis = std::strtof(next_val().c_str(), nullptr);
-        else if (arg == "--io-lanes") boot_cfg.io_lanes = std::atoi(next_val().c_str());
-        else if (arg == "--ctx" || arg == "-c") boot_cfg.n_ctx = (uint32_t) std::atoi(next_val().c_str());
-        else if (arg == "--threads" || arg == "-t") boot_cfg.n_threads = std::atoi(next_val().c_str());
-        else if (arg == "--thinking") boot_cfg.enable_thinking = true;
-        else if (arg == "--no-thinking") boot_cfg.enable_thinking = false;
-        else if (arg == "--help" || arg == "-h") {
-            std::cout << "DualMoE v0.4.0 (Gemma 4 Jinja2 + SWA KV + Disjoint Multi-Projection Fix)\n"
-                      << "  --host <addr>             Bind address (default 0.0.0.0)\n"
-                      << "  --port <port>             HTTP/OpenAI port (default 8090)\n"
-                      << "  --no-browser              Do not auto-open Web UI on Windows startup\n"
+        if (arg == "--host") opt.host = next_val();
+        else if (arg == "--port" || arg == "-p") { opt.port = std::atoi(next_val().c_str()); opt.port_explicit = true; }
+        else if (arg == "--browser" || arg == "--open-browser") opt.open_browser = true;
+        else if (arg == "--no-browser") opt.open_browser = false;
+        else if (arg == "--model" || arg == "-m") opt.boot_cfg.model_path = next_val();
+        else if (arg == "--models-dir") opt.scan_dir = next_val();
+        else if (arg == "--ngl" || arg == "--gpu-layers") opt.boot_cfg.n_gpu_layers = std::atoi(next_val().c_str());
+        else if (arg == "--vram-cache-mb") opt.boot_cfg.vram_cache_mb = (size_t) std::atoll(next_val().c_str());
+        else if (arg == "--ram-cache-mb") opt.boot_cfg.ram_cache_mb = (size_t) std::atoll(next_val().c_str());
+        else if (arg == "--cpu-share") opt.boot_cfg.cpu_share = std::strtof(next_val().c_str(), nullptr);
+        else if (arg == "--zero-hdd") opt.boot_cfg.zero_hdd_mode = true;
+        else if (arg == "--no-zero-hdd") opt.boot_cfg.zero_hdd_mode = false;
+        else if (arg == "--auto-balance") opt.boot_cfg.auto_balance_compute = true;
+        else if (arg == "--no-auto-balance") opt.boot_cfg.auto_balance_compute = false;
+        else if (arg == "--swap-hysteresis") opt.boot_cfg.swap_hysteresis = std::strtof(next_val().c_str(), nullptr);
+        else if (arg == "--io-lanes") opt.boot_cfg.io_lanes = std::atoi(next_val().c_str());
+        else if (arg == "--ctx" || arg == "-c") opt.boot_cfg.n_ctx = (uint32_t) std::atoi(next_val().c_str());
+        else if (arg == "--threads" || arg == "-t") opt.boot_cfg.n_threads = std::atoi(next_val().c_str());
+        else if (arg == "--thinking") opt.boot_cfg.enable_thinking = true;
+        else if (arg == "--no-thinking") opt.boot_cfg.enable_thinking = false;
+        else if (arg == "--version") {
+            std::cout << "DualMoE v0.4.1\n";
+            return 1;
+        } else if (arg == "--help" || arg == "-h") {
+            std::cout << "DualMoE v0.4.1 — нативное приложение (окно Windows, без браузера)\n"
                       << "  --model <file.gguf>       Auto-load GGUF model at startup\n"
                       << "  --models-dir <folder>     Default folder for GGUF UI scanner\n"
+                      << "  --host <addr>             Bind address (desktop default 127.0.0.1)\n"
+                      << "  --port <port>             HTTP/OpenAI port (default 8090)\n"
+                      << "  --browser / --no-browser  Headless build: open Web UI in the default browser\n"
                       << "  --ngl <N>                 GPU layers for Attention/Router (default 99, auto-step-down)\n"
                       << "  --vram-cache-mb <MiB>     Hot expert bank in GPU VRAM (default 4600, auto-clamped)\n"
                       << "  --cpu-share <0..1>        Initial CPU miss share (default 0.85, auto-balanced)\n"
@@ -298,25 +306,37 @@ int main(int argc, char ** argv) {
                       << "  --auto-balance            Live GPU || CPU load balancer + CRF swap hysteresis (default ON)\n"
                       << "  --ctx <tokens>            Context window (default 16384)\n"
                       << "  --threads <N>             CPU decode threads (default 8)\n";
-            return 0;
+            return 1;
         }
     }
+    return 0;
+}
 
+struct AppServer::Impl {
     dualmoe::DualMoeEngine engine;
+    httplib::Server       svr;
+    AppOptions            opt;
+    std::atomic<int>      bound_port{-1};
+    std::atomic<bool>     shutting_down{false};
 
-    if (!boot_cfg.model_path.empty()) {
-        const auto parent_p = utf8_to_path(boot_cfg.model_path).parent_path();
-        if (!parent_p.empty()) scan_dir = path_to_utf8(parent_p);
-        std::string err;
-        std::cout << "[DualMoE] Автозагрузка стартовой модели: " << boot_cfg.model_path << " ...\n";
-        if (!engine.load_model(boot_cfg, err)) {
-            std::cerr << "[DualMoE] Предупреждение: не удалось загрузить стартовую модель: " << err << "\n";
-        } else {
-            std::cout << "[DualMoE] Модель готова: " << engine.current_model().model_name << "\n";
-        }
+    bool start(const AppOptions & o, std::string & err);
+
+    std::string openai_base_url_for_json() const {
+        const std::string & h = opt.host;
+        return "http://" + std::string(h == "0.0.0.0" || h.empty() ? "127.0.0.1" : h) + ":" +
+               std::to_string(bound_port.load(std::memory_order_acquire)) + "/v1";
+    }
+};
+
+bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
+    opt = o;
+
+    if (!opt.boot_cfg.model_path.empty()) {
+        const auto parent_p = utf8_to_path(opt.boot_cfg.model_path).parent_path();
+        if (!parent_p.empty()) opt.scan_dir = path_to_utf8(parent_p);
     }
 
-    httplib::Server svr;
+    httplib::Server & svr = this->svr;
 
     svr.Options(R"(.*)", [](const httplib::Request &, httplib::Response & res) {
         add_cors(res);
@@ -347,8 +367,8 @@ int main(int argc, char ** argv) {
         const auto cfg = engine.current_config();
         json out = {
             {"ok", true},
-            {"version", "0.4.0"},
-            {"default_scan_dir", scan_dir},
+            {"version", "0.4.1"},
+            {"default_scan_dir", opt.scan_dir},
             {"roots", list_roots_utf8()},
             {"devices", devs},
             {"config", {
@@ -374,6 +394,46 @@ int main(int argc, char ** argv) {
         res.set_content(out.dump(), "application/json; charset=utf-8");
     });
 
+    // Optional native Windows dialogs for the desktop shell: a real "Open file"
+    // picker instead of browser-only dialogs (the WebView2 window has none).
+    svr.Post("/api/app/pick-file", [&](const httplib::Request & req, httplib::Response & res) {
+        add_cors(res);
+        std::string start_dir = opt.scan_dir;
+        try {
+            if (!req.body.empty()) {
+                const json body = json::parse(req.body);
+                start_dir = body.value("dir", start_dir);
+            }
+        } catch (...) {}
+
+        std::string picked;
+        bool canceled = true;
+        const bool ok = dualmoe::pick_gguf_file(start_dir, picked, canceled);
+        if (!ok) {
+            res.set_content(json{{"ok", false}, {"canceled", canceled},
+                                 {"error", canceled ? "" : "Нативный выбор файла доступен только в Windows-приложении"}}.dump(),
+                            "application/json; charset=utf-8");
+            return;
+        }
+        res.set_content(json{{"ok", true}, {"path", picked}}.dump(), "application/json; charset=utf-8");
+    });
+
+    // Desktop shell info (native window build): lets the UI show "приложение"
+    // instead of a browser URL and confirm the embedded window is alive.
+    svr.Get("/api/app/info", [&](const httplib::Request &, httplib::Response & res) {
+        add_cors(res);
+        json out = {
+            {"ok", true},
+            {"mode", opt.desktop_window ? "desktop" : "console"},
+            {"native_dialogs", dualmoe::native_file_dialog_available()},
+            {"version", "0.4.1"},
+            {"port", bound_port.load(std::memory_order_acquire)},
+            {"openai_base_url", openai_base_url_for_json()},
+            {"scan_dir", opt.scan_dir},
+        };
+        res.set_content(out.dump(), "application/json; charset=utf-8");
+    });
+
     svr.Get("/api/diagnostics", [&](const httplib::Request & req, httplib::Response & res) {
         add_cors(res);
         uint64_t since_seq = 0;
@@ -395,7 +455,7 @@ int main(int argc, char ** argv) {
         add_cors(res);
         const std::string raw_dir = (req.has_param("dir") && !req.get_param_value("dir").empty())
             ? req.get_param_value("dir")
-            : scan_dir;
+            : opt.scan_dir;
 
         std::error_code ec;
         fs::path target = utf8_to_path(raw_dir);
@@ -458,7 +518,7 @@ int main(int argc, char ** argv) {
         add_cors(res);
         const std::string dir = req.has_param("dir") && !req.get_param_value("dir").empty()
             ? req.get_param_value("dir")
-            : scan_dir;
+            : opt.scan_dir;
         json arr = json::array();
         for (const auto & m : dualmoe::scan_gguf_directory(dir)) {
             arr.push_back(summary_to_json(m));
@@ -470,7 +530,7 @@ int main(int argc, char ** argv) {
         add_cors(res);
         try {
             const json body = json::parse(req.body);
-            dualmoe::EngineConfig cfg = boot_cfg;
+            dualmoe::EngineConfig cfg = opt.boot_cfg;
             cfg.model_path         = body.value("model_path", "");
             cfg.n_gpu_layers       = body.value("n_gpu_layers", cfg.n_gpu_layers);
             cfg.vram_cache_mb      = body.value("vram_cache_mb", cfg.vram_cache_mb);
@@ -560,6 +620,7 @@ int main(int argc, char ** argv) {
         res.set_chunked_content_provider(
             "text/event-stream",
             [&](size_t, httplib::DataSink & sink) {
+                if (shutting_down.load(std::memory_order_acquire)) return false;
                 const auto snap = engine.telemetry();
                 const std::string line = "data: " + telemetry_to_json(snap).dump() + "\n\n";
                 if (!sink.write(line.data(), line.size())) {
@@ -695,7 +756,7 @@ int main(int argc, char ** argv) {
         res.set_header("Cache-Control", "no-cache");
         res.set_chunked_content_provider(
             "text/event-stream",
-            [messages = std::move(messages), sp, model_id, created_ts, &engine](size_t, httplib::DataSink & sink) {
+            [messages = std::move(messages), sp, model_id, created_ts, this](size_t, httplib::DataSink & sink) {
                 std::string reply, err;
                 int32_t p_tok = 0, c_tok = 0;
 
@@ -711,7 +772,8 @@ int main(int argc, char ** argv) {
                     }})},
                 };
                 const std::string head_str = "data: " + head_ev.dump() + "\n\n";
-                if (!sink.write(head_str.data(), head_str.size())) {
+                if (shutting_down.load(std::memory_order_acquire) ||
+                    !sink.write(head_str.data(), head_str.size())) {
                     sink.done();
                     return false;
                 }
@@ -754,39 +816,73 @@ int main(int argc, char ** argv) {
     });
 
     int bound_port = -1;
-    const int max_tries = port_explicit ? 1 : 9;
+    const int max_tries = opt.port_explicit ? 1 : 9;
     for (int t = 0; t < max_tries; ++t) {
-        if (svr.bind_to_port(host, port + t)) {
-            bound_port = port + t;
+        if (svr.bind_to_port(opt.host, opt.port + t)) {
+            bound_port = opt.port + t;
             break;
         }
     }
     if (bound_port < 0) {
-        std::cerr << "[DualMoE] Ошибка привязки порта " << host << ":" << port << "\n";
-        return 1;
+        err = "Не удалось занять HTTP-порт " + opt.host + ":" + std::to_string(opt.port) +
+              " (порт занят другим приложением или заблокирован антивирусом)";
+        return false;
     }
-
-    const std::string local_url = "http://" + std::string(host == "0.0.0.0" ? "127.0.0.1" : host) + ":" + std::to_string(bound_port);
-    std::cout << "\n==================================================================\n"
-              << "  DualMoE v0.4.0 — Gemma 4 Jinja2 • SWA KV • Zero-HDD VRAM ⊕ RAM\n"
-              << "  Интерфейс в браузере:           " << local_url << "\n"
-              << "  OpenAI / LearnHarness Base URL: " << local_url << "/v1\n"
-              << "  Журнал загрузки (Flight Log):   dualmoe-load.log\n"
-              << "==================================================================\n";
-    std::cout.flush();
-
-#if defined(_WIN32)
-    if (!no_browser) {
-        std::thread([local_url]() {
-            std::this_thread::sleep_for(std::chrono::milliseconds(350));
-            const std::wstring wurl(local_url.begin(), local_url.end());
-            ShellExecuteW(nullptr, L"open", wurl.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        }).detach();
-    }
-#else
-    (void) no_browser;
-#endif
-
-    svr.listen_after_bind();
-    return 0;
+    this->bound_port.store(bound_port, std::memory_order_release);
+    return true;
 }
+
+AppServer::AppServer() : impl_(std::make_unique<Impl>()) {}
+
+AppServer::~AppServer() { stop(); }
+
+bool AppServer::start(const AppOptions & opt, std::string & err) {
+    return impl_->start(opt, err);
+}
+
+bool AppServer::model_loading() const {
+    return impl_->engine.is_loading();
+}
+
+int AppServer::port() const { return impl_->bound_port.load(std::memory_order_acquire); }
+
+std::string AppServer::local_url() const {
+    const std::string & host = impl_->opt.host;
+    return "http://" + std::string(host == "0.0.0.0" || host.empty() ? "127.0.0.1" : host) +
+           ":" + std::to_string(port());
+}
+
+std::string AppServer::openai_base_url() const { return local_url() + "/v1"; }
+
+void AppServer::boot_model_sync() {
+    const auto & boot_cfg = impl_->opt.boot_cfg;
+    if (boot_cfg.model_path.empty()) return;
+    std::string err;
+    std::cout << "[DualMoE] Автозагрузка стартовой модели: " << boot_cfg.model_path << " ...\n";
+    if (!impl_->engine.load_model(boot_cfg, err)) {
+        std::cerr << "[DualMoE] Предупреждение: не удалось загрузить стартовую модель: " << err << "\n";
+    } else {
+        std::cout << "[DualMoE] Модель готова: " << impl_->engine.current_model().model_name << "\n";
+    }
+}
+
+bool AppServer::boot_model_async(std::string & err) {
+    const auto & boot_cfg = impl_->opt.boot_cfg;
+    if (boot_cfg.model_path.empty()) return true;
+    std::cout << "[DualMoE] Фоновая автозагрузка модели: " << boot_cfg.model_path << " ...\n";
+    return impl_->engine.start_load_async(boot_cfg, err);
+}
+
+void AppServer::run() {
+    impl_->svr.listen_after_bind();
+}
+
+void AppServer::stop() {
+    if (!impl_) return;
+    // Closing the native window must terminate the process immediately: flag
+    // every long-lived SSE stream first, then unblock the accept loop.
+    impl_->shutting_down.store(true, std::memory_order_release);
+    impl_->svr.stop();
+}
+
+} // namespace dualmoe

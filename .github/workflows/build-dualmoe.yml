@@ -52,7 +52,7 @@ jobs:
           ./build/dualmoe-tests build/tiny_moe.gguf
 
   windows-exe:
-    name: Standalone DualMoE.exe (Windows x64 + Vulkan + AVX2)
+    name: Native-window DualMoE.exe (MSVC x64 + Vulkan + AVX2 + WebView2)
     runs-on: windows-2025
     env:
       VULKAN_VERSION: 1.4.357.0
@@ -62,6 +62,11 @@ jobs:
       - name: Install Vulkan SDK
         shell: pwsh
         run: |
+          # Prepare the compiler env (cl.exe / MSVC headers) for CMake + Ninja.
+          cmd /c "call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1"
+          cmd /c "call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" >nul && set" |
+            ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { Add-Content $env:GITHUB_ENV "$($Matches[1])=$($Matches[2])" } }
+
           curl.exe -sSL -o "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
           Start-Process -FilePath "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" -ArgumentList "--accept-licenses","--default-answer","--confirm-command","install" -Wait -NoNewWindow
           if (-not (Test-Path "C:\VulkanSDK\${env:VULKAN_VERSION}\Bin")) {
@@ -75,6 +80,18 @@ jobs:
         run: |
           choco install ninja -y
 
+      - name: Prepare MSVC environment (cl.exe for CMake + Ninja)
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { throw "Visual Studio C++ toolset not found" }
+          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+          Write-Host "Using $vcvars"
+          cmd /c "call `"$vcvars`" >nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { Add-Content $env:GITHUB_ENV "$($Matches[1])=$($Matches[2])" }
+          }
+
       - name: Clone & patch llama.cpp
         shell: bash
         run: |
@@ -84,12 +101,14 @@ jobs:
           git -C C:/llama-cpp checkout FETCH_HEAD
           git -C C:/llama-cpp apply --ignore-whitespace "${GITHUB_WORKSPACE}/dualmoe/patches/0001-dualmoe-parallel-seam.patch"
 
-      - name: Build Standalone DualMoE.exe (Vulkan + AVX2/FMA)
+      - name: Build Standalone DualMoE.exe (native window + Vulkan + AVX2/FMA)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
           cmake -S dualmoe -B build-win -G "Ninja Multi-Config" `
-            -DCMAKE_TOOLCHAIN_FILE=C:/llama-cpp/cmake/x64-windows-llvm.cmake `
+            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/dualmoe/cmake/x64-windows-msvc.cmake `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DDUALMOE_DESKTOP_WINDOW=ON `
             -DCMAKE_BUILD_TYPE=Release `
             -DLLAMA_SOURCE_DIR=C:/llama-cpp `
             -DBUILD_SHARED_LIBS=OFF `
@@ -105,26 +124,33 @@ jobs:
             Get-Content cfg.log -Tail 25 | ForEach-Object { Write-Host "::error::CFG: $_" }
             exit 1
           }
-          cmake --build build-win --config Release --target dualmoe-server -j ${env:NUMBER_OF_PROCESSORS} 2>&1 | Tee-Object -FilePath bld.log
+          cmake --build build-win --config Release --target DualMoE -j ${env:NUMBER_OF_PROCESSORS} 2>&1 | Tee-Object -FilePath bld.log
           if ($LASTEXITCODE -ne 0) {
             Select-String -Path bld.log -Pattern "error:|fatal error:|LNK\d+|FAILED:" | Select-Object -Last 20 | ForEach-Object { Write-Host "::error::BLD: $($_.Line)" }
             Get-Content bld.log -Tail 15 | ForEach-Object { Write-Host "::error::TAIL: $_" }
             exit 1
           }
 
-      - name: Verify & Stage Single Standalone DualMoE.exe
+      - name: Verify & Stage Single Standalone DualMoE.exe (native window)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $exe = Get-ChildItem -Path build-win -Recurse -Filter "DualMoE.exe" | Select-Object -First 1
+          $exe = Get-ChildItem -Path build-win -Recurse -Filter "DualMoE.exe" -File |
+                 Where-Object { $_.FullName -notmatch 'CMakeFiles' } | Select-Object -First 1
           if (-not $exe) {
-            Write-Host "::error::DualMoE.exe was not found in build-win!"
+            Write-Host "::error::Native window DualMoE.exe was not found in build-win! (WebView2 desktop target failed to build)"
+            Get-ChildItem -Path build-win -Recurse -Filter "*.exe" -File | ForEach-Object { Write-Host "  found: $($_.FullName)" }
             exit 1
           }
           Copy-Item $exe.FullName -Destination "dist/DualMoE.exe" -Force
-          & "dist/DualMoE.exe" --help
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::DualMoE.exe --help smoke check failed with exit code $LASTEXITCODE"
+          # Window subsystem EXE: --help prints to console when attached, and an
+          # unattached GUI launch must not block CI, so only verify it is a PE32+ GUI.
+          $bytes = [System.IO.File]::ReadAllBytes("dist/DualMoE.exe")
+          $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
+          $subsystem = [BitConverter]::ToUInt16($bytes, $peOff + 0x5C)
+          Write-Host "PE subsystem = $subsystem (2=GUI window, 3=console)"
+          if ($subsystem -ne 2) {
+            Write-Host "::error::DualMoE.exe is not a GUI-subsystem binary (got $subsystem) — window build missing"
             exit 1
           }
           Get-Item "dist/DualMoE.exe" | Format-List Name, Length
@@ -137,7 +163,7 @@ jobs:
           if-no-files-found: error
 
   publish-release:
-    name: Publish Single-EXE Release (dualmoe-v0.4.0)
+    name: Publish Single-EXE Release (dualmoe-v0.4.1)
     needs: [verify-gates, windows-exe]
     runs-on: ubuntu-24.04
     steps:
@@ -149,36 +175,31 @@ jobs:
           name: DualMoE-exe
           path: dist
 
-      - name: Create or Update GitHub Release dualmoe-v0.4.0 (EXE Only)
+      - name: Create or Update GitHub Release dualmoe-v0.4.1 (EXE Only)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="dualmoe-v0.4.0"
-          TITLE="DualMoE v0.4.0 — Standalone EXE (Gemma 4 Fix: Multi-Proj Disjoint Swap + Jinja2 + SWA KV + DRY)"
+          TAG="dualmoe-v0.4.1"
+          TITLE="DualMoE v0.4.1 — Нативное приложение для Windows (окно без браузера)"
           ls -lh dist/DualMoE.exe
           NOTES=$(cat << 'EOF'
-          ## DualMoE v0.4.0 — Исправление галлюцинаций Gemma 4 26B-A4B + Оптимизации под RX 580 8 ГБ & Ryzen 7 5700X
+          ## DualMoE v0.4.1 — теперь это обычное приложение: своё окно, без браузера
 
-          Один самодостаточный исполняемый файл **`DualMoE.exe`** для Windows 10/11 x64 (**Ryzen 7 5700X AVX2/FMA + Radeon RX 580 8 ГБ Vulkan + 16 ГБ DDR4 + механический HDD**) — без архивов, установщиков и `.bat`-скриптов.
+          Один самодостаточный файл **`DualMoE.exe`** для Windows 10/11 x64 (**Ryzen 7 5700X AVX2/FMA + Radeon RX 580 8 ГБ Vulkan + 16 ГБ DDR4 + механический HDD**). Запустили двойным кликом — открылось **отдельное окно DualMoE** со своим значком в панели задач. Никаких вкладок, адресной строки и `127.0.0.1:8090` в браузере.
 
-          ### Исправленные критические ошибки (причины искажения слов, утечки `<|channel>thought` и циклов в Gemma 4 26B-A4B)
-          1. **Исправлено обнуление проекций `ffn_down_exps` / `ffn_up_exps` при вытеснении эксперта из VRAM в ОЗУ (`Disjoint VRAM ⊕ RAM`)**:
-             - В v0.3.0 при вытеснении эксперта `VRAM → RAM` первая проекция (`ip=0`, `ffn_gate_exps`) помечала как `Ready` сразу **все три** проекции слоя, из-за чего `ffn_down_exps` (`ip=1`) и `ffn_up_exps` (`ip=2`) пропускали копирование из видеопамяти RX 580 и исполнялись на CPU с **нулевыми страницами (`0.0f`)**, ломая логиты и порождая искажённые слова (`библиотеджей`, `пута`, `фикней`).
-             - Теперь готовность и чтение из VRAM отслеживаются **строго по каждой проекции отдельно**, а спасение слота (`rescue_expert`) сохраняет признак `in_vram` без потерь состояния.
-          2. **Полный движок шаблонов Jinja2 (`llama-common`) для Gemma 4, Qwen 3 и DeepSeek + защита от двойного `<bos>`**:
-             - Вместо устаревшего `llama_chat_apply_template` (который на Gemma 4 возвращал `-1`, подставлял чужой `ChatML <|im_start|>` и дублировал `<bos><bos>`, вызывая галлюцинации из претрейна и утечку сырых тегов `<|channel>thought\n<channel|>`) интегрирован полноценный парсер Jinja2 с родными маркерами `<|turn>`, `<|think|>`, `<turn|>`.
-             - Сохраняются специальные управляющие токены (`special=true`), автоматически вырезаются прошлые блоки рассуждений из истории диалога (экономия тысяч токенов KV-кэша!), а в русском веб-интерфейсе добавлены **сворачиваемый блок «Показать ход рассуждений»** и живой переключатель **«Мышление: ВКЛ / ВЫКЛ»** без перезагрузки модели.
-          3. **Строгая фильтрация 3D-тензоров маршрутизируемых экспертов**:
-             - Одномерные коэффициенты масштабирования `ffn_down_exps.scale` в Gemma 4 больше не попадают под фильтр `_exps.` и остаются в быстрой постоянной памяти.
-
-          ### Новые оптимизации скорости и памяти под RX 580 8 ГБ + Ryzen 7 5700X + 16 ГБ DDR4
-          - **Точный расчёт SWA + Shared-KV кэша Gemma 4 (`+900–1 000 МБ` свободной VRAM под экспертов)**: учёт скользящего окна (`SWA = 1024` на 25 из 30 слоёв) и 10 разделяемых KV-слоёв освобождает около **1 ГБ видеопамяти RX 580** под дополнительные горячие слоты экспертов!
-          - **Совместимость с Flash Attention на Polaris (`KV-V = f16`)**: исключает превышение лимита `32 КБ LDS` на RX 580 при `head_dim = 512` у полноразмерных слоёв Gemma 4.
-          - **Устранение лишней синхронизации Vulkan + отложенный на 1 слой `MEM_DECOMMIT`**: убраны простои конвейера GPU/PCIe при обмене горячих экспертов и сглажен начальный вес прогрева `CRF` (`1.0f`).
-          - **Ускоренный сэмплер на словаре 262 144 токенов + анти-цикл `DRY`**: фильтрация `top-k` перенесена в начало цепочки до штрафов, а фразовый сэмплер `DRY` блокирует зацикливания строк кода (`import matplotlib as mplt...`).
+          ### Что нового в v0.4.1
+          1. **Нативное окно приложения (Edge WebView2)**: интерфейс рисуется в собственном окне Win32 с заголовком «DualMoE v0.4.1», иконкой приложения (файл `DualMoE.exe` теперь имеет встроенную иконку и версию `0.4.1.0` — видно в свойствах файла) и нормальным закрытием: закрыли окно — модель выгружена, порт свободен, фоновых процессов не остаётся.
+          2. **Системные диалоги вместо браузерных**: кнопка **«Файл модели…»** открывает стандартное окно выбора файла Windows (`IFileOpenDialog`) с фильтром `*.gguf`, поэтому путь к модели выбирается в один клик. Встроенный «Диски…» остался как резерв.
+          3. **Встроенный API сохранён**: пока окно открыто, локальный OpenAI-совместимый сервер доступен для LearnHarness / Hermes Agent по адресу `http://127.0.0.1:8090/v1` (в шапке появился индикатор **«Нативное окно»** и актуальный Base URL). Порт по умолчанию привязан только к `127.0.0.1` — наружу ничего не выставлено.
+          4. **Мягкая деградация**: если на системе нет WebView2 Runtime (очень старая Windows 10), приложение не падает — предлагает поставить `aka.ms/webview2` и открывает интерфейс в обычном браузере.
+          5. Плюс консольная сборка **`DualMoE-server.exe`** в артефактах — тот же движок, интерфейс в браузере (для запуска на Linux/сервере и для отладки).
 
           ### Запуск
-          Скачайте **`DualMoE.exe`** в любую папку и запустите двойным кликом (`http://127.0.0.1:8090`, OpenAI API для LearnHarness: `http://127.0.0.1:8090/v1`).
+          1. Скачайте **`DualMoE.exe`** в любую папку (например, рядом с моделями `.gguf`).
+          2. Двойной клик → откроется окно DualMoE.
+          3. В левой панели нажмите **«Файл модели…»**, выберите `.gguf` и нажмите **«Загрузить модель»**.
+
+          Модель можно задать и сразу в командной строке: `DualMoE.exe --model D:\Models\gemma-4-26b-a4b.gguf`.
           EOF
           )
           if gh release view "${TAG}" >/dev/null 2>&1; then
