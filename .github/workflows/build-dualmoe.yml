@@ -86,6 +86,11 @@ jobs:
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\Bin"
 
+      - name: Install Ninja
+        shell: pwsh
+        run: |
+          choco install ninja -y
+
       - name: Clone & patch llama.cpp
         shell: bash
         run: |
@@ -98,17 +103,30 @@ jobs:
       - name: Build DualMoE Server & CLI (Vulkan + AVX2/FMA)
         shell: pwsh
         run: |
-          cmake -S dualmoe -B build-win -A x64 `
+          $ErrorActionPreference = "Continue"
+          cmake -S dualmoe -B build-win -G "Ninja Multi-Config" `
+            -DCMAKE_TOOLCHAIN_FILE=C:/llama-cpp/cmake/x64-windows-llvm.cmake `
+            -DCMAKE_BUILD_TYPE=Release `
             -DLLAMA_SOURCE_DIR=C:/llama-cpp `
             -DBUILD_SHARED_LIBS=OFF `
+            -DLLAMA_OPENSSL=OFF `
             -DGGML_VULKAN=ON `
             -DGGML_NATIVE=OFF `
             -DGGML_AVX2=ON `
             -DGGML_FMA=ON `
             -DGGML_F16C=ON `
             -DGGML_OPENMP=OFF `
-            -DDUALMOE_BUILD_TESTS=OFF
-          cmake --build build-win --config Release -j ${env:NUMBER_OF_PROCESSORS}
+            -DDUALMOE_BUILD_TESTS=OFF 2>&1 | Tee-Object -FilePath cfg.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content cfg.log -Tail 25 | ForEach-Object { Write-Host "::error::CFG: $_" }
+            exit 1
+          }
+          cmake --build build-win --config Release -j ${env:NUMBER_OF_PROCESSORS} 2>&1 | Tee-Object -FilePath bld.log
+          if ($LASTEXITCODE -ne 0) {
+            Select-String -Path bld.log -Pattern "error:|fatal error:|LNK\d+|FAILED:" | Select-Object -Last 20 | ForEach-Object { Write-Host "::error::BLD: $($_.Line)" }
+            Get-Content bld.log -Tail 15 | ForEach-Object { Write-Host "::error::TAIL: $_" }
+            exit 1
+          }
 
       - name: Package Portable Windows Archive
         shell: pwsh
