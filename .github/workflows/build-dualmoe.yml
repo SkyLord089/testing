@@ -1,4 +1,4 @@
-name: Build & Publish DualMoE Release
+name: Build & Publish DualMoE.exe Release
 
 on:
   push:
@@ -11,8 +11,8 @@ permissions:
   contents: write
 
 jobs:
-  linux-x64:
-    name: Linux x64 Build & Byte-Identity Gates
+  verify-gates:
+    name: Byte-Identity & Streaming Safety Gates
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +36,7 @@ jobs:
           git -C /tmp/llama-cpp checkout FETCH_HEAD
           git -C /tmp/llama-cpp apply "${GITHUB_WORKSPACE}/dualmoe/patches/0001-dualmoe-parallel-seam.patch"
 
-      - name: Configure & build DualMoE
+      - name: Configure, build & run DualMoE byte-identity tests
         run: |
           cmake -S dualmoe -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -47,28 +47,12 @@ jobs:
             -DGGML_FMA=ON \
             -DGGML_F16C=ON \
             -DGGML_OPENMP=OFF
-          cmake --build build -j $(nproc)
-
-      - name: Run MoE Streaming & Byte-Identity Gates
-        run: |
+          cmake --build build --target dualmoe-tests -j $(nproc)
           python3 dualmoe/scripts/make_tiny_moe_gguf.py build/tiny_moe.gguf
           ./build/dualmoe-tests build/tiny_moe.gguf
 
-      - name: Package Linux Release Archive
-        run: |
-          mkdir -p pkg/DualMoE-v0.1.0-linux-x86_64 dist
-          cp build/dualmoe-server build/dualmoe-cli dualmoe/README.md pkg/DualMoE-v0.1.0-linux-x86_64/
-          tar -czvf dist/DualMoE-v0.1.0-linux-x86_64.tar.gz -C pkg DualMoE-v0.1.0-linux-x86_64
-
-      - name: Upload Linux Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: DualMoE-v0.1.0-linux-x86_64
-          path: dist/DualMoE-v0.1.0-linux-x86_64.tar.gz
-          if-no-files-found: error
-
-  windows-vulkan-x64:
-    name: Windows x64 + Vulkan (Ryzen AVX2 + Radeon RX 580)
+  windows-exe:
+    name: Standalone DualMoE.exe (Windows x64 + Vulkan + AVX2)
     runs-on: windows-2025
     env:
       VULKAN_VERSION: 1.4.357.0
@@ -100,7 +84,7 @@ jobs:
           git -C C:/llama-cpp checkout FETCH_HEAD
           git -C C:/llama-cpp apply --ignore-whitespace "${GITHUB_WORKSPACE}/dualmoe/patches/0001-dualmoe-parallel-seam.patch"
 
-      - name: Build DualMoE Server & CLI (Vulkan + AVX2/FMA)
+      - name: Build Standalone DualMoE.exe (Vulkan + AVX2/FMA)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
@@ -121,59 +105,83 @@ jobs:
             Get-Content cfg.log -Tail 25 | ForEach-Object { Write-Host "::error::CFG: $_" }
             exit 1
           }
-          cmake --build build-win --config Release -j ${env:NUMBER_OF_PROCESSORS} 2>&1 | Tee-Object -FilePath bld.log
+          cmake --build build-win --config Release --target dualmoe-server -j ${env:NUMBER_OF_PROCESSORS} 2>&1 | Tee-Object -FilePath bld.log
           if ($LASTEXITCODE -ne 0) {
             Select-String -Path bld.log -Pattern "error:|fatal error:|LNK\d+|FAILED:" | Select-Object -Last 20 | ForEach-Object { Write-Host "::error::BLD: $($_.Line)" }
             Get-Content bld.log -Tail 15 | ForEach-Object { Write-Host "::error::TAIL: $_" }
             exit 1
           }
 
-      - name: Package Portable Windows Archive
+      - name: Verify & Stage Single Standalone DualMoE.exe
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path pkg/DualMoE-v0.1.0-win-vulkan-x64, dist | Out-Null
-          Get-ChildItem -Path build-win -Recurse -Include dualmoe-server.exe, dualmoe-cli.exe, *.dll | Copy-Item -Destination pkg/DualMoE-v0.1.0-win-vulkan-x64 -Force
-          Copy-Item dualmoe/scripts/start-dualmoe.bat pkg/DualMoE-v0.1.0-win-vulkan-x64/ -Force
-          Copy-Item dualmoe/README.md pkg/DualMoE-v0.1.0-win-vulkan-x64/ -Force
-          if (-not (Test-Path "pkg/DualMoE-v0.1.0-win-vulkan-x64/dualmoe-server.exe")) {
-            throw "dualmoe-server.exe was not found in package directory!"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $exe = Get-ChildItem -Path build-win -Recurse -Filter "DualMoE.exe" | Select-Object -First 1
+          if (-not $exe) {
+            Write-Host "::error::DualMoE.exe was not found in build-win!"
+            exit 1
           }
-          7z a "dist/DualMoE-v0.1.0-win-vulkan-x64.zip" ".\pkg\DualMoE-v0.1.0-win-vulkan-x64\*"
+          Copy-Item $exe.FullName -Destination "dist/DualMoE.exe" -Force
+          & "dist/DualMoE.exe" --help
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::DualMoE.exe --help smoke check failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+          Get-Item "dist/DualMoE.exe" | Format-List Name, Length
 
-      - name: Upload Windows Artifact
+      - name: Upload Standalone DualMoE.exe Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DualMoE-v0.1.0-win-vulkan-x64
-          path: dist/DualMoE-v0.1.0-win-vulkan-x64.zip
+          name: DualMoE-exe
+          path: dist/DualMoE.exe
           if-no-files-found: error
 
   publish-release:
-    name: Publish GitHub Release (dualmoe-v0.1.0)
-    needs: [linux-x64, windows-vulkan-x64]
+    name: Publish Single-EXE Release (dualmoe-v0.2.0)
+    needs: [verify-gates, windows-exe]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Built Archives
+      - name: Download DualMoE.exe
         uses: actions/download-artifact@v4
         with:
+          name: DualMoE-exe
           path: dist
-          merge-multiple: true
 
-      - name: Create or Update GitHub Release dualmoe-v0.1.0
+      - name: Create or Update GitHub Release dualmoe-v0.2.0 (EXE Only)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="dualmoe-v0.1.0"
-          TITLE="DualMoE v0.1.0 — Параллельный MoE-движок (GPU Vulkan + CPU AVX2 + SSD Arena)"
-          ls -lh dist/
+          TAG="dualmoe-v0.2.0"
+          TITLE="DualMoE v0.2.0 — Standalone EXE (LearnHarness × Hermes UI + 8-Step Crash Inspector)"
+          ls -lh dist/DualMoE.exe
+          NOTES=$(cat << 'EOF'
+          ## DualMoE v0.2.0 — Автономная `.exe` сборка (LearnHarness × Hermes Agent Edition)
+
+          Один самодостаточный исполняемый файл **`DualMoE.exe`** для Windows 10/11 x64 (**Vulkan RX 580 + CPU AVX2/FMA + SSD Virtual Arena**) — без архивов, установщиков и `.bat`-скриптов.
+
+          ### Что нового в v0.2.0
+          1. **Исправлены вылеты при загрузке моделей на Windows 11 + Radeon RX 580 + 16 ГБ RAM**:
+             - **Фикс `uBatch <= 32`**: микробатч строго согласован с `llama_moe_cache::max_batch = 32`, исключая обход кэша слотов и чтение невыделенных `PAGE_NOACCESS` страниц (`0xC0000005`) или 650-МБ всплеск копирования в VRAM.
+             - **Vulkan MMap Guard**: отключена выгрузка внутренних `MEM_MAPPED`-проекций драйвера AMD Adrenalin (SPIR-V кэш и PCIe BAR) и заблокирован 20-ГБ `PrefetchVirtualMemory` шторм при открытии крупных `.gguf`.
+             - **Авто-адаптация под свободную память**: автоматический контроль лимита `Commit / pagefile.sys`, авто-снижение числа GPU-слоёв (`NGL`) и динамическая подрезка банка `ClassLRU` под реальный остаток свободной VRAM после загрузки весов Attention/Router.
+             - **Защита лимита одиночного буфера Vulkan (`fits_max_buf`)** в `llama_moe_cache` для Polaris/RX 580.
+          2. **Дизайн в стиле LearnHarness × Hermes Agent (Nous Research)**:
+             - Переключатель фирменных тем (**Graphite**, **Nous Cobalt**, **Warm Paper**), встроенный навигатор по дискам (`C:\`, `D:\`, `E:\`...) и папкам прямо в браузере.
+          3. **8-этапный Инспектор загрузки и сбоев (Flight Recorder + Crash Forensics)**:
+             - Живая трассировка всех 8 этапов загрузки в реальном времени, индикаторы **GPU VRAM / Физической DDR4 / Виртуального Commit (Pagefile)**, лог `Vulkan / llama.cpp`, синхронная запись `dualmoe-load.log` и перехват системных исключений Windows SEH (`dualmoe-crash.txt`) с понятной расшифровкой причины.
+
+          ### Запуск
+          Скачайте **`DualMoE.exe`** в любую папку и запустите двойным кликом — интерфейс откроется в браузере автоматически (`http://127.0.0.1:8090`, OpenAI API для LearnHarness: `http://127.0.0.1:8090/v1`).
+          EOF
+          )
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" dist/* --clobber
-            gh release edit "${TAG}" --title "${TITLE}" --notes-file dualmoe/README.md --latest
+            gh release upload "${TAG}" dist/DualMoE.exe --clobber
+            gh release edit "${TAG}" --title "${TITLE}" --notes "${NOTES}"
           else
-            gh release create "${TAG}" dist/* \
+            gh release create "${TAG}" dist/DualMoE.exe \
               --target "${GITHUB_SHA}" \
               --title "${TITLE}" \
-              --notes-file dualmoe/README.md \
-              --latest
+              --notes "${NOTES}"
           fi

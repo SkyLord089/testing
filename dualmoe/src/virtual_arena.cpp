@@ -1,6 +1,7 @@
 #include "virtual_arena.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -14,6 +15,7 @@
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <cwctype>
 #else
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -60,13 +62,14 @@ void release_virtual_range(uint8_t * ptr, size_t bytes) {
 #endif
 }
 
-void commit_pages_os(uint8_t * ptr, size_t bytes) {
-    if (!ptr || bytes == 0) return;
+bool commit_pages_os(uint8_t * ptr, size_t bytes) {
+    if (!ptr || bytes == 0) return true;
 #if defined(_WIN32)
-    VirtualAlloc(ptr, bytes, MEM_COMMIT, PAGE_READWRITE);
+    return VirtualAlloc(ptr, bytes, MEM_COMMIT, PAGE_READWRITE) != nullptr;
 #else
     (void) ptr;
     (void) bytes; // Demand-paged on first write under Linux MAP_ANONYMOUS
+    return true;
 #endif
 }
 
@@ -78,6 +81,37 @@ void decommit_pages_os(uint8_t * ptr, size_t bytes) {
     madvise(ptr, bytes, MADV_DONTNEED);
 #endif
 }
+
+#if defined(_WIN32)
+std::wstring lower_wstring(std::wstring s) {
+    for (wchar_t & ch : s) {
+        ch = (wchar_t) std::towlower(ch);
+    }
+    return s;
+}
+
+// Resolve K32GetMappedFileNameW from kernel32.dll so we strictly verify a MEM_MAPPED region belongs
+// to one of our .gguf shard files and NEVER unmap AMD Adrenalin Vulkan SPIR-V / PCIe BAR views!
+bool is_mapped_gguf_shard_win32(void * allocation_base, const std::vector<std::wstring> & shard_tails_lower) {
+    if (!allocation_base || shard_tails_lower.empty()) return false;
+    using fn_t = DWORD (WINAPI *)(HANDLE, LPVOID, LPWSTR, DWORD);
+    static fn_t pGetMapped = reinterpret_cast<fn_t>(
+        reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "K32GetMappedFileNameW")));
+    if (!pGetMapped) return false;
+
+    wchar_t buf[2048]{};
+    const DWORD len = pGetMapped(GetCurrentProcess(), allocation_base, buf, 2047);
+    if (len == 0) return false;
+    const std::wstring mapped = lower_wstring(std::wstring(buf, len));
+    for (const std::wstring & tail : shard_tails_lower) {
+        if (!tail.empty() && mapped.size() >= tail.size() &&
+            mapped.compare(mapped.size() - tail.size(), tail.size(), tail) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
 
 } // namespace
 
@@ -144,7 +178,7 @@ void VirtualExpertArena::close_shards() {
 }
 
 bool VirtualExpertArena::pread_exact(int32_t shard_idx, void * dst, size_t len, uint64_t offset) {
-    if (shard_idx < 0 || (size_t) shard_idx >= shards_.size()) return false;
+    if (!dst || shard_idx < 0 || (size_t) shard_idx >= shards_.size()) return false;
     uint8_t * out = static_cast<uint8_t *>(dst);
     size_t done = 0;
 #if defined(_WIN32)
@@ -251,6 +285,7 @@ void VirtualExpertArena::shutdown() {
     ssd_reads_.store(0, std::memory_order_relaxed);
     ssd_bytes_read_.store(0, std::memory_order_relaxed);
     ssd_active_ns_.store(0, std::memory_order_relaxed);
+    commit_failures_.store(0, std::memory_order_relaxed);
 }
 
 bool VirtualExpertArena::bind_layer_projection(int32_t il,
@@ -276,11 +311,15 @@ bool VirtualExpertArena::bind_layer_projection(int32_t il,
     const uint64_t cap     = ((raw_cap + page_size_ - 1) / page_size_) * page_size_;
     uint8_t * base         = reserve_virtual_range((size_t) cap);
     if (!base) {
-        err = std::string("Не удалось зарезервировать виртуальную арену для ") + tensor->name;
+        err = std::string("Не удалось зарезервировать виртуальное адресное пространство (MEM_RESERVE) для ") + tensor->name;
         return false;
     }
     // Commit trailing guard page once so padded tail reads see clean zeros
-    commit_pages_os(base + cap - page_size_, page_size_);
+    if (!commit_pages_os(base + cap - page_size_, page_size_)) {
+        release_virtual_range(base, (size_t) cap);
+        err = std::string("Исчерпан лимит виртуальной памяти Windows (Commit Limit / pagefile.sys) при создании guard-страницы для ") + tensor->name;
+        return false;
+    }
 
     StreamedProjection P;
     P.tensor      = tensor;
@@ -318,10 +357,14 @@ bool VirtualExpertArena::rehome_dense_weights(const std::vector<DenseRehomeEntry
 
     uint8_t * buf = reserve_virtual_range((size_t) total);
     if (!buf) {
-        err = "Недостаточно памяти для анонимного буфера плотных весов";
+        err = "Недостаточно виртуального адресного пространства для буфера плотных весов";
         return false;
     }
-    commit_pages_os(buf, (size_t) total);
+    if (!commit_pages_os(buf, (size_t) total)) {
+        release_virtual_range(buf, (size_t) total);
+        err = "Недостаточно виртуальной памяти ОС (Commit Limit / файл подкачки) для переноса плотных весов";
+        return false;
+    }
 
     uint64_t cursor = 0;
     for (const auto & e : entries) {
@@ -345,14 +388,23 @@ bool VirtualExpertArena::rehome_dense_weights(const std::vector<DenseRehomeEntry
 
 bool VirtualExpertArena::release_file_mappings(const std::vector<const void *> & check_host_ptrs) {
 #if defined(_WIN32)
-    // Discover mapped image/data views larger than 1 MiB and check if any host tensor still points inside them
+    // Build lowercase filename suffixes of our exact .gguf shards so we NEVER touch Vulkan driver mappings!
+    std::vector<std::wstring> shard_tails;
+    for (const std::string & p : shard_paths_) {
+        const std::filesystem::path fsp = std::filesystem::u8path(p);
+        const std::wstring fname = lower_wstring(fsp.filename().wstring());
+        if (!fname.empty()) {
+            shard_tails.push_back(L"\\" + fname);
+        }
+    }
+    if (shard_tails.empty()) return false;
+
     MEMORY_BASIC_INFORMATION mbi{};
     uint8_t * addr = nullptr;
     struct ViewRange { void * base; size_t size; };
     std::vector<ViewRange> candidates;
     while (VirtualQuery(addr, &mbi, sizeof(mbi)) == sizeof(mbi)) {
         if (mbi.State == MEM_COMMIT && mbi.Type == MEM_MAPPED && mbi.AllocationBase == addr && mbi.RegionSize >= (1ull << 20)) {
-            // Check how large the full allocation is
             size_t total_sz = 0;
             uint8_t * scan = addr;
             MEMORY_BASIC_INFORMATION sub{};
@@ -360,15 +412,17 @@ bool VirtualExpertArena::release_file_mappings(const std::vector<const void *> &
                 total_sz += sub.RegionSize;
                 scan += sub.RegionSize;
             }
-            bool referenced = false;
-            for (const void * p : check_host_ptrs) {
-                if (p >= addr && p < addr + total_sz) {
-                    referenced = true;
-                    break;
+            if (is_mapped_gguf_shard_win32(addr, shard_tails)) {
+                bool referenced = false;
+                for (const void * p : check_host_ptrs) {
+                    if (p >= addr && p < addr + total_sz) {
+                        referenced = true;
+                        break;
+                    }
                 }
-            }
-            if (!referenced) {
-                candidates.push_back({addr, total_sz});
+                if (!referenced) {
+                    candidates.push_back({addr, total_sz});
+                }
             }
             addr += std::max<size_t>(total_sz, page_size_);
             continue;
@@ -388,7 +442,7 @@ bool VirtualExpertArena::release_file_mappings(const std::vector<const void *> &
     }
     if (unmapped > 0) {
         std::string ignore_err;
-        open_shards(ignore_err); // Reopen clean unserialized NTFS file handles
+        open_shards(ignore_err);
         mmap_released_ = true;
     }
     return mmap_released_;
@@ -444,10 +498,57 @@ bool VirtualExpertArena::release_file_mappings(const std::vector<const void *> &
 #endif
 }
 
-void VirtualExpertArena::commit_expert_locked(int32_t il, int32_t exp) {
+bool VirtualExpertArena::evict_one_lowest_locked(uint64_t current_pin_epoch) {
+    int32_t best_il  = -1;
+    int32_t best_exp = -1;
+    double  lowest_score = 1e300;
+
+    for (int32_t il = 0; il < (int32_t) layers_.size(); ++il) {
+        const StreamedLayer & L = layers_[(size_t) il];
+        if (L.projs.empty()) continue;
+        for (int32_t e = 0; e < n_expert_; ++e) {
+            const CacheSlotMeta & m = slot_meta_[(size_t) il * (size_t) n_expert_ + (size_t) e];
+            if (!m.resident || m.pin_epoch == current_pin_epoch) continue;
+
+            bool loading = false;
+            for (const StreamedProjection & P : L.projs) {
+                if (P.state[(size_t) e].load(std::memory_order_acquire) == kStateLoading) {
+                    loading = true;
+                    break;
+                }
+            }
+            if (loading) continue;
+
+            const double age = (double) (step_clock_ - m.last_step);
+            const double decayed = (double) m.crf * std::exp2(-age / (double) kCrfHalfLife);
+            if (decayed < lowest_score) {
+                lowest_score = decayed;
+                best_il      = il;
+                best_exp     = e;
+            }
+        }
+    }
+    if (best_il < 0) return false;
+    evict_expert_locked(best_il, best_exp);
+    return true;
+}
+
+bool VirtualExpertArena::commit_pages_with_recovery_locked(uint8_t * ptr, size_t bytes, uint64_t current_pin_epoch) {
+    if (commit_pages_os(ptr, bytes)) return true;
+    commit_failures_.fetch_add(1, std::memory_order_relaxed);
+    // OS Commit Limit hit: aggressively evict cold slices until VirtualAlloc succeeds
+    for (int tries = 0; tries < 64; ++tries) {
+        if (!evict_one_lowest_locked(current_pin_epoch)) break;
+        if (commit_pages_os(ptr, bytes)) return true;
+    }
+    return false;
+}
+
+bool VirtualExpertArena::commit_expert_locked(int32_t il, int32_t exp, uint64_t current_pin_epoch) {
     StreamedLayer & L = layers_[(size_t) il];
     uint64_t newly_committed = 0;
-    for (StreamedProjection & P : L.projs) {
+    for (size_t pi = 0; pi < L.projs.size(); ++pi) {
+        StreamedProjection & P = L.projs[pi];
         const uint64_t byte_beg = (uint64_t) exp * P.nb2;
         const uint64_t byte_end = byte_beg + P.nb2;
         const size_t   p_beg    = (size_t) (byte_beg / page_size_);
@@ -458,18 +559,30 @@ void VirtualExpertArena::commit_expert_locked(int32_t il, int32_t exp) {
                 if (run_start == p_end) run_start = p;
             } else if (run_start < p_end) {
                 const size_t bytes = (p - run_start) * page_size_;
-                commit_pages_os(P.arena_base + run_start * page_size_, bytes);
+                if (!commit_pages_with_recovery_locked(P.arena_base + run_start * page_size_, bytes, current_pin_epoch)) {
+                    // Roll back incremented page_refs up to p on this projection
+                    for (size_t rb = p_beg; rb <= p; ++rb) {
+                        if (P.page_refs[rb] > 0) --P.page_refs[rb];
+                    }
+                    return false;
+                }
                 newly_committed += bytes;
                 run_start = p_end;
             }
         }
         if (run_start < p_end) {
             const size_t bytes = (p_end - run_start) * page_size_;
-            commit_pages_os(P.arena_base + run_start * page_size_, bytes);
+            if (!commit_pages_with_recovery_locked(P.arena_base + run_start * page_size_, bytes, current_pin_epoch)) {
+                for (size_t rb = p_beg; rb < p_end; ++rb) {
+                    if (P.page_refs[rb] > 0) --P.page_refs[rb];
+                }
+                return false;
+            }
             newly_committed += bytes;
         }
     }
     committed_bytes_.fetch_add(newly_committed, std::memory_order_relaxed);
+    return true;
 }
 
 void VirtualExpertArena::evict_expert_locked(int32_t il, int32_t exp) {
@@ -506,38 +619,7 @@ void VirtualExpertArena::evict_expert_locked(int32_t il, int32_t exp) {
 void VirtualExpertArena::evict_to_budget_locked(uint64_t needed_bytes, uint64_t current_pin_epoch) {
     if (budget_bytes_ == 0) return;
     while (committed_bytes_.load(std::memory_order_relaxed) + needed_bytes > budget_bytes_) {
-        int32_t best_il  = -1;
-        int32_t best_exp = -1;
-        double  lowest_score = 1e300;
-
-        for (int32_t il = 0; il < (int32_t) layers_.size(); ++il) {
-            const StreamedLayer & L = layers_[(size_t) il];
-            if (L.projs.empty()) continue;
-            for (int32_t e = 0; e < n_expert_; ++e) {
-                const CacheSlotMeta & m = slot_meta_[(size_t) il * (size_t) n_expert_ + (size_t) e];
-                if (!m.resident || m.pin_epoch == current_pin_epoch) continue;
-
-                // Never evict an expert that still has an in-flight SSD read
-                bool loading = false;
-                for (const StreamedProjection & P : L.projs) {
-                    if (P.state[(size_t) e].load(std::memory_order_acquire) == kStateLoading) {
-                        loading = true;
-                        break;
-                    }
-                }
-                if (loading) continue;
-
-                const double age = (double) (step_clock_ - m.last_step);
-                const double decayed = (double) m.crf * std::exp2(-age / (double) kCrfHalfLife);
-                if (decayed < lowest_score) {
-                    lowest_score = decayed;
-                    best_il      = il;
-                    best_exp     = e;
-                }
-            }
-        }
-        if (best_il < 0) break; // All resident experts are pinned for the active wave
-        evict_expert_locked(best_il, best_exp);
+        if (!evict_one_lowest_locked(current_pin_epoch)) break;
     }
 }
 
@@ -584,7 +666,13 @@ void VirtualExpertArena::prefetch_experts_async(int32_t il, const int32_t * expe
             }
 
             evict_to_budget_locked(L.bytes_per_expert, epoch);
-            commit_expert_locked(il, e);
+            if (!commit_expert_locked(il, e, epoch)) {
+                // Commit failed even after full recovery: mark state ready only if already valid; avoid worker write to unmapped page
+                for (int32_t p = 0; p < (int32_t) L.projs.size(); ++p) {
+                    L.projs[(size_t) p].state[(size_t) e].store(kStateReady, std::memory_order_release);
+                }
+                continue;
+            }
             m.resident = true;
             ssd_reads_.fetch_add(1, std::memory_order_relaxed);
 
@@ -676,7 +764,6 @@ double VirtualExpertArena::ssd_bandwidth_mbs() const {
     const uint64_t bytes = ssd_bytes_read_.load(std::memory_order_relaxed);
     const uint64_t ns    = ssd_active_ns_.load(std::memory_order_relaxed);
     if (bytes == 0 || ns == 0) return 0.0;
-    // Active worker-lane wall estimate (scaled by worker count concurrency)
     const double sec = (double) ns / 1e9 / std::max<size_t>(1, workers_.size());
     return sec > 1e-6 ? ((double) bytes / (1024.0 * 1024.0)) / sec : 0.0;
 }

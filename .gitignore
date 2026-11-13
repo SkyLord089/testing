@@ -4,6 +4,10 @@ build-*/
 dist/
 .venv/
 
-# Local GGUF model weights
+# Local GGUF model weights & runtime flight logs
 *.gguf
 models/
+dualmoe-load.log
+dualmoe-load.status
+dualmoe-crash*.txt
+Obsidian-Learning-Path.zip

@@ -1,1109 +1,2253 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-theme="graphite">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DualMoE Studio — Параллельный гибридный движок GPU ∥ CPU ∥ SSD</title>
-  <style>
-    :root {
-      --bg-0: #080b11;
-      --bg-1: #0e131d;
-      --bg-2: #141b29;
-      --bg-3: #1b2436;
-      --line: rgba(148, 163, 184, 0.14);
-      --line-strong: rgba(56, 189, 248, 0.35);
-      --text: #e6edf7;
-      --muted: #8fa0b8;
-      --gpu: #38bdf8;
-      --gpu-glow: rgba(56, 189, 248, 0.18);
-      --cpu: #34d399;
-      --cpu-glow: rgba(52, 211, 153, 0.18);
-      --ssd: #a78bfa;
-      --amber: #fbbf24;
-      --danger: #fb7185;
-      --radius: 14px;
-    }
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DualMoE v0.2 — LearnHarness × Hermes Agent Runtime</title>
+<style>
+  /* ==========================================================================
+     DualMoE v0.2 — Authentic LearnHarness × Nous Hermes Agent Design System
+     4px rhythm • 8px radius • Matte 1px surfaces • Zero focus-ring clutter
+     ========================================================================== */
+  :root,
+  [data-theme="graphite"] {
+    --bg: #141414;
+    --sidebar: #101010;
+    --card: #1c1c1c;
+    --elevated: #232323;
+    --hover: #2a2a2a;
+    --input: #171717;
+    --border: #2e2e2e;
+    --border-strong: #434343;
+    --fg: #e6e6e6;
+    --fg-soft: #c4c4c4;
+    --muted: #8d8d8d;
+    --nous-blue: #0053fd;
+    --nous-blue-hi: #4a84fe;
+    --nous-blue-bg: rgba(0, 83, 253, 0.14);
+    --nous-cream: #ffe6cb;
+    --nous-cream-bg: rgba(255, 230, 203, 0.10);
+    --nous-cream-border: rgba(255, 230, 203, 0.26);
+    --ok: #22c55e;
+    --ok-bg: rgba(34, 197, 94, 0.12);
+    --warn: #f59e0b;
+    --warn-bg: rgba(245, 158, 11, 0.13);
+    --err: #ef4444;
+    --err-bg: rgba(239, 68, 68, 0.13);
+    --term-bg: #0d0f12;
+    --term-fg: #e6edf3;
+    --term-vk: #58a6ff;
+    --term-step: #ffe6cb;
+    --glow: radial-gradient(640px circle at 82% -10%, rgba(0, 83, 253, 0.14), transparent 62%);
+    --shadow: 0 8px 28px rgba(0, 0, 0, 0.42);
+  }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body {
-      height: 100%;
-      background: radial-gradient(circle at 15% 0%, #111c30 0%, var(--bg-0) 55%);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
-      font-size: 14px;
-      overflow: hidden;
-    }
+  /* Canonical Nous Research / Hermes Desktop Cobalt Palette */
+  [data-theme="cobalt"] {
+    --bg: #0b256b;
+    --sidebar: #081d56;
+    --card: #103188;
+    --elevated: #153c9e;
+    --hover: #1b46b3;
+    --input: #0a215e;
+    --border: rgba(255, 230, 203, 0.16);
+    --border-strong: rgba(255, 230, 203, 0.30);
+    --fg: #fff6ec;
+    --fg-soft: #e4eafc;
+    --muted: #acc0ef;
+    --nous-blue: #3b7bff;
+    --nous-blue-hi: #7aa7ff;
+    --nous-blue-bg: rgba(122, 167, 255, 0.18);
+    --nous-cream: #ffe6cb;
+    --nous-cream-bg: rgba(255, 230, 203, 0.13);
+    --nous-cream-border: rgba(255, 230, 203, 0.34);
+    --ok: #34d399;
+    --ok-bg: rgba(52, 211, 153, 0.16);
+    --warn: #fbbf24;
+    --warn-bg: rgba(251, 191, 36, 0.17);
+    --err: #ff7b72;
+    --err-bg: rgba(255, 123, 114, 0.18);
+    --term-bg: #06153f;
+    --term-fg: #eef4ff;
+    --term-vk: #79b8ff;
+    --term-step: #ffe6cb;
+    --glow: radial-gradient(720px circle at 80% -10%, rgba(255, 230, 203, 0.12), transparent 65%);
+    --shadow: 0 10px 30px rgba(3, 10, 34, 0.50);
+  }
 
-    .app {
-      display: grid;
-      grid-template-columns: 330px 1fr 330px;
-      height: 100vh;
-      gap: 0;
-    }
+  /* LearnHarness Editorial Warm Paper Mode */
+  [data-theme="paper"] {
+    --bg: #f5f2ed;
+    --sidebar: #ece7df;
+    --card: #ffffff;
+    --elevated: #f8f5f0;
+    --hover: #e5dfd5;
+    --input: #ffffff;
+    --border: #d8d0c5;
+    --border-strong: #b8aea0;
+    --fg: #221e1a;
+    --fg-soft: #433c35;
+    --muted: #756c62;
+    --nous-blue: #0053fd;
+    --nous-blue-hi: #0044d0;
+    --nous-blue-bg: rgba(0, 83, 253, 0.09);
+    --nous-cream: #7a4208;
+    --nous-cream-bg: rgba(180, 105, 20, 0.09);
+    --nous-cream-border: rgba(180, 105, 20, 0.25);
+    --ok: #15803d;
+    --ok-bg: rgba(21, 128, 61, 0.10);
+    --warn: #b45309;
+    --warn-bg: rgba(180, 83, 9, 0.10);
+    --err: #dc2626;
+    --err-bg: rgba(220, 38, 38, 0.10);
+    --term-bg: #191816;
+    --term-fg: #ece7df;
+    --term-vk: #79b8ff;
+    --term-step: #ffe6cb;
+    --glow: radial-gradient(640px circle at 82% -10%, rgba(0, 83, 253, 0.06), transparent 62%);
+    --shadow: 0 8px 24px rgba(34, 30, 26, 0.10);
+  }
 
-    @media (max-width: 1180px) {
-      .app { grid-template-columns: 290px 1fr; }
-      .right-pane { display: none; }
-    }
-    @media (max-width: 820px) {
-      .app { grid-template-columns: 1fr; }
-      .left-pane { display: none; }
-    }
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 
-    .pane {
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-      overflow-y: auto;
-      background: rgba(14, 19, 29, 0.86);
-      backdrop-filter: blur(14px);
-    }
-    .left-pane { border-right: 1px solid var(--line); padding: 16px; gap: 14px; }
-    .right-pane { border-left: 1px solid var(--line); padding: 16px; gap: 14px; }
-    .center-pane { display: flex; flex-direction: column; height: 100vh; background: transparent; }
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 13.5px;
+    line-height: 1.5;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
 
-    /* Brand header */
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 11px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--line);
-    }
-    .logo-mark {
-      width: 38px;
-      height: 38px;
-      border-radius: 11px;
-      background: linear-gradient(135deg, #0ea5e9 0%, #10b981 55%, #8b5cf6 100%);
-      display: grid;
-      place-items: center;
-      font-weight: 800;
-      font-size: 15px;
-      color: #041019;
-      box-shadow: 0 6px 20px rgba(14, 165, 233, 0.28);
-      flex-shrink: 0;
-    }
-    .brand h1 { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
-    .brand p { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  code, pre, .mono {
+    font-family: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+  }
 
-    /* Cards & sections */
-    .card {
-      background: var(--bg-2);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 13px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .card-title {
-      font-size: 11.5px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--muted);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
+  button, input, select, textarea {
+    font: inherit;
+    color: inherit;
+    outline: none;
+  }
 
-    /* Presets */
-    .preset-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 7px;
-    }
-    .preset-btn {
-      background: var(--bg-3);
-      border: 1px solid var(--line);
-      color: var(--text);
-      padding: 8px 9px;
-      border-radius: 10px;
-      font-size: 11.5px;
-      font-weight: 600;
-      text-align: left;
-      cursor: pointer;
-      transition: all 0.16s ease;
-      line-height: 1.3;
-    }
-    .preset-btn span {
-      display: block;
-      font-size: 10.5px;
-      color: var(--muted);
-      font-weight: 400;
-      margin-top: 2px;
-    }
-    .preset-btn:hover, .preset-btn.active {
-      border-color: var(--gpu);
-      background: rgba(56, 189, 248, 0.1);
-    }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 
-    /* Inputs & controls */
-    .field { display: flex; flex-direction: column; gap: 5px; }
-    .field-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 12px;
-      color: var(--text);
-    }
-    .field-val {
-      font-family: "JetBrains Mono", Consolas, monospace;
-      font-size: 11.5px;
-      color: var(--gpu);
-      font-weight: 600;
-    }
-    input[type="text"], input[type="number"], select, textarea {
-      width: 100%;
-      background: var(--bg-1);
-      border: 1px solid var(--line);
-      border-radius: 9px;
-      color: var(--text);
-      padding: 8px 10px;
-      font-size: 12.5px;
-      outline: none;
-      transition: border-color 0.15s;
-    }
-    input[type="text"]:focus, textarea:focus, select:focus {
-      border-color: var(--gpu);
-    }
-    input[type="range"] {
-      width: 100%;
-      accent-color: var(--gpu);
-      cursor: pointer;
-    }
+  /* App Shell */
+  .app-shell {
+    display: grid;
+    grid-template-rows: 48px 1fr;
+    height: 100vh;
+    background-image: var(--glow);
+  }
 
-    .check-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-      color: var(--text);
-      cursor: pointer;
-    }
-    .check-row input { accent-color: var(--cpu); width: 15px; height: 15px; }
+  /* Top Header Bar (Hermes + LearnHarness Chrome) */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 16px;
+    background: var(--sidebar);
+    border-bottom: 1px solid var(--border);
+    z-index: 20;
+  }
 
-    .btn {
-      border: none;
-      border-radius: 10px;
-      padding: 9px 13px;
-      font-size: 12.5px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.16s ease;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 7px;
-    }
-    .btn-primary {
-      background: linear-gradient(135deg, #0284c7, #10b981);
-      color: #fff;
-      box-shadow: 0 4px 14px rgba(14, 165, 233, 0.25);
-    }
-    .btn-primary:hover { filter: brightness(1.08); }
-    .btn-secondary {
-      background: var(--bg-3);
-      border: 1px solid var(--line);
-      color: var(--text);
-    }
-    .btn-secondary:hover { border-color: var(--line-strong); }
-    .btn-danger {
-      background: rgba(251, 113, 133, 0.15);
-      border: 1px solid rgba(251, 113, 133, 0.4);
-      color: #fda4af;
-    }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
 
-    /* Model list */
-    .model-list {
-      display: flex;
-      flex-direction: column;
-      gap: 7px;
-      max-height: 195px;
-      overflow-y: auto;
-    }
-    .model-item {
-      background: var(--bg-1);
-      border: 1px solid var(--line);
-      border-radius: 9px;
-      padding: 8px 10px;
-      cursor: pointer;
-      transition: all 0.14s;
-    }
-    .model-item:hover, .model-item.selected {
-      border-color: var(--gpu);
-      background: rgba(56, 189, 248, 0.08);
-    }
-    .model-item-name {
-      font-weight: 600;
-      font-size: 12px;
-      word-break: break-all;
-    }
-    .model-item-meta {
-      font-size: 11px;
-      color: var(--muted);
-      margin-top: 3px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-    .tag {
-      display: inline-flex;
-      align-items: center;
-      padding: 1px 6px;
-      border-radius: 5px;
-      font-size: 10.5px;
-      font-weight: 600;
-      background: rgba(148, 163, 184, 0.14);
-      color: var(--text);
-    }
-    .tag-moe { background: rgba(52, 211, 153, 0.16); color: #6ee7b7; }
-    .tag-gpu { background: rgba(56, 189, 248, 0.16); color: #7dd3fc; }
+  .brand-emblem {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: var(--nous-cream-bg);
+    border: 1px solid var(--nous-cream-border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--nous-cream);
+    flex-shrink: 0;
+  }
 
-    /* Center header */
-    .topbar {
-      padding: 13px 20px;
-      border-bottom: 1px solid var(--line);
-      background: rgba(14, 19, 29, 0.78);
-      backdrop-filter: blur(12px);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }
-    .status-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 12px;
-      border-radius: 999px;
-      background: var(--bg-2);
-      border: 1px solid var(--line);
-      font-size: 12px;
-      font-weight: 500;
-    }
-    .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--muted);
-    }
-    .dot.ready { background: var(--cpu); box-shadow: 0 0 10px var(--cpu); }
-    .dot.busy { background: var(--gpu); box-shadow: 0 0 12px var(--gpu); animation: pulse 1s infinite; }
+  .brand-title {
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
 
-    @keyframes pulse {
-      0%, 100% { transform: scale(1); opacity: 1; }
-      50% { transform: scale(1.3); opacity: 0.65; }
-    }
+  .brand-sub {
+    font-size: 11px;
+    color: var(--muted);
+    padding-left: 8px;
+    border-left: 1px solid var(--border);
+    white-space: nowrap;
+  }
 
-    /* Chat stream */
-    .chat-scroll {
-      flex: 1;
-      overflow-y: auto;
-      padding: 22px 26px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-    .empty-hero {
-      margin: auto;
-      max-width: 560px;
-      text-align: center;
-      padding: 28px;
-      background: rgba(20, 27, 41, 0.72);
-      border: 1px solid var(--line);
-      border-radius: 18px;
-    }
-    .empty-hero h2 { font-size: 20px; margin-bottom: 8px; }
-    .empty-hero p { color: var(--muted); line-height: 1.55; font-size: 13px; }
-    .pipeline-diagram {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 9px;
-      margin-top: 18px;
-      text-align: left;
-    }
-    .pipe-step {
-      padding: 11px;
-      border-radius: 11px;
-      background: var(--bg-1);
-      border: 1px solid var(--line);
-    }
-    .pipe-step strong { display: block; font-size: 12px; margin-bottom: 4px; }
-    .pipe-step span { font-size: 11px; color: var(--muted); line-height: 1.4; display: block; }
+  /* Center Workspace Tabs */
+  .nav-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 3px;
+    border-radius: 8px;
+  }
 
-    .msg {
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
-      max-width: 840px;
-      width: 100%;
-      margin: 0 auto;
-    }
-    .msg.user { align-items: flex-end; }
-    .msg.assistant { align-items: flex-start; }
-    .msg-role {
-      font-size: 11px;
-      color: var(--muted);
-      padding: 0 4px;
-    }
-    .msg-bubble {
-      padding: 13px 16px;
-      border-radius: 14px;
-      line-height: 1.6;
-      font-size: 14px;
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-width: 92%;
-    }
-    .msg.user .msg-bubble {
-      background: linear-gradient(135deg, rgba(14, 165, 233, 0.24), rgba(16, 185, 129, 0.20));
-      border: 1px solid rgba(56, 189, 248, 0.35);
-    }
-    .msg.assistant .msg-bubble {
-      background: var(--bg-2);
-      border: 1px solid var(--line);
-    }
-    .msg-bubble code {
-      font-family: "JetBrains Mono", Consolas, monospace;
-      background: rgba(0, 0, 0, 0.35);
-      padding: 1px 5px;
-      border-radius: 5px;
-      font-size: 12.5px;
-    }
+  .nav-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 12px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.14s, color 0.14s;
+  }
 
-    /* Composer */
-    .composer-wrap {
-      padding: 14px 22px 18px;
-      border-top: 1px solid var(--line);
-      background: rgba(14, 19, 29, 0.88);
-    }
-    .composer-box {
-      max-width: 840px;
-      margin: 0 auto;
-      display: flex;
-      flex-direction: column;
-      gap: 9px;
-    }
-    .composer-row {
-      display: flex;
-      gap: 9px;
-      align-items: flex-end;
-    }
-    #chatInput {
-      min-height: 50px;
-      max-height: 160px;
-      resize: vertical;
-      font-family: inherit;
-      font-size: 13.5px;
-      line-height: 1.45;
-    }
+  .nav-tab:hover {
+    color: var(--fg);
+    background: var(--hover);
+  }
 
-    /* Telemetry right pane */
-    .metric-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }
-    .metric-tile {
-      background: var(--bg-1);
-      border: 1px solid var(--line);
-      border-radius: 11px;
-      padding: 10px;
-    }
-    .metric-label { font-size: 11px; color: var(--muted); }
-    .metric-value {
-      font-family: "JetBrains Mono", Consolas, monospace;
-      font-size: 19px;
-      font-weight: 700;
-      margin-top: 3px;
-    }
-    .metric-unit { font-size: 11px; color: var(--muted); font-weight: 400; }
+  .nav-tab.active {
+    background: var(--elevated);
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+  }
 
-    .split-bar {
-      height: 12px;
-      border-radius: 999px;
-      background: var(--bg-1);
-      overflow: hidden;
-      display: flex;
-      border: 1px solid var(--line);
-    }
-    .seg-gpu { background: var(--gpu); transition: width 0.25s ease; }
-    .seg-cpu { background: var(--cpu); transition: width 0.25s ease; }
-    .seg-ssd { background: var(--ssd); transition: width 0.25s ease; }
+  .tab-badge {
+    font-size: 10.5px;
+    padding: 1px 6px;
+    border-radius: 99px;
+    background: var(--nous-blue-bg);
+    color: var(--nous-blue-hi);
+    border: 1px solid rgba(74, 132, 254, 0.35);
+  }
 
-    .legend-list { display: flex; flex-direction: column; gap: 7px; font-size: 12px; }
-    .legend-item { display: flex; justify-content: space-between; align-items: center; }
-    .legend-left { display: flex; align-items: center; gap: 7px; }
-    .swatch { width: 9px; height: 9px; border-radius: 3px; }
+  .tab-badge.warn {
+    background: var(--warn-bg);
+    color: var(--warn);
+    border-color: rgba(245, 158, 11, 0.35);
+  }
 
-    .progress-track {
-      height: 8px;
-      border-radius: 999px;
-      background: var(--bg-1);
-      overflow: hidden;
-      border: 1px solid var(--line);
-    }
-    .progress-fill {
-      height: 100%;
-      background: linear-gradient(90deg, var(--cpu), var(--gpu));
-      transition: width 0.25s ease;
-    }
+  .tab-badge.err {
+    background: var(--err-bg);
+    color: var(--err);
+    border-color: rgba(239, 68, 68, 0.35);
+  }
 
-    /* Modal */
-    .modal-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(3, 6, 12, 0.72);
-      backdrop-filter: blur(6px);
-      display: none;
-      place-items: center;
-      z-index: 50;
-    }
-    .modal-backdrop.open { display: grid; }
-    .modal {
-      width: min(540px, 92vw);
-      background: var(--bg-2);
-      border: 1px solid var(--line-strong);
-      border-radius: 16px;
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .code-box {
-      font-family: "JetBrains Mono", Consolas, monospace;
-      font-size: 12px;
-      background: var(--bg-0);
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 11px;
-      color: #a5f3fc;
-      line-height: 1.55;
-      white-space: pre-wrap;
-    }
-    .safety-note {
-      font-size: 11.5px;
-      line-height: 1.45;
-      color: #cbd5e1;
-      background: rgba(52, 211, 153, 0.09);
-      border: 1px solid rgba(52, 211, 153, 0.28);
-      border-radius: 10px;
-      padding: 10px;
-    }
-  </style>
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .api-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: 6px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+  }
+
+  .api-chip:hover {
+    border-color: var(--border-strong);
+    color: var(--fg);
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+    background: var(--card);
+    border: 1px solid var(--border);
+  }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  .dot.ready { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .dot.loading { background: var(--warn); animation: pulse 1s infinite; }
+  .dot.error { background: var(--err); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.85); }
+  }
+
+  .theme-switch {
+    display: inline-flex;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+  }
+
+  .theme-btn {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 11px;
+    padding: 3px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .theme-btn.active {
+    background: var(--hover);
+    color: var(--nous-cream);
+    font-weight: 600;
+  }
+
+  /* Main 3-Column Layout */
+  .workspace {
+    display: grid;
+    grid-template-columns: 332px 1fr 296px;
+    height: calc(100vh - 48px);
+    min-height: 0;
+  }
+
+  /* Left Control Rail */
+  .rail-left {
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* Right Telemetry Rail */
+  .rail-right {
+    background: var(--sidebar);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+  }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    gap: 8px;
+  }
+
+  .panel-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+
+  /* Form Controls */
+  .field-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11.5px;
+    color: var(--fg-soft);
+    margin-bottom: 4px;
+  }
+
+  .field-val {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--nous-cream);
+  }
+
+  .input-box {
+    width: 100%;
+    background: var(--input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 9px;
+    font-size: 12px;
+    color: var(--fg);
+    transition: border-color 0.14s;
+  }
+
+  .input-box:focus {
+    border-color: var(--nous-blue-hi);
+  }
+
+  .row-gap {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 11px;
+    border-radius: 6px;
+    border: 1px solid var(--border-strong);
+    background: var(--elevated);
+    color: var(--fg);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.14s, border-color 0.14s, opacity 0.14s;
+    white-space: nowrap;
+  }
+
+  .btn:hover:not(:disabled) {
+    background: var(--hover);
+    border-color: var(--muted);
+  }
+
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .btn-primary {
+    background: var(--nous-blue);
+    border-color: var(--nous-blue-hi);
+    color: #ffffff;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: #1964ff;
+    border-color: #7aa7ff;
+  }
+
+  .btn-cream {
+    background: var(--nous-cream-bg);
+    border-color: var(--nous-cream-border);
+    color: var(--nous-cream);
+  }
+
+  .btn-danger {
+    background: var(--err-bg);
+    border-color: rgba(239, 68, 68, 0.36);
+    color: var(--err);
+  }
+
+  .btn-sm {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  /* Model List */
+  .model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 176px;
+    overflow-y: auto;
+    margin-top: 8px;
+  }
+
+  .model-item {
+    padding: 8px 9px;
+    border-radius: 6px;
+    background: var(--input);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: border-color 0.14s, background 0.14s;
+  }
+
+  .model-item:hover {
+    background: var(--elevated);
+    border-color: var(--border-strong);
+  }
+
+  .model-item.selected {
+    border-color: var(--nous-blue-hi);
+    background: var(--nous-blue-bg);
+  }
+
+  .model-item-name {
+    font-size: 12px;
+    font-weight: 600;
+    word-break: break-all;
+  }
+
+  .model-item-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 3px;
+    font-size: 10.5px;
+    color: var(--muted);
+  }
+
+  .tag {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+  }
+
+  .tag.moe {
+    color: var(--nous-cream);
+    border-color: var(--nous-cream-border);
+    background: var(--nous-cream-bg);
+  }
+
+  /* Presets Grid */
+  .preset-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .preset-chip {
+    text-align: left;
+    padding: 7px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--input);
+    cursor: pointer;
+    transition: border-color 0.14s, background 0.14s;
+  }
+
+  .preset-chip:hover {
+    background: var(--elevated);
+    border-color: var(--border-strong);
+  }
+
+  .preset-chip.active {
+    border-color: var(--nous-cream-border);
+    background: var(--nous-cream-bg);
+  }
+
+  .preset-chip-title {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .preset-chip-sub {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 1px;
+  }
+
+  input[type="range"] {
+    width: 100%;
+    accent-color: var(--nous-blue-hi);
+    height: 4px;
+    cursor: pointer;
+  }
+
+  .control-group {
+    margin-bottom: 9px;
+  }
+  .control-group:last-child { margin-bottom: 0; }
+
+  /* Pre-Load Risk Assessment Box */
+  .risk-box {
+    margin-top: 8px;
+    padding: 8px 9px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    border: 1px solid var(--border);
+    background: var(--input);
+  }
+  .risk-box.ok { border-color: rgba(34, 197, 94, 0.35); background: var(--ok-bg); }
+  .risk-box.warn { border-color: rgba(245, 158, 11, 0.38); background: var(--warn-bg); }
+  .risk-box.err { border-color: rgba(239, 68, 68, 0.38); background: var(--err-bg); }
+
+  /* Center Main Stage */
+  .stage-center {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    background: transparent;
+  }
+
+  /* Docked Live Load Strip (always visible while loading or on error/crash!) */
+  .live-load-banner {
+    margin: 12px 16px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--card);
+    border: 1px solid var(--nous-cream-border);
+    box-shadow: var(--shadow);
+  }
+
+  .progress-track {
+    width: 100%;
+    height: 6px;
+    background: var(--input);
+    border-radius: 99px;
+    overflow: hidden;
+    margin: 7px 0 6px;
+    border: 1px solid var(--border);
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--nous-blue), var(--nous-blue-hi), var(--nous-cream));
+    transition: width 0.25s ease;
+  }
+
+  /* Chat View */
+  .view-pane {
+    display: none;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+  .view-pane.active {
+    display: flex;
+  }
+
+  .chat-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 18px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .empty-hero {
+    margin: auto;
+    max-width: 580px;
+    text-align: center;
+    padding: 28px 20px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+
+  .empty-hero h2 {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin-bottom: 6px;
+  }
+
+  .empty-hero p {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 14px;
+  }
+
+  .starter-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    text-align: left;
+  }
+
+  .starter-card {
+    padding: 10px 11px;
+    border-radius: 6px;
+    background: var(--input);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: border-color 0.14s, background 0.14s;
+  }
+
+  .starter-card:hover {
+    background: var(--elevated);
+    border-color: var(--nous-cream-border);
+  }
+
+  .starter-card strong {
+    display: block;
+    font-size: 12px;
+    color: var(--nous-cream);
+    margin-bottom: 2px;
+  }
+
+  .starter-card span {
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+
+  /* Messages (LearnHarness Editorial Prose + Hermes Trace Header) */
+  .msg {
+    max-width: 820px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 12px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--card);
+  }
+
+  .msg.user {
+    background: var(--elevated);
+    border-color: var(--border-strong);
+  }
+
+  .msg-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .msg-role {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--nous-cream);
+  }
+  .msg.user .msg-role { color: var(--nous-blue-hi); }
+
+  .msg-body {
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 14px;
+    line-height: 1.62;
+  }
+
+  /* Composer */
+  .composer-wrap {
+    padding: 12px 22px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--sidebar);
+  }
+
+  .composer-box {
+    max-width: 820px;
+    margin: 0 auto;
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    background: var(--card);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+
+  .composer-box:focus-within {
+    border-color: var(--nous-blue-hi);
+  }
+
+  .composer-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    resize: none;
+    max-height: 150px;
+    min-height: 24px;
+    font-size: 13.5px;
+    line-height: 1.45;
+  }
+
+  /* ==========================================================================
+     Diagnostics & Crash Forensics View (8-Step Flight Inspector)
+     ========================================================================== */
+  .diag-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .crash-card {
+    padding: 14px;
+    border-radius: 8px;
+    border: 1px solid rgba(239, 68, 68, 0.50);
+    background: var(--err-bg);
+  }
+
+  .crash-card h3 {
+    font-size: 13.5px;
+    color: var(--err);
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .mem-grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+
+  .mem-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 11px 12px;
+  }
+
+  .mem-bar {
+    height: 6px;
+    background: var(--input);
+    border-radius: 99px;
+    overflow: hidden;
+    margin: 7px 0 5px;
+  }
+
+  .mem-bar > div {
+    height: 100%;
+    background: var(--nous-blue-hi);
+    transition: width 0.25s;
+  }
+
+  .steps-list {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .step-card {
+    display: grid;
+    grid-template-columns: 28px 1fr auto;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--card);
+    border: 1px solid var(--border);
+  }
+
+  .step-card.running {
+    border-color: var(--nous-blue-hi);
+    background: var(--nous-blue-bg);
+  }
+  .step-card.done {
+    border-color: rgba(34, 197, 94, 0.34);
+  }
+  .step-card.warn {
+    border-color: rgba(245, 158, 11, 0.42);
+  }
+  .step-card.error {
+    border-color: rgba(239, 68, 68, 0.55);
+    background: var(--err-bg);
+  }
+
+  .step-num {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11.5px;
+    font-weight: 700;
+    background: var(--input);
+    border: 1px solid var(--border-strong);
+  }
+  .step-card.done .step-num { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+  .step-card.running .step-num { background: var(--nous-blue); color: #fff; border-color: var(--nous-blue-hi); }
+  .step-card.warn .step-num { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
+  .step-card.error .step-num { background: var(--err-bg); color: var(--err); border-color: var(--err); }
+
+  .step-title {
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+
+  .step-detail {
+    font-size: 11.5px;
+    color: var(--fg-soft);
+    margin-top: 2px;
+  }
+
+  .step-risk {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  .step-time {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .warn-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--warn-bg);
+    border: 1px solid rgba(245, 158, 11, 0.38);
+    font-size: 12px;
+  }
+
+  /* Flight Terminal Console */
+  .terminal-box {
+    background: var(--term-bg);
+    color: var(--term-fg);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: "JetBrains Mono", "Cascadia Code", monospace;
+    font-size: 11.5px;
+    max-height: 250px;
+    overflow-y: auto;
+    line-height: 1.5;
+  }
+
+  .log-line { word-break: break-word; margin-bottom: 2px; }
+  .log-ts { color: #6e7681; margin-right: 6px; }
+  .log-lvl-STEP { color: var(--term-step); font-weight: 600; }
+  .log-lvl-VULKAN { color: var(--term-vk); }
+  .log-lvl-WARN { color: #d29922; }
+  .log-lvl-ERROR { color: #ff7b72; font-weight: 700; }
+  .log-lvl-INFO { color: #8b949e; }
+
+  /* Right Telemetry Metrics */
+  .metric-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+  }
+
+  .metric-box {
+    background: var(--input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 9px;
+  }
+
+  .metric-val {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--nous-cream);
+  }
+
+  .metric-lbl {
+    font-size: 10.5px;
+    color: var(--muted);
+    margin-top: 1px;
+  }
+
+  .tier-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 11.5px;
+  }
+  .tier-row:last-child { border-bottom: none; }
+
+  /* Folder / File Browser Modal */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 20px;
+  }
+  .modal-backdrop.open { display: flex; }
+
+  .modal-card {
+    width: 100%;
+    max-width: 660px;
+    max-height: 82vh;
+    background: var(--card);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .modal-header {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .modal-body {
+    padding: 12px 14px;
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .drive-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .fs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 340px;
+    overflow-y: auto;
+  }
+
+  .fs-entry {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 9px;
+    border-radius: 6px;
+    background: var(--input);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .fs-entry:hover {
+    background: var(--elevated);
+    border-color: var(--nous-blue-hi);
+  }
+
+  @media (max-width: 1120px) {
+    .workspace { grid-template-columns: 300px 1fr; }
+    .rail-right { display: none; }
+    .mem-grid-3 { grid-template-columns: 1fr; }
+  }
+</style>
 </head>
 <body>
-  <div class="app">
-    <!-- LEFT PANE: MODEL & HARDWARE PLANNER -->
-    <aside class="pane left-pane">
-      <div class="brand">
-        <div class="logo-mark">DM</div>
-        <div>
-          <h1>DualMoE Studio</h1>
-          <p>Параллельный GPU ∥ CPU ∥ SSD движок</p>
-        </div>
+<div class="app-shell">
+  <!-- TOP CHROME BAR -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-emblem" title="DualMoE — Hermes × LearnHarness">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2v20"/>
+          <path d="M5 6c3 0 5 2 7 2s4-2 7-2c-1 4-4 5-7 5S6 10 5 6z"/>
+          <path d="M8 14c2-1.5 6-1.5 8 0-2 1.8-6 1.8-8 0z"/>
+          <circle cx="12" cy="3" r="1.3"/>
+        </svg>
+      </div>
+      <span class="brand-title mono">DUALMOE <span style="color:var(--nous-cream)">v0.2</span></span>
+      <span class="brand-sub">LearnHarness × Hermes Agent • GPU ∥ CPU ∥ SSD</span>
+    </div>
+
+    <nav class="nav-tabs">
+      <button class="nav-tab active" id="tabBtnChat" onclick="switchView('chat')">
+        <span>Рабочая сессия</span>
+      </button>
+      <button class="nav-tab" id="tabBtnDiag" onclick="switchView('diag')">
+        <span>Инспектор загрузки и сбоев</span>
+        <span class="tab-badge" id="diagBadge">8 этапов</span>
+      </button>
+    </nav>
+
+    <div class="topbar-right">
+      <button class="api-chip mono" onclick="copyApiUrl()" title="Нажмите, чтобы скопировать Base URL для LearnHarness">
+        <span>API:</span>
+        <strong id="apiEndpointLabel" style="color:var(--nous-cream)">/v1</strong>
+      </button>
+
+      <div class="status-pill" id="globalStatusPill">
+        <span class="dot" id="globalStatusDot"></span>
+        <span id="globalStatusText">Ожидание модели</span>
       </div>
 
-      <div class="card">
-        <div class="card-title">
-          <span>Профили под железо</span>
-          <span class="tag tag-gpu" id="devBadge">Поиск устройств...</span>
+      <div class="theme-switch" title="Палитра LearnHarness / Nous Hermes">
+        <button class="theme-btn active" id="themeGraphite" onclick="setTheme('graphite')">Graphite</button>
+        <button class="theme-btn" id="themeCobalt" onclick="setTheme('cobalt')">Nous Cobalt</button>
+        <button class="theme-btn" id="themePaper" onclick="setTheme('paper')">Paper</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <!-- LEFT SIDEBAR: MODEL SELECTOR, BROWSER & HYBRID ENGINE CONTROLS -->
+    <aside class="rail-left">
+      <!-- 1. GGUF Model Picker -->
+      <section class="panel">
+        <div class="panel-head">
+          <span class="panel-title">1. Файл модели (.GGUF)</span>
+          <button class="btn btn-sm btn-cream" onclick="openBrowserModal()">Обзор дисков…</button>
+        </div>
+
+        <div class="row-gap" style="margin-bottom:6px">
+          <input class="input-box mono" id="scanDirInput" placeholder="Папка с моделями (напр. D:\Models)" />
+          <button class="btn btn-sm" onclick="scanModels()">Найти</button>
+        </div>
+
+        <input class="input-box mono" id="modelPathInput" placeholder="Полный путь к .gguf файлу" oninput="onManualPathEdit()" />
+
+        <div class="model-list" id="modelList">
+          <div style="font-size:11.5px;color:var(--muted);padding:6px 2px">
+            Нажмите «Обзор дисков…» или «Найти», чтобы выбрать .gguf модель.
+          </div>
+        </div>
+
+        <!-- Pre-flight Risk & Model Topology Box -->
+        <div class="risk-box" id="preLoadRiskBox" style="display:none"></div>
+
+        <div class="row-gap" style="margin-top:10px">
+          <button class="btn btn-primary" style="flex:1" id="btnLoadModel" onclick="loadSelectedModel()">
+            Загрузить модель
+          </button>
+          <button class="btn btn-sm" id="btnUnloadModel" onclick="unloadModel()" title="Освободить VRAM и RAM">
+            Выгрузить
+          </button>
+        </div>
+      </section>
+
+      <!-- 2. One-Click Hardware Presets -->
+      <section class="panel">
+        <div class="panel-head">
+          <span class="panel-title">2. Профили под железо</span>
         </div>
         <div class="preset-grid">
-          <button class="preset-btn active" onclick="applyPreset('rx580_parallel', this)">
-            ⚡ RX 580 + 5700X
-            <span>8 ГБ VRAM + 16 ГБ RAM</span>
+          <button class="preset-chip active" id="presetRxTurbo" onclick="applyPreset('rx_turbo')">
+            <div class="preset-chip-title">RX 580 8ГБ • Турбо</div>
+            <div class="preset-chip-sub">NGL 99 • VRAM 2.2ГБ • 24K</div>
           </button>
-          <button class="preset-btn" onclick="applyPreset('learnharness', this)">
-            🎓 LearnHarness
-            <span>Контекст 24K · Q8 KV</span>
+          <button class="preset-chip" id="presetLearn" onclick="applyPreset('learnharness')">
+            <div class="preset-chip-title">LearnHarness 24K</div>
+            <div class="preset-chip-sub">Стабильный KV q8_0 • 24K</div>
           </button>
-          <button class="preset-btn" onclick="applyPreset('creative_ru', this)">
-            ✒️ Проза и стихи
-            <span>Temp 0.88 · богатый слог</span>
+          <button class="preset-chip" id="presetSafe" onclick="applyPreset('safe_rx580')">
+            <div class="preset-chip-title">Безопасный (Анти-краш)</div>
+            <div class="preset-chip-sub">NGL 20 • VRAM 1ГБ • 8K</div>
           </button>
-          <button class="preset-btn" onclick="applyPreset('low_vram', this)">
-            🛡️ Эконом / 4 ГБ
-            <span>Мягкий буфер VRAM</span>
+          <button class="preset-chip" id="presetCpu" onclick="applyPreset('cpu_ssd')">
+            <div class="preset-chip-title">Только CPU + SSD</div>
+            <div class="preset-chip-sub">0 МБ VRAM • DDR4 стрим</div>
           </button>
         </div>
-      </div>
+      </section>
 
-      <div class="card">
-        <div class="card-title">
-          <span>Модели (.gguf)</span>
-          <button class="btn btn-secondary" style="padding:3px 8px;font-size:11px" onclick="scanModels()">Найти</button>
+      <!-- 3. Hybrid GPU || CPU || SSD Sliders -->
+      <section class="panel">
+        <div class="panel-head">
+          <span class="panel-title">3. Гибридный планировщик</span>
+          <span class="tag mono">uBatch=32 Guard</span>
         </div>
-        <div class="field">
-          <input type="text" id="scanDirInput" placeholder="Папка с .gguf (например D:\Models)" />
-        </div>
-        <div class="model-list" id="modelList"></div>
-        <div class="field">
-          <div class="field-row"><span>Путь к файлу .gguf</span></div>
-          <input type="text" id="modelPathInput" placeholder="Путь к модели .gguf" />
-        </div>
-        <div style="display:flex;gap:7px">
-          <button class="btn btn-primary" style="flex:1" id="loadBtn" onclick="loadModel()">Загрузить модель</button>
-          <button class="btn btn-danger" onclick="unloadModel()" title="Выгрузить">✕</button>
-        </div>
-      </div>
 
-      <div class="card">
-        <div class="card-title"><span>Параллельный конвейер</span></div>
-
-        <div class="field">
-          <div class="field-row">
-            <span>Слои Attention на GPU (`ngl`)</span>
-            <span class="field-val" id="nglVal">99 (все плотные)</span>
+        <div class="control-group">
+          <div class="field-label">
+            <span>Слои Attention/Router на GPU (NGL)</span>
+            <span class="field-val" id="valNgl">99</span>
           </div>
-          <input type="range" id="nglInput" min="0" max="99" value="99" oninput="syncLabels()" />
+          <input type="range" id="inpNgl" min="0" max="99" step="1" value="99" oninput="syncSliders()" />
         </div>
 
-        <div class="field">
-          <div class="field-row">
+        <div class="control-group">
+          <div class="field-label">
             <span>Горячий кэш экспертов в VRAM</span>
-            <span class="field-val" id="vramVal">2800 MiB</span>
+            <span class="field-val" id="valVram">2200 МБ</span>
           </div>
-          <input type="range" id="vramInput" min="0" max="6144" step="128" value="2800" oninput="syncLabels()" />
+          <input type="range" id="inpVram" min="0" max="5500" step="100" value="2200" oninput="syncSliders()" />
         </div>
 
-        <div class="field">
-          <div class="field-row">
-            <span>Доля промахов на CPU параллельно</span>
-            <span class="field-val" id="shareVal">92%</span>
+        <div class="control-group">
+          <div class="field-label">
+            <span>Доля параллельного CPU на промахах</span>
+            <span class="field-val" id="valCpuShare">92%</span>
           </div>
-          <input type="range" id="shareInput" min="0" max="100" step="2" value="92" oninput="syncLabels()" />
+          <input type="range" id="inpCpuShare" min="0" max="100" step="2" value="92" oninput="syncSliders()" />
         </div>
 
-        <div class="field">
-          <div class="field-row">
-            <span>Бюджет арены экспертов в DDR4</span>
-            <span class="field-val" id="ramVal">6144 MiB</span>
+        <div class="control-group">
+          <div class="field-label">
+            <span>Бюджет виртуальной арены DDR4</span>
+            <span class="field-val" id="valRam">5632 МБ</span>
           </div>
-          <input type="range" id="ramInput" min="256" max="12288" step="256" value="6144" oninput="syncLabels()" />
+          <input type="range" id="inpRam" min="512" max="12288" step="256" value="5632" oninput="syncSliders()" />
         </div>
 
-        <div class="field">
-          <div class="field-row">
-            <span>Контекст (`n_ctx`) / Потоки CPU</span>
-            <span class="field-val" id="ctxVal">24576 / 8 потоков</span>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px">
-            <select id="ctxInput" onchange="syncLabels()">
+        <div class="row-gap" style="margin-top:8px">
+          <div style="flex:1">
+            <div class="field-label"><span>Контекст (токенов)</span></div>
+            <select class="input-box mono" id="inpCtx" onchange="evaluatePreLoadRisk()">
               <option value="4096">4 096</option>
               <option value="8192">8 192</option>
               <option value="16384">16 384</option>
               <option value="24576" selected>24 576 (LearnHarness)</option>
               <option value="32768">32 768</option>
             </select>
-            <input type="number" id="threadsInput" min="1" max="32" value="8" oninput="syncLabels()" />
+          </div>
+          <div style="width:94px">
+            <div class="field-label"><span>Потоки CPU</span></div>
+            <input type="number" class="input-box mono" id="inpThreads" min="1" max="32" value="8" />
+          </div>
+        </div>
+      </section>
+    </aside>
+
+    <!-- CENTER WORKSPACE -->
+    <main class="stage-center">
+      <!-- Live Docked Load / Error Strip (auto-shows during loading or if load fails!) -->
+      <div class="live-load-banner" id="dockedLoadBanner" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <div style="font-size:12.5px;font-weight:600" id="dockedStageTitle">Загрузка модели…</div>
+          <div class="row-gap">
+            <span class="mono" style="font-size:11.5px;color:var(--nous-cream)" id="dockedPct">0%</span>
+            <button class="btn btn-sm" onclick="switchView('diag')">Подробности этапов →</button>
+          </div>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="dockedProgressFill" style="width:0%"></div>
+        </div>
+        <div style="font-size:11.5px;color:var(--muted)" id="dockedStageSub">
+          Инициализация защищённого конвейера памяти…
+        </div>
+      </div>
+
+      <!-- VIEW 1: SESSION / CHAT -->
+      <section class="view-pane active" id="viewChat">
+        <div class="chat-scroll" id="chatScroll">
+          <div class="empty-hero" id="emptyHero">
+            <div class="tag moe" style="display:inline-block;margin-bottom:10px">HERMES × LEARNHARNESS WORKSPACE</div>
+            <h2>Параллельный гибридный рантайм DualMoE</h2>
+            <p>
+              Горячие эксперты вычисляются в VRAM RX 580, промахи идут параллельно на ядрах Ryzen 7 5700X с прямой многопоточной подкачкой SSD — с полной 8-этапной диагностикой памяти и защитой от сбоев Windows.
+            </p>
+            <div class="starter-grid">
+              <div class="starter-card" onclick="useStarter('Объясни на пальцах разницу между стек-трейсом исключения 0xC0000005 и нехваткой лимита виртуальной памяти Commit в Windows 11, и дай 3 коротких контрольных вопроса в стиле LearnHarness.')">
+                <strong>Тьютор LearnHarness</strong>
+                <span>Объяснение + 3 проверочных вопроса</span>
+              </div>
+              <div class="starter-card" onclick="useStarter('Напиши атмосферный отрывок русской прозы (8-10 предложений) о ночном поезде сквозь осеннюю степь под Оренбургом, избегая штампов и канцелярита.')">
+                <strong>Русская проза и стиль</strong>
+                <span>Проверка живого литературного слога</span>
+              </div>
+              <div class="starter-card" onclick="useStarter('Спроектируй компактный C++20 lock-free кольцевой буфер для телеметрии с пояснением memory_order_acquire / memory_order_release.')">
+                <strong>Системный C++20 код</strong>
+                <span>Архитектура и атомарная синхронизация</span>
+              </div>
+              <div class="starter-card" onclick="switchView('diag')">
+                <strong>Открыть инспектор загрузки →</strong>
+                <span>Посмотреть RAM, Commit, VRAM и все 8 этапов</span>
+              </div>
+            </div>
           </div>
         </div>
 
-        <label class="check-row">
-          <input type="checkbox" id="autoSplitCheck" checked />
-          <span>Защита от вылета на ≥2 GPU слоях (авто-разделение 3D экспертов)</span>
-        </label>
-        <label class="check-row">
-          <input type="checkbox" id="releaseMmapCheck" checked />
-          <span>Стриминг SSD + сброс блокировки NTFS (`release-mmap`)</span>
-        </label>
-      </div>
-    </aside>
-
-    <!-- CENTER PANE: CHAT & LEARNHARNESS BRIDGE -->
-    <main class="center-pane">
-      <header class="topbar">
-        <div class="status-pill">
-          <span class="dot" id="statusDot"></span>
-          <span id="statusText">Подключение к серверу DualMoE...</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn btn-secondary" onclick="toggleModal(true)">🔗 Подключить LearnHarness</button>
-          <button class="btn btn-secondary" onclick="clearChat()">Очистить чат</button>
-          <button class="btn btn-danger" id="stopBtn" style="display:none" onclick="stopGeneration()">Стоп</button>
-        </div>
-      </header>
-
-      <section class="chat-scroll" id="chatScroll">
-        <div class="empty-hero" id="emptyHero">
-          <h2>Гибридный конвейер DualMoE</h2>
-          <p>
-            В отличие от обычного последовательного оффлоада, DualMoE держит <b>Attention + горячий банк экспертов</b> в видеопамяти (Vulkan GPU), а промахи кэша считает <b>одновременно на ядрах Ryzen в DDR4</b> со стримингом холодных слоёв с SSD — без вылетов при включении 2 и более GPU-слоёв.
-          </p>
-          <div class="pipeline-diagram">
-            <div class="pipe-step">
-              <strong style="color:var(--gpu)">1. Уровень VRAM (GPU)</strong>
-              <span>Attention, KV-кэш и ClassLRU-банк самых частых экспертов без копирования по PCIe.</span>
-            </div>
-            <div class="pipe-step">
-              <strong style="color:var(--cpu)">2. Уровень DDR4 (CPU)</strong>
-              <span>Ядра AVX2 считают промахи кэша в ту же миллисекунду, пока видеокарта считает хиты.</span>
-            </div>
-            <div class="pipe-step">
-              <strong style="color:var(--ssd)">3. Уровень SSD Arena</strong>
-              <span>Виртуальная арена подкачивает только двойные промахи без блокировки NTFS mmap.</span>
-            </div>
+        <div class="composer-wrap">
+          <div class="composer-box">
+            <textarea
+              class="composer-input"
+              id="chatInput"
+              rows="1"
+              placeholder="Напишите запрос… (Enter — отправить, Shift+Enter — новая строка)"
+              onkeydown="onComposerKey(event)"
+              oninput="autoGrow(this)"
+            ></textarea>
+            <button class="btn btn-sm" onclick="clearConversation()" title="Очистить историю диалога">Сброс</button>
+            <button class="btn btn-danger btn-sm" id="btnStopGen" style="display:none" onclick="stopGeneration()">Стоп</button>
+            <button class="btn btn-primary" id="btnSendChat" onclick="sendMessage()">Отправить</button>
           </div>
         </div>
       </section>
 
-      <footer class="composer-wrap">
-        <div class="composer-box">
-          <details style="font-size:12px;color:var(--muted)">
-            <summary style="cursor:pointer;user-select:none">Системная инструкция и параметры генерации (Temp: <span id="tempLbl">0.70</span>)</summary>
-            <div style="display:grid;grid-template-columns:1fr 180px;gap:10px;margin-top:8px">
-              <input type="text" id="sysPromptInput" value="Ты умный, точный локальный ИИ-помощник и наставник. Отвечай ясно, по делу и на хорошем русском языке." />
-              <div style="display:flex;align-items:center;gap:6px">
-                <span>Temp</span>
-                <input type="range" id="tempInput" min="0" max="1.4" step="0.02" value="0.70" oninput="document.getElementById('tempLbl').textContent=Number(this.value).toFixed(2)" />
+      <!-- VIEW 2: 8-STEP LOAD & CRASH FORENSICS INSPECTOR -->
+      <section class="view-pane" id="viewDiag">
+        <div class="diag-scroll">
+          <!-- Previous Crash Forensics Card (auto-shown if previous run crashed!) -->
+          <div class="crash-card" id="prevCrashCard" style="display:none">
+            <h3>
+              <span>Обнаружен отчёт о предыдущем вылете (Crash Forensics)</span>
+              <div class="row-gap">
+                <button class="btn btn-sm btn-cream" onclick="applyPreset('safe_rx580'); switchView('diag');">
+                  Включить безопасный профиль RX 580
+                </button>
+                <button class="btn btn-sm" onclick="dismissCrashBanner()">Скрыть</button>
+              </div>
+            </h3>
+            <div style="font-size:12px;margin-bottom:4px">
+              <strong>Этап обрыва:</strong> <span id="crashStageText" class="mono"></span>
+              <span style="color:var(--muted);margin-left:8px" id="crashTimeText"></span>
+            </div>
+            <div style="font-size:12px;margin-bottom:6px">
+              <strong>Причина:</strong> <span id="crashReasonText"></span>
+            </div>
+            <div style="font-size:12px;color:var(--nous-cream);margin-bottom:8px" id="crashAdviceText"></div>
+            <details>
+              <summary style="cursor:pointer;font-size:11.5px;color:var(--muted)">Последние строки dualmoe-load.log перед вылетом</summary>
+              <pre class="terminal-box" id="crashTailPre" style="margin-top:6px;max-height:150px"></pre>
+            </details>
+          </div>
+
+          <!-- 3-Column Live Memory Pressure Audit -->
+          <div class="mem-grid-3">
+            <div class="mem-card">
+              <div class="field-label">
+                <strong>GPU VRAM (Vulkan)</strong>
+                <span class="mono" id="memVramLabel">— / — МБ</span>
+              </div>
+              <div class="mem-bar"><div id="memVramBar" style="width:0%"></div></div>
+              <div style="font-size:11px;color:var(--muted)" id="memGpuSub">Определение видеокарты…</div>
+            </div>
+
+            <div class="mem-card">
+              <div class="field-label">
+                <strong>Физическая ОЗУ (DDR4)</strong>
+                <span class="mono" id="memRamLabel">— / — МБ</span>
+              </div>
+              <div class="mem-bar"><div id="memRamBar" style="width:0%"></div></div>
+              <div style="font-size:11px;color:var(--muted)">Свободная физическая память ОС</div>
+            </div>
+
+            <div class="mem-card">
+              <div class="field-label">
+                <strong>Виртуальный Commit (Pagefile)</strong>
+                <span class="mono" id="memCommitLabel">— / — МБ</span>
+              </div>
+              <div class="mem-bar"><div id="memCommitBar" style="width:0%"></div></div>
+              <div style="font-size:11px;color:var(--muted)" id="memCommitSub">
+                Лимит ОЗУ + файла подкачки Windows (главный фактор анти-краша!)
               </div>
             </div>
-          </details>
-          <div class="composer-row">
-            <textarea id="chatInput" placeholder="Напиши вопрос, попроси разобрать код или сочинить стихотворение... (Enter — отправить, Shift+Enter — перенос)"></textarea>
-            <button class="btn btn-primary" style="height:50px;padding:0 20px" onclick="sendMessage()">Отправить</button>
+          </div>
+
+          <!-- Requested vs Auto-Adjusted Parameters -->
+          <div class="panel">
+            <div class="panel-head">
+              <span class="panel-title">Контроль параметров и авто-защита от вылетов</span>
+              <div class="row-gap">
+                <span class="mono" style="font-size:11px;color:var(--muted)" id="logPathLabel">dualmoe-load.log</span>
+                <button class="btn btn-sm" onclick="copyDiagnosticsReport()">Скопировать полный отчёт</button>
+              </div>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;font-size:11.5px" id="effectiveParamsRow">
+              <span class="tag">Ожидание запуска загрузки…</span>
+            </div>
+            <div class="warn-list" id="diagWarningsBox" style="display:none;margin-top:10px"></div>
+            <div class="crash-card" id="diagErrorBox" style="display:none;margin-top:10px"></div>
+          </div>
+
+          <!-- 8-Step Pipeline Cards -->
+          <div class="panel">
+            <div class="panel-head">
+              <span class="panel-title">Пошаговая трассировка загрузки модели (8 контрольных точек)</span>
+              <span class="mono" style="font-size:11.5px;color:var(--nous-cream)" id="diagCurrentStageLabel">Готов</span>
+            </div>
+            <div class="steps-list" id="stepsContainer"></div>
+          </div>
+
+          <!-- Raw Vulkan / llama.cpp Flight Log -->
+          <div class="panel">
+            <div class="panel-head">
+              <span class="panel-title">Журнал движка в реальном времени (Vulkan / llama.cpp / DualMoE)</span>
+              <span style="font-size:11px;color:var(--muted)">Синхронная запись на диск перед каждым шагом</span>
+            </div>
+            <div class="terminal-box" id="flightLogConsole">
+              <div class="log-line log-lvl-INFO">Журнал готов. Выберите .gguf модель и нажмите «Загрузить модель».</div>
+            </div>
           </div>
         </div>
-      </footer>
+      </section>
     </main>
 
-    <!-- RIGHT PANE: LIVE PARALLEL TELEMETRY -->
-    <aside class="pane right-pane">
-      <div class="card">
-        <div class="card-title">
-          <span>Скорость в реальном времени</span>
-          <span class="tag" id="archBadge">—</span>
+    <!-- RIGHT TELEMETRY RAIL -->
+    <aside class="rail-right">
+      <section class="panel">
+        <div class="panel-head">
+          <span class="panel-title">Скорость генерации</span>
         </div>
         <div class="metric-grid">
-          <div class="metric-tile">
-            <div class="metric-label">Генерация (Decode)</div>
-            <div class="metric-value" style="color:var(--gpu)"><span id="mDecode">0.0</span> <span class="metric-unit">tok/s</span></div>
+          <div class="metric-box">
+            <div class="metric-val" id="telDecodeTps">0.0</div>
+            <div class="metric-lbl">Decode ток/с</div>
           </div>
-          <div class="metric-tile">
-            <div class="metric-label">Чтение промпта</div>
-            <div class="metric-value" style="color:var(--cpu)"><span id="mPrefill">0.0</span> <span class="metric-unit">tok/s</span></div>
+          <div class="metric-box">
+            <div class="metric-val" id="telPrefillTps">0.0</div>
+            <div class="metric-lbl">Prefill ток/с</div>
           </div>
-          <div class="metric-tile">
-            <div class="metric-label">Первый токен (TTFT)</div>
-            <div class="metric-value"><span id="mTtft">0</span> <span class="metric-unit">мс</span></div>
+          <div class="metric-box">
+            <div class="metric-val" id="telTtft">0 мс</div>
+            <div class="metric-lbl">Отклик TTFT</div>
           </div>
-          <div class="metric-tile">
-            <div class="metric-label">Занято контекста KV</div>
-            <div class="metric-value"><span id="mKv">0</span> <span class="metric-unit" id="mKvMax">/ 24k</span></div>
+          <div class="metric-box">
+            <div class="metric-val" id="telKvUsed">0</div>
+            <div class="metric-lbl">KV занято ток.</div>
           </div>
         </div>
-        <svg id="sparkSvg" width="100%" height="46" viewBox="0 0 280 46" style="background:var(--bg-1);border-radius:9px;border:1px solid var(--line)">
-          <polyline id="sparkLine" fill="none" stroke="#38bdf8" stroke-width="2" points="0,42 280,42" />
-        </svg>
-      </div>
+      </section>
 
-      <div class="card">
-        <div class="card-title"><span>Распределение экспертов MoE</span></div>
-        <div class="split-bar">
-          <div class="seg-gpu" id="barGpu" style="width:50%"></div>
-          <div class="seg-cpu" id="barCpu" style="width:35%"></div>
-          <div class="seg-ssd" id="barSsd" style="width:15%"></div>
+      <section class="panel">
+        <div class="panel-head">
+          <span class="panel-title">Маршрутизация экспертов</span>
         </div>
-        <div class="legend-list">
-          <div class="legend-item">
-            <div class="legend-left"><span class="swatch" style="background:var(--gpu)"></span><span>GPU VRAM кэш-хиты</span></div>
-            <strong id="statGpuHits">0 (0%)</strong>
-          </div>
-          <div class="legend-item">
-            <div class="legend-left"><span class="swatch" style="background:var(--cpu)"></span><span>Параллельный счёт CPU</span></div>
-            <strong id="statCpuPar">0 (0%)</strong>
-          </div>
-          <div class="legend-item">
-            <div class="legend-left"><span class="swatch" style="background:var(--ssd)"></span><span>Подкачки с SSD (холодные)</span></div>
-            <strong id="statSsdReads">0</strong>
-          </div>
-          <div class="legend-item">
-            <div class="legend-left"><span>Скорость потока SSD</span></div>
-            <strong id="statSsdBw" style="color:var(--ssd)">0.0 MB/s</strong>
-          </div>
+        <div class="tier-row">
+          <span>GPU VRAM попадания</span>
+          <strong class="mono" style="color:var(--ok)" id="telGpuHits">0</strong>
         </div>
-      </div>
+        <div class="tier-row">
+          <span>GPU VRAM подгрузки</span>
+          <strong class="mono" id="telGpuFills">0</strong>
+        </div>
+        <div class="tier-row">
+          <span>Параллельно на CPU</span>
+          <strong class="mono" style="color:var(--nous-blue-hi)" id="telCpuPar">0</strong>
+        </div>
+        <div class="tier-row">
+          <span>Попадания DDR4-арены</span>
+          <strong class="mono" id="telRamHits">0</strong>
+        </div>
+        <div class="tier-row">
+          <span>Чтений с SSD (4 линии)</span>
+          <strong class="mono" style="color:var(--nous-cream)" id="telSsdReads">0</strong>
+        </div>
+        <div class="tier-row">
+          <span>Поток SSD</span>
+          <strong class="mono" id="telSsdBw">0.0 МБ/с</strong>
+        </div>
+      </section>
 
-      <div class="card">
-        <div class="card-title"><span>Память арены DDR4 и VRAM</span></div>
-        <div class="field">
-          <div class="field-row">
-            <span>Арена экспертов DDR4</span>
-            <span class="field-val" id="ramUsageLbl">0 / 6144 MiB</span>
-          </div>
-          <div class="progress-track">
-            <div class="progress-fill" id="ramBar" style="width:0%"></div>
-          </div>
+      <section class="panel">
+        <div class="panel-head">
+          <span class="panel-title">Активная память арен</span>
         </div>
-        <div class="legend-list" style="margin-top:4px">
-          <div class="legend-item"><span>Кэш экспертов в VRAM</span><strong id="vramBudgetLbl">0 MiB</strong></div>
-          <div class="legend-item"><span>Плотные веса (Anon RAM)</span><strong id="denseAnonLbl">0 MiB</strong></div>
-          <div class="legend-item"><span>Сброс файлового mmap</span><strong id="mmapLbl">—</strong></div>
+        <div class="tier-row">
+          <span>GPU банк экспертов</span>
+          <strong class="mono" id="telVramBank">0 МБ</strong>
         </div>
-      </div>
+        <div class="tier-row">
+          <span>DDR4 арена (занято/лимит)</span>
+          <strong class="mono" id="telRamArena">0 / 0 МБ</strong>
+        </div>
+        <div class="tier-row">
+          <span>Активно GPU-слоёв</span>
+          <strong class="mono" id="telActiveNgl">0</strong>
+        </div>
+        <div class="tier-row">
+          <span>Свободно Commit ОС</span>
+          <strong class="mono" id="telCommitFree">— МБ</strong>
+        </div>
+      </section>
 
-      <div class="safety-note" id="safetyCard">
-        <b>Анти-вылет GPU активен:</b> при включении 2..99 GPU-слоёв в VRAM помещаются только Attention, роутер, KV-кэш и фиксированный банк горячих экспертов. Холодные 3D-тензоры экспертов автоматически остаются в виртуальной арене DDR4/SSD.
-      </div>
+      <section class="panel">
+        <div class="panel-head">
+          <span class="panel-title">Подключение LearnHarness</span>
+        </div>
+        <div style="font-size:11.5px;color:var(--muted);line-height:1.55">
+          1. Provider: <strong style="color:var(--fg)">OpenAI-Compatible</strong><br/>
+          2. Base URL: <code style="color:var(--nous-cream)" id="lhUrlHint">http://127.0.0.1:8090/v1</code><br/>
+          3. Model ID: <code style="color:var(--fg)">dualmoe-default</code><br/>
+          4. Context budget: <code style="color:var(--fg)">24576</code> • Reasoning: <code style="color:var(--fg)">off</code>
+        </div>
+      </section>
     </aside>
   </div>
+</div>
 
-  <!-- LEARNHARNESS MODAL -->
-  <div class="modal-backdrop" id="lhModal" onclick="if(event.target===this)toggleModal(false)">
-    <div class="modal">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <h3 style="font-size:16px">Подключение DualMoE к LearnHarness</h3>
-        <button class="btn btn-secondary" style="padding:4px 9px" onclick="toggleModal(false)">✕</button>
+<!-- BUILT-IN DRIVE & FOLDER BROWSER MODAL -->
+<div class="modal-backdrop" id="browserModal" onclick="if(event.target===this)closeBrowserModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <strong style="font-size:13px">Выбор папки или файла модели (.GGUF)</strong>
+      <button class="btn btn-sm" onclick="closeBrowserModal()">Закрыть</button>
+    </div>
+    <div class="modal-body">
+      <div class="drive-strip" id="browserRoots"></div>
+      <div class="row-gap">
+        <input class="input-box mono" id="browserCurDir" readonly />
+        <button class="btn btn-sm btn-cream" onclick="selectCurrentBrowserDir()">Сканировать эту папку</button>
       </div>
-      <p style="font-size:12.5px;color:var(--muted);line-height:1.5">
-        DualMoE поднимает полностью совместимый OpenAI API на том же порту. В настройках <b>LearnHarness → Settings → Custom Provider</b> укажи эти значения:
-      </p>
-      <div class="code-box" id="lhSnippet">Provider:       Custom (OpenAI-compatible)
-Base URL:       http://127.0.0.1:8090/v1
-API Key:        dualmoe-local
-Model ID:       dualmoe-default
-Context Budget: 24576
-Max Output:     2048
-Reasoning:      Off
-Knowledge Graph: Off (экономит ~50% вызовов)</div>
-      <div style="display:flex;justify-content:flex-end;gap:8px">
-        <button class="btn btn-primary" onclick="navigator.clipboard.writeText(document.getElementById('lhSnippet').innerText)">Скопировать настройки</button>
-      </div>
+      <div class="fs-list" id="browserEntries"></div>
     </div>
   </div>
+</div>
 
-  <script>
-    const chatHistory = [];
-    const tpsSamples = [];
-    let isGenerating = false;
+<script>
+  const state = {
+    models: [],
+    selectedModel: null,
+    messages: [],
+    generating: false,
+    loading: false,
+    abortCtrl: null,
+    lastLogSeq: 0,
+    allLogs: [],
+    lastDiag: null,
+    lastStatus: null,
+    browserDir: ''
+  };
 
-    function syncLabels() {
-      const ngl = Number(document.getElementById('nglInput').value);
-      document.getElementById('nglVal').textContent = ngl === 0 ? '0 (только CPU)' : (ngl >= 99 ? '99 (все плотные)' : ngl + ' сл.');
-      document.getElementById('vramVal').textContent = document.getElementById('vramInput').value + ' MiB';
-      document.getElementById('shareVal').textContent = document.getElementById('shareInput').value + '%';
-      document.getElementById('ramVal').textContent = document.getElementById('ramInput').value + ' MiB';
-      document.getElementById('ctxVal').textContent =
-        document.getElementById('ctxInput').value + ' / ' + document.getElementById('threadsInput').value + ' пот.';
+  function fmtBytesMb(bytes) {
+    if (!bytes || bytes <= 0) return '0 МБ';
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1.0) return gb.toFixed(2) + ' ГБ';
+    return Math.round(bytes / (1024 * 1024)) + ' МБ';
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  // Theme management
+  function setTheme(name) {
+    document.documentElement.setAttribute('data-theme', name);
+    localStorage.setItem('dualmoe_theme', name);
+    document.getElementById('themeGraphite').classList.toggle('active', name === 'graphite');
+    document.getElementById('themeCobalt').classList.toggle('active', name === 'cobalt');
+    document.getElementById('themePaper').classList.toggle('active', name === 'paper');
+  }
+
+  function switchView(view) {
+    document.getElementById('viewChat').classList.toggle('active', view === 'chat');
+    document.getElementById('viewDiag').classList.toggle('active', view === 'diag');
+    document.getElementById('tabBtnChat').classList.toggle('active', view === 'chat');
+    document.getElementById('tabBtnDiag').classList.toggle('active', view === 'diag');
+  }
+
+  function copyApiUrl() {
+    const url = window.location.origin + '/v1';
+    navigator.clipboard.writeText(url);
+    const lbl = document.getElementById('apiEndpointLabel');
+    const prev = lbl.textContent;
+    lbl.textContent = 'Скопировано!';
+    setTimeout(() => { lbl.textContent = prev; }, 1400);
+  }
+
+  // Hardware Presets
+  function applyPreset(id) {
+    ['presetRxTurbo', 'presetLearn', 'presetSafe', 'presetCpu'].forEach(k => {
+      document.getElementById(k).classList.remove('active');
+    });
+    if (id === 'rx_turbo') {
+      document.getElementById('presetRxTurbo').classList.add('active');
+      document.getElementById('inpNgl').value = 99;
+      document.getElementById('inpVram').value = 2200;
+      document.getElementById('inpCpuShare').value = 92;
+      document.getElementById('inpRam').value = 5632;
+      document.getElementById('inpCtx').value = '24576';
+    } else if (id === 'learnharness') {
+      document.getElementById('presetLearn').classList.add('active');
+      document.getElementById('inpNgl').value = 99;
+      document.getElementById('inpVram').value = 1800;
+      document.getElementById('inpCpuShare').value = 92;
+      document.getElementById('inpRam').value = 5120;
+      document.getElementById('inpCtx').value = '24576';
+    } else if (id === 'safe_rx580') {
+      document.getElementById('presetSafe').classList.add('active');
+      document.getElementById('inpNgl').value = 20;
+      document.getElementById('inpVram').value = 1000;
+      document.getElementById('inpCpuShare').value = 96;
+      document.getElementById('inpRam').value = 3584;
+      document.getElementById('inpCtx').value = '8192';
+    } else if (id === 'cpu_ssd') {
+      document.getElementById('presetCpu').classList.add('active');
+      document.getElementById('inpNgl').value = 0;
+      document.getElementById('inpVram').value = 0;
+      document.getElementById('inpCpuShare').value = 100;
+      document.getElementById('inpRam').value = 6144;
+      document.getElementById('inpCtx').value = '16384';
+    }
+    syncSliders();
+  }
+
+  function syncSliders() {
+    document.getElementById('valNgl').textContent = document.getElementById('inpNgl').value;
+    document.getElementById('valVram').textContent = document.getElementById('inpVram').value + ' МБ';
+    document.getElementById('valCpuShare').textContent = document.getElementById('inpCpuShare').value + '%';
+    document.getElementById('valRam').textContent = document.getElementById('inpRam').value + ' МБ';
+    evaluatePreLoadRisk();
+  }
+
+  function onManualPathEdit() {
+    const p = document.getElementById('modelPathInput').value.trim();
+    state.selectedModel = state.models.find(m => m.path === p) || null;
+    renderModelList();
+    evaluatePreLoadRisk();
+  }
+
+  // Pre-Flight Crash Risk Estimator (explains memory fit BEFORE clicking Load!)
+  function evaluatePreLoadRisk() {
+    const box = document.getElementById('preLoadRiskBox');
+    const m = state.selectedModel;
+    if (!m) {
+      box.style.display = 'none';
+      return;
+    }
+    box.style.display = 'block';
+    const sys = state.lastDiag?.sys_mem || {};
+    const ngl = parseInt(document.getElementById('inpNgl').value, 10) || 0;
+    const vramReq = parseInt(document.getElementById('inpVram').value, 10) || 0;
+    const ramReq = parseInt(document.getElementById('inpRam').value, 10) || 0;
+    const denseMb = Math.round((m.dense_bytes || 0) / (1024 * 1024));
+    const expMb = Math.round((m.expert_bytes || 0) / (1024 * 1024));
+
+    let notes = [];
+    let cls = 'ok';
+
+    if (m.is_moe) {
+      notes.push(`<strong>MoE ${m.n_expert}×Top${m.n_expert_used}:</strong> плотные веса ${denseMb} МБ, эксперты ${fmtBytesMb(m.expert_bytes)} (мин. цикл ${m.cycle_floor_mb} МБ).`);
+    } else {
+      notes.push(`<strong>Плотная модель:</strong> общий объём ${fmtBytesMb(m.file_size_bytes)}.`);
     }
 
-    function applyPreset(name, btnEl) {
-      document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
-      if (btnEl) btnEl.classList.add('active');
-      if (name === 'rx580_parallel') {
-        document.getElementById('nglInput').value = 99;
-        document.getElementById('vramInput').value = 2800;
-        document.getElementById('shareInput').value = 92;
-        document.getElementById('ramInput').value = 6144;
-        document.getElementById('ctxInput').value = '24576';
-        document.getElementById('threadsInput').value = 8;
-        document.getElementById('tempInput').value = 0.70;
-      } else if (name === 'learnharness') {
-        document.getElementById('nglInput').value = 99;
-        document.getElementById('vramInput').value = 2560;
-        document.getElementById('shareInput').value = 94;
-        document.getElementById('ramInput').value = 6144;
-        document.getElementById('ctxInput').value = '24576';
-        document.getElementById('tempInput').value = 0.55;
-      } else if (name === 'creative_ru') {
-        document.getElementById('nglInput').value = 99;
-        document.getElementById('vramInput').value = 3072;
-        document.getElementById('shareInput').value = 90;
-        document.getElementById('ramInput').value = 6400;
-        document.getElementById('ctxInput').value = '16384';
-        document.getElementById('tempInput').value = 0.88;
-        document.getElementById('sysPromptInput').value =
-          'Ты талантливый русский писатель и поэт. Пиши живым, образным русским языком без канцелярита и англицизмов, строго выдерживай ритм и размер стиха.';
-      } else if (name === 'low_vram') {
-        document.getElementById('nglInput').value = 20;
-        document.getElementById('vramInput').value = 1024;
-        document.getElementById('shareInput').value = 96;
-        document.getElementById('ramInput').value = 5632;
-        document.getElementById('ctxInput').value = '16384';
-      }
-      document.getElementById('tempLbl').textContent = Number(document.getElementById('tempInput').value).toFixed(2);
-      syncLabels();
+    if (sys.commit_avail_mb > 0 && ramReq + 1800 > sys.commit_avail_mb) {
+      cls = 'warn';
+      notes.push(`В ОС свободно <strong>${sys.commit_avail_mb} МБ Commit</strong> — DualMoE автоматически снизит RAM-арену, чтобы не вызвать сбой нехватки памяти Windows.`);
+    }
+    if (ngl > 0 && sys.vram_free_mb > 0 && denseMb + vramReq + 500 > sys.vram_free_mb) {
+      cls = 'warn';
+      notes.push(`Свободно <strong>${sys.vram_free_mb} МБ VRAM</strong>, запрошено ~${denseMb + vramReq} МБ — сработает авто-подбор слоёв/кэша под остаток памяти карты.`);
+    }
+    if (cls === 'ok') {
+      notes.push(`Защита uBatch=32 и Vulkan MMap Guard активны — конфигурация безопасна для загрузки.`);
     }
 
-    function toggleModal(open) {
-      document.getElementById('lhModal').classList.toggle('open', open);
-    }
+    box.className = 'risk-box ' + cls;
+    box.innerHTML = notes.join('<br/>');
+  }
 
-    async function fetchStatus() {
-      try {
-        const r = await fetch('/api/status');
-        const data = await r.json();
-        if (data.devices && data.devices.length) {
-          const gpu = data.devices.find(d => d.is_gpu);
-          document.getElementById('devBadge').textContent = gpu
-            ? `${gpu.backend}: ${gpu.total_mb} MiB`
-            : `CPU режим (${data.devices[0].name})`;
-        }
-        if (data.config && data.config.model_path && !document.getElementById('modelPathInput').value) {
-          document.getElementById('modelPathInput').value = data.config.model_path;
-        }
-        if (data.default_scan_dir && !document.getElementById('scanDirInput').value) {
-          document.getElementById('scanDirInput').value = data.default_scan_dir;
-          scanModels();
-        }
-        updateTelemetryUI(data.telemetry);
-      } catch (e) {
-        document.getElementById('statusText').textContent = 'Ожидание ответа сервера...';
-      }
-    }
-
-    async function scanModels() {
-      const dir = document.getElementById('scanDirInput').value.trim();
+  async function scanModels(customDir) {
+    const dir = (customDir !== undefined ? customDir : document.getElementById('scanDirInput').value).trim();
+    if (customDir !== undefined) document.getElementById('scanDirInput').value = dir;
+    try {
       const r = await fetch('/api/models/scan?dir=' + encodeURIComponent(dir));
-      const data = await r.json();
-      const box = document.getElementById('modelList');
-      box.innerHTML = '';
-      if (!data.models || !data.models.length) {
-        box.innerHTML = '<div style="font-size:11.5px;color:var(--muted)">Файлы .gguf в указанной папке не найдены</div>';
-        return;
+      const d = await r.json();
+      if (d.ok) {
+        state.models = d.models || [];
+        if (!state.selectedModel && state.models.length > 0) {
+          selectModel(state.models[0]);
+        } else {
+          renderModelList();
+        }
       }
-      data.models.forEach(m => {
-        const el = document.createElement('div');
-        el.className = 'model-item';
-        const sizeGb = (m.file_size_bytes / (1024 ** 3)).toFixed(2);
-        el.innerHTML = `
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function selectModel(m) {
+    state.selectedModel = m;
+    document.getElementById('modelPathInput').value = m.path;
+    renderModelList();
+    evaluatePreLoadRisk();
+  }
+
+  function renderModelList() {
+    const el = document.getElementById('modelList');
+    if (!state.models.length) {
+      el.innerHTML = `<div style="font-size:11.5px;color:var(--muted);padding:6px 2px">В этой папке .gguf файлы не найдены. Используйте «Обзор дисков…» для выбора другой папки или диска.</div>`;
+      return;
+    }
+    const curPath = document.getElementById('modelPathInput').value.trim();
+    el.innerHTML = state.models.map((m, idx) => {
+      const sel = m.path === curPath ? 'selected' : '';
+      const badge = m.is_moe
+        ? `<span class="tag moe">MoE ${m.n_expert}×${m.n_expert_used}</span>`
+        : `<span class="tag">Dense</span>`;
+      return `
+        <div class="model-item ${sel}" onclick="selectModel(state.models[${idx}])">
           <div class="model-item-name">${escapeHtml(m.filename)}</div>
           <div class="model-item-meta">
-            <span class="tag">${escapeHtml(m.arch || 'gguf')}</span>
-            ${m.is_moe ? `<span class="tag tag-moe">MoE ${m.n_expert}×top${m.n_expert_used}</span>` : '<span class="tag">Dense</span>'}
-            <span>${sizeGb} ГБ</span>
-          </div>`;
-        el.onclick = () => {
-          document.querySelectorAll('.model-item').forEach(x => x.classList.remove('selected'));
-          el.classList.add('selected');
-          document.getElementById('modelPathInput').value = m.path;
-        };
-        box.appendChild(el);
+            ${badge}
+            <span>${escapeHtml(m.arch || 'gguf')}</span>
+            <span>${fmtBytesMb(m.file_size_bytes)}</span>
+            <span>L${m.n_layer}</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // Built-In Drive & Folder Browser
+  async function openBrowserModal(dir) {
+    document.getElementById('browserModal').classList.add('open');
+    const target = dir || state.browserDir || document.getElementById('scanDirInput').value || '';
+    await browseTo(target);
+  }
+
+  function closeBrowserModal() {
+    document.getElementById('browserModal').classList.remove('open');
+  }
+
+  async function browseTo(dir) {
+    try {
+      const r = await fetch('/api/fs/browse?dir=' + encodeURIComponent(dir || ''));
+      const d = await r.json();
+      const rootsEl = document.getElementById('browserRoots');
+      if (d.roots && d.roots.length) {
+        rootsEl.innerHTML = d.roots.map(rt =>
+          `<button class="btn btn-sm mono" onclick='browseTo(${JSON.stringify(rt)})'>${escapeHtml(rt)}</button>`
+        ).join('');
+      }
+      if (!d.ok) {
+        document.getElementById('browserEntries').innerHTML = `<div style="color:var(--err);font-size:12px">${escapeHtml(d.error || 'Ошибка доступа к папке')}</div>`;
+        return;
+      }
+      state.browserDir = d.current_dir;
+      document.getElementById('browserCurDir').value = d.current_dir;
+
+      let html = '';
+      if (d.parent_dir) {
+        html += `<div class="fs-entry" onclick='browseTo(${JSON.stringify(d.parent_dir)})'>
+          <strong>⬆ .. (На уровень выше)</strong><span class="muted">Папка</span>
+        </div>`;
+      }
+      for (const sub of (d.dirs || [])) {
+        html += `<div class="fs-entry" onclick='browseTo(${JSON.stringify(sub.path)})'>
+          <span>📁 ${escapeHtml(sub.name)}</span><span style="color:var(--muted);font-size:11px">Открыть</span>
+        </div>`;
+      }
+      for (const f of (d.files || [])) {
+        html += `<div class="fs-entry" style="border-color:var(--nous-cream-border)" onclick='pickFileFromBrowser(${JSON.stringify(f.path)}, ${JSON.stringify(d.current_dir)})'>
+          <strong style="color:var(--nous-cream)">🧠 ${escapeHtml(f.name)}</strong>
+          <span class="mono" style="font-size:11px">${fmtBytesMb(f.size_bytes)}</span>
+        </div>`;
+      }
+      if (!html) {
+        html = `<div style="color:var(--muted);padding:8px">Папка пуста</div>`;
+      }
+      document.getElementById('browserEntries').innerHTML = html;
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function pickFileFromBrowser(filePath, parentDir) {
+    document.getElementById('modelPathInput').value = filePath;
+    document.getElementById('scanDirInput').value = parentDir;
+    closeBrowserModal();
+    await scanModels(parentDir);
+    const found = state.models.find(m => m.path === filePath);
+    if (found) selectModel(found);
+  }
+
+  async function selectCurrentBrowserDir() {
+    const dir = document.getElementById('browserCurDir').value;
+    closeBrowserModal();
+    await scanModels(dir);
+  }
+
+  // Async Model Loading with Real-Time Step Streaming!
+  async function loadSelectedModel() {
+    const modelPath = document.getElementById('modelPathInput').value.trim();
+    if (!modelPath) {
+      alert('Сначала выберите .gguf модель в списке слева или через «Обзор дисков…»');
+      return;
+    }
+    const payload = {
+      async: true,
+      model_path: modelPath,
+      n_gpu_layers: parseInt(document.getElementById('inpNgl').value, 10),
+      vram_cache_mb: parseInt(document.getElementById('inpVram').value, 10),
+      cpu_share: parseInt(document.getElementById('inpCpuShare').value, 10) / 100.0,
+      ram_cache_mb: parseInt(document.getElementById('inpRam').value, 10),
+      n_ctx: parseInt(document.getElementById('inpCtx').value, 10),
+      n_threads: parseInt(document.getElementById('inpThreads').value, 10) || 8,
+      n_ubatch: 32
+    };
+
+    state.lastLogSeq = 0;
+    state.allLogs = [];
+    document.getElementById('flightLogConsole').innerHTML = '';
+    document.getElementById('btnLoadModel').disabled = true;
+    document.getElementById('dockedLoadBanner').style.display = 'block';
+
+    try {
+      const r = await fetch('/api/model/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
-    }
-
-    async function loadModel() {
-      const path = document.getElementById('modelPathInput').value.trim();
-      if (!path) return alert('Укажи путь к файлу модели .gguf');
-      const btn = document.getElementById('loadBtn');
-      btn.disabled = true;
-      btn.textContent = 'Загрузка...';
-      try {
-        const payload = {
-          model_path: path,
-          n_gpu_layers: Number(document.getElementById('nglInput').value),
-          vram_cache_mb: Number(document.getElementById('vramInput').value),
-          cpu_share: Number(document.getElementById('shareInput').value) / 100.0,
-          ram_cache_mb: Number(document.getElementById('ramInput').value),
-          n_ctx: Number(document.getElementById('ctxInput').value),
-          n_threads: Number(document.getElementById('threadsInput').value),
-          auto_split_experts: document.getElementById('autoSplitCheck').checked,
-          moe_stream: document.getElementById('releaseMmapCheck').checked,
-          release_mmap: document.getElementById('releaseMmapCheck').checked,
-        };
-        const r = await fetch('/api/model/load', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        const data = await r.json();
-        if (!data.ok) alert('Ошибка загрузки: ' + (data.error || 'неизвестно'));
-        else updateTelemetryUI(data.telemetry);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Загрузить модель';
+      const d = await r.json();
+      if (!d.ok) {
+        document.getElementById('btnLoadModel').disabled = false;
+        switchView('diag');
+        await pollDiagnostics();
+        return;
       }
+      if (d.diagnostics) renderDiagnostics(d.diagnostics);
+      pollDiagnosticsLoop();
+    } catch (e) {
+      document.getElementById('btnLoadModel').disabled = false;
+      alert('Сетевая ошибка обращения к серверу DualMoE: ' + e.message);
     }
+  }
 
-    async function unloadModel() {
-      await fetch('/api/model/unload', { method: 'POST' });
-      fetchStatus();
-    }
+  async function unloadModel() {
+    await fetch('/api/model/unload', { method: 'POST' });
+    document.getElementById('dockedLoadBanner').style.display = 'none';
+    await refreshStatus();
+    await pollDiagnostics();
+  }
 
-    async function stopGeneration() {
-      await fetch('/api/cancel', { method: 'POST' });
-    }
+  async function dismissCrashBanner() {
+    await fetch('/api/diagnostics/dismiss', { method: 'POST' });
+    document.getElementById('prevCrashCard').style.display = 'none';
+  }
 
-    function clearChat() {
-      chatHistory.length = 0;
-      const sc = document.getElementById('chatScroll');
-      sc.innerHTML = '';
-      document.getElementById('emptyHero')?.remove();
-    }
-
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-    }
-
-    function appendMessage(role, text) {
-      const hero = document.getElementById('emptyHero');
-      if (hero) hero.style.display = 'none';
-      const sc = document.getElementById('chatScroll');
-      const wrap = document.createElement('div');
-      wrap.className = 'msg ' + role;
-      const roleLbl = document.createElement('div');
-      roleLbl.className = 'msg-role';
-      roleLbl.textContent = role === 'user' ? 'Ты' : 'DualMoE';
-      const bubble = document.createElement('div');
-      bubble.className = 'msg-bubble';
-      bubble.textContent = text;
-      wrap.appendChild(roleLbl);
-      wrap.appendChild(bubble);
-      sc.appendChild(wrap);
-      sc.scrollTop = sc.scrollHeight;
-      return bubble;
-    }
-
-    async function sendMessage() {
-      if (isGenerating) return;
-      const inp = document.getElementById('chatInput');
-      const text = inp.value.trim();
-      if (!text) return;
-      inp.value = '';
-
-      appendMessage('user', text);
-      chatHistory.push({ role: 'user', content: text });
-      const assistantBubble = appendMessage('assistant', '...');
-
-      isGenerating = true;
-      document.getElementById('stopBtn').style.display = 'inline-flex';
-
-      const sys = document.getElementById('sysPromptInput').value.trim();
-      const messages = sys ? [{ role: 'system', content: sys }, ...chatHistory] : [...chatHistory];
-
-      try {
-        const res = await fetch('/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: 'dualmoe-default',
-            stream: true,
-            temperature: Number(document.getElementById('tempInput').value),
-            messages,
-          }),
-        });
-
-        if (!res.ok) {
-          const errJson = await res.json().catch(() => ({}));
-          assistantBubble.textContent = 'Ошибка: ' + (errJson.error?.message || res.statusText);
-          chatHistory.pop();
-          return;
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let fullText = '';
-        assistantBubble.textContent = '';
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          for (const raw of lines) {
-            const line = raw.trim();
-            if (!line.startsWith('data:')) continue;
-            const payload = line.slice(5).trim();
-            if (payload === '[DONE]') break;
-            try {
-              const j = JSON.parse(payload);
-              const delta = j.choices?.[0]?.delta?.content || '';
-              if (delta) {
-                fullText += delta;
-                assistantBubble.textContent = fullText;
-                const sc = document.getElementById('chatScroll');
-                sc.scrollTop = sc.scrollHeight;
-              }
-            } catch (_) {}
-          }
-        }
-        chatHistory.push({ role: 'assistant', content: fullText });
-      } catch (e) {
-        assistantBubble.textContent = 'Ошибка соединения: ' + e.message;
-      } finally {
-        isGenerating = false;
-        document.getElementById('stopBtn').style.display = 'none';
-      }
-    }
-
-    function updateTelemetryUI(t) {
-      if (!t) return;
-      const dot = document.getElementById('statusDot');
-      dot.className = 'dot ' + (t.generating ? 'busy' : (t.model_loaded ? 'ready' : ''));
-      document.getElementById('statusText').textContent = t.model_loaded
-        ? `${t.model_name || 'Модель'} — ${t.status_text}`
-        : t.status_text;
-      document.getElementById('archBadge').textContent = t.model_arch || '—';
-
-      document.getElementById('mDecode').textContent = Number(t.decode_tps || 0).toFixed(1);
-      document.getElementById('mPrefill').textContent = Number(t.prefill_tps || 0).toFixed(1);
-      document.getElementById('mTtft').textContent = Math.round(t.ttft_ms || 0);
-      document.getElementById('mKv').textContent = t.kv_used_tokens || 0;
-      document.getElementById('mKvMax').textContent = '/ ' + Math.round((t.kv_max_tokens || 24576) / 1024) + 'k';
-
-      if (t.decode_tps > 0) {
-        tpsSamples.push(Number(t.decode_tps));
-        if (tpsSamples.length > 40) tpsSamples.shift();
-        const maxV = Math.max(10, ...tpsSamples);
-        const pts = tpsSamples.map((v, i) => {
-          const x = (i / Math.max(1, tpsSamples.length - 1)) * 280;
-          const y = 42 - (v / maxV) * 36;
-          return `${x.toFixed(1)},${y.toFixed(1)}`;
-        }).join(' ');
-        document.getElementById('sparkLine').setAttribute('points', pts);
-      }
-
-      const gpuHits = Number(t.gpu_expert_hits || 0);
-      const cpuPar  = Number(t.cpu_parallel_experts || 0);
-      const ssdRd   = Number(t.ssd_expert_reads || 0);
-      const totalEx = Math.max(1, gpuHits + cpuPar);
-      const gpuPct  = Math.round((gpuHits / totalEx) * 100);
-      const cpuPct  = 100 - gpuPct;
-      const ssdPct  = Math.min(35, Math.round((ssdRd / Math.max(1, gpuHits + cpuPar + ssdRd)) * 100));
-
-      document.getElementById('barGpu').style.width = Math.max(4, gpuPct - ssdPct / 2) + '%';
-      document.getElementById('barCpu').style.width = Math.max(4, cpuPct - ssdPct / 2) + '%';
-      document.getElementById('barSsd').style.width = ssdPct + '%';
-
-      document.getElementById('statGpuHits').textContent = `${gpuHits} (${gpuPct}%)`;
-      document.getElementById('statCpuPar').textContent = `${cpuPar} (${cpuPct}%)`;
-      document.getElementById('statSsdReads').textContent = `${ssdRd}`;
-      document.getElementById('statSsdBw').textContent = `${Number(t.ssd_bandwidth_mbs || 0).toFixed(1)} MB/s`;
-
-      const usedRam = Number(t.ram_arena_used_mb || 0);
-      const budRam  = Math.max(1, Number(t.ram_arena_budget_mb || 6144));
-      document.getElementById('ramUsageLbl').textContent = `${usedRam} / ${budRam} MiB`;
-      document.getElementById('ramBar').style.width = Math.min(100, (usedRam / budRam) * 100).toFixed(1) + '%';
-      document.getElementById('vramBudgetLbl').textContent = `${t.vram_cache_budget_mb || 0} MiB`;
-      document.getElementById('denseAnonLbl').textContent = `${t.dense_anon_mb || 0} MiB`;
-      document.getElementById('mmapLbl').textContent = t.mmap_released ? 'Снят (прямое I/O)' : 'Стандартный';
-    }
-
-    function connectTelemetryStream() {
-      const es = new EventSource('/api/telemetry/stream');
-      es.onmessage = ev => {
-        try { updateTelemetryUI(JSON.parse(ev.data)); } catch (_) {}
-      };
-      es.onerror = () => {
-        es.close();
-        setTimeout(connectTelemetryStream, 2000);
-      };
-    }
-
-    document.getElementById('chatInput').addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-      }
+  let diagTimer = null;
+  function pollDiagnosticsLoop() {
+    if (diagTimer) clearTimeout(diagTimer);
+    pollDiagnostics().then(d => {
+      const nextMs = (d && d.loading) ? 240 : 1800;
+      diagTimer = setTimeout(pollDiagnosticsLoop, nextMs);
     });
+  }
 
-    syncLabels();
-    fetchStatus();
-    connectTelemetryStream();
-  </script>
+  async function pollDiagnostics() {
+    try {
+      const r = await fetch('/api/diagnostics?since_seq=' + state.lastLogSeq);
+      const d = await r.json();
+      if (d && d.ok) {
+        state.lastDiag = d;
+        renderDiagnostics(d);
+        evaluatePreLoadRisk();
+      }
+      return d;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function renderDiagnostics(d) {
+    state.loading = !!d.loading;
+    document.getElementById('btnLoadModel').disabled = !!d.loading;
+
+    // Update badge on tab
+    const badge = document.getElementById('diagBadge');
+    if (d.loading) {
+      badge.className = 'tab-badge warn';
+      badge.textContent = `Шаг ${d.phase_index}/${d.phase_total} (${d.progress_pct}%)`;
+    } else if (d.last_error) {
+      badge.className = 'tab-badge err';
+      badge.textContent = 'Ошибка';
+    } else if ((d.warnings && d.warnings.length) || (d.prev_crash && d.prev_crash.has_previous_crash)) {
+      badge.className = 'tab-badge warn';
+      badge.textContent = d.prev_crash?.has_previous_crash ? 'Отчёт сбоя' : `Авто-защита (${d.warnings.length})`;
+    } else {
+      badge.className = 'tab-badge';
+      badge.textContent = '8 этапов';
+    }
+
+    // Docked load banner
+    const docked = document.getElementById('dockedLoadBanner');
+    if (d.loading || d.last_error) {
+      docked.style.display = 'block';
+      document.getElementById('dockedStageTitle').textContent = d.current_stage || 'Загрузка…';
+      document.getElementById('dockedPct').textContent = (d.progress_pct || 0) + '%';
+      document.getElementById('dockedProgressFill').style.width = (d.progress_pct || 0) + '%';
+      const activeStep = (d.steps || []).find(s => s.state === 'running' || s.state === 'error');
+      document.getElementById('dockedStageSub').textContent = d.last_error
+        ? ('Ошибка: ' + d.last_error)
+        : (activeStep ? activeStep.detail : 'Проверка памяти и весов…');
+    } else if (d.progress_pct >= 100) {
+      setTimeout(() => {
+        if (!state.loading && !state.lastDiag?.last_error) {
+          docked.style.display = 'none';
+        }
+      }, 2200);
+    }
+
+    // Previous crash forensics card
+    const pc = d.prev_crash;
+    const crashCard = document.getElementById('prevCrashCard');
+    if (pc && pc.has_previous_crash) {
+      crashCard.style.display = 'block';
+      document.getElementById('crashStageText').textContent = pc.crash_stage || 'Неизвестный этап';
+      document.getElementById('crashTimeText').textContent = pc.crash_time ? `(${pc.crash_time})` : '';
+      document.getElementById('crashReasonText').textContent = pc.crash_reason || '';
+      document.getElementById('crashAdviceText').textContent = pc.crash_advice || '';
+      document.getElementById('crashTailPre').textContent = (pc.last_log_tail || []).join('\n') || '(лог пуст)';
+    } else {
+      crashCard.style.display = 'none';
+    }
+
+    // 3 Memory Gauges
+    const sm = d.sys_mem || {};
+    if (sm.vram_total_mb > 0) {
+      const usedVram = Math.max(0, sm.vram_total_mb - sm.vram_free_mb);
+      const pct = Math.min(100, Math.round((usedVram / sm.vram_total_mb) * 100));
+      document.getElementById('memVramLabel').textContent = `${sm.vram_free_mb} своб / ${sm.vram_total_mb} МБ`;
+      document.getElementById('memVramBar').style.width = pct + '%';
+      document.getElementById('memGpuSub').textContent = `${sm.gpu_name || 'GPU'} (${sm.gpu_backend || 'Vulkan'})${sm.vram_max_buffer_mb ? ' • Макс. буфер ' + sm.vram_max_buffer_mb + ' МБ' : ''}`;
+    } else {
+      document.getElementById('memVramLabel').textContent = 'Режим CPU';
+      document.getElementById('memVramBar').style.width = '0%';
+      document.getElementById('memGpuSub').textContent = 'Дискретный Vulkan GPU не задействован';
+    }
+
+    if (sm.ram_total_mb > 0) {
+      const usedRam = Math.max(0, sm.ram_total_mb - sm.ram_avail_mb);
+      const pct = Math.min(100, Math.round((usedRam / sm.ram_total_mb) * 100));
+      document.getElementById('memRamLabel').textContent = `${sm.ram_avail_mb} своб / ${sm.ram_total_mb} МБ`;
+      document.getElementById('memRamBar').style.width = pct + '%';
+    }
+
+    if (sm.commit_total_mb > 0) {
+      const usedCom = Math.max(0, sm.commit_total_mb - sm.commit_avail_mb);
+      const pct = Math.min(100, Math.round((usedCom / sm.commit_total_mb) * 100));
+      document.getElementById('memCommitLabel').textContent = `${sm.commit_avail_mb} своб / ${sm.commit_total_mb} МБ`;
+      const bar = document.getElementById('memCommitBar');
+      bar.style.width = pct + '%';
+      bar.style.background = sm.commit_avail_mb < 3500 ? 'var(--err)' : (sm.commit_avail_mb < 6000 ? 'var(--warn)' : 'var(--ok)');
+    }
+
+    document.getElementById('logPathLabel').textContent = d.log_file_path || 'dualmoe-load.log';
+    document.getElementById('diagCurrentStageLabel').textContent = d.current_stage || 'Готов';
+
+    // Effective vs Requested chips
+    document.getElementById('effectiveParamsRow').innerHTML = `
+      <span class="tag">GPU слои: <strong>${d.effective_ngl}</strong> (запрошено ${d.requested_ngl})</span>
+      <span class="tag">VRAM кэш: <strong>${d.effective_vram_cache_mb} МБ</strong> (запрошено ${d.requested_vram_cache_mb} МБ)</span>
+      <span class="tag">DDR4 арена: <strong>${d.effective_ram_cache_mb} МБ</strong> (запрошено ${d.requested_ram_cache_mb} МБ)</span>
+      <span class="tag">Контекст: <strong>${d.effective_ctx}</strong></span>
+      <span class="tag moe">uBatch: <strong>${d.effective_ubatch}</strong> (<=32 защищён)</span>
+    `;
+
+    // Warnings & Errors
+    const wBox = document.getElementById('diagWarningsBox');
+    if (d.warnings && d.warnings.length) {
+      wBox.style.display = 'flex';
+      wBox.innerHTML = d.warnings.map(w => `<div>⚡ ${escapeHtml(w)}</div>`).join('');
+    } else {
+      wBox.style.display = 'none';
+    }
+
+    const eBox = document.getElementById('diagErrorBox');
+    if (d.last_error) {
+      eBox.style.display = 'block';
+      eBox.innerHTML = `<strong>Загрузка остановлена:</strong> ${escapeHtml(d.last_error)}`;
+    } else {
+      eBox.style.display = 'none';
+    }
+
+    // 8 Steps
+    const sc = document.getElementById('stepsContainer');
+    sc.innerHTML = (d.steps || []).map(s => {
+      const icon = s.state === 'done' ? '✓'
+        : s.state === 'running' ? '●'
+        : s.state === 'warn' ? '!'
+        : s.state === 'error' ? '✕'
+        : s.index;
+      const elapsed = s.elapsed_ms > 0 ? `${Math.round(s.elapsed_ms)} мс` : (s.state === 'running' ? 'выполняется…' : 'ожидание');
+      return `
+        <div class="step-card ${s.state}">
+          <div class="step-num">${icon}</div>
+          <div>
+            <div class="step-title">${escapeHtml(s.title)}</div>
+            <div class="step-detail">${escapeHtml(s.detail)}</div>
+            <div class="step-risk">Контроль сбоев: ${escapeHtml(s.risk_hint)}</div>
+          </div>
+          <div class="step-time">${elapsed}</div>
+        </div>
+      `;
+    }).join('');
+
+    // Incremental Flight Logs
+    if (d.logs && d.logs.length) {
+      const consoleEl = document.getElementById('flightLogConsole');
+      for (const entry of d.logs) {
+        if (entry.seq > state.lastLogSeq) {
+          state.lastLogSeq = entry.seq;
+          state.allLogs.push(entry);
+          const div = document.createElement('div');
+          div.className = 'log-line';
+          div.innerHTML = `<span class="log-ts">[${escapeHtml(entry.timestamp)}]</span><span class="log-lvl-${escapeHtml(entry.level)}">[${escapeHtml(entry.level)}]</span> ${escapeHtml(entry.text)}`;
+          consoleEl.appendChild(div);
+        }
+      }
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+  }
+
+  function copyDiagnosticsReport() {
+    const d = state.lastDiag || {};
+    const lines = [
+      '=== DualMoE v0.2 Diagnostics Report ===',
+      `Stage: ${d.current_stage || ''}`,
+      `Error: ${d.last_error || 'none'}`,
+      `GPU: ${d.sys_mem?.gpu_name || 'CPU'} | VRAM Free: ${d.sys_mem?.vram_free_mb}/${d.sys_mem?.vram_total_mb} MB | MaxBuf: ${d.sys_mem?.vram_max_buffer_mb} MB`,
+      `RAM Avail: ${d.sys_mem?.ram_avail_mb}/${d.sys_mem?.ram_total_mb} MB | Commit Avail: ${d.sys_mem?.commit_avail_mb}/${d.sys_mem?.commit_total_mb} MB`,
+      `Effective: NGL=${d.effective_ngl}, VRAM_Cache=${d.effective_vram_cache_mb}MB, RAM_Arena=${d.effective_ram_cache_mb}MB, Ctx=${d.effective_ctx}, uBatch=${d.effective_ubatch}`,
+      ...(d.warnings || []).map(w => `WARN: ${w}`),
+      '--- Steps ---',
+      ...(d.steps || []).map(s => `[${s.state}] ${s.title} (${Math.round(s.elapsed_ms)} ms) -> ${s.detail}`),
+      '--- Recent Logs ---',
+      ...state.allLogs.slice(-60).map(l => `[${l.timestamp}] [${l.level}] ${l.text}`)
+    ];
+    navigator.clipboard.writeText(lines.join('\n'));
+    alert('Полный диагностический отчёт скопирован в буфер обмена!');
+  }
+
+  // Telemetry SSE + Status
+  function applyTelemetry(t) {
+    const dot = document.getElementById('globalStatusDot');
+    const txt = document.getElementById('globalStatusText');
+    if (t.loading) {
+      dot.className = 'dot loading';
+      txt.textContent = `Загрузка ${t.load_phase_index}/${t.load_phase_total} (${t.load_progress_pct}%)`;
+    } else if (t.model_loaded) {
+      dot.className = 'dot ready';
+      txt.textContent = t.model_name || 'Модель активна';
+    } else {
+      dot.className = 'dot';
+      txt.textContent = t.status_text || 'Ожидание модели';
+    }
+
+    document.getElementById('telDecodeTps').textContent = (t.decode_tps || 0).toFixed(1);
+    document.getElementById('telPrefillTps').textContent = (t.prefill_tps || 0).toFixed(1);
+    document.getElementById('telTtft').textContent = Math.round(t.ttft_ms || 0) + ' мс';
+    document.getElementById('telKvUsed').textContent = `${t.kv_used_tokens || 0}`;
+
+    document.getElementById('telGpuHits').textContent = (t.gpu_expert_hits || 0).toLocaleString('ru-RU');
+    document.getElementById('telGpuFills').textContent = (t.gpu_expert_fills || 0).toLocaleString('ru-RU');
+    document.getElementById('telCpuPar').textContent = (t.cpu_parallel_experts || 0).toLocaleString('ru-RU');
+    document.getElementById('telRamHits').textContent = (t.ram_cache_hits || 0).toLocaleString('ru-RU');
+    document.getElementById('telSsdReads').textContent = (t.ssd_expert_reads || 0).toLocaleString('ru-RU');
+    document.getElementById('telSsdBw').textContent = (t.ssd_bandwidth_mbs || 0).toFixed(1) + ' МБ/с';
+
+    document.getElementById('telVramBank').textContent = (t.vram_cache_budget_mb || 0) + ' МБ';
+    document.getElementById('telRamArena').textContent = `${t.ram_arena_used_mb || 0} / ${t.ram_arena_budget_mb || 0} МБ`;
+    document.getElementById('telActiveNgl').textContent = `${t.active_gpu_layers || 0}`;
+    document.getElementById('telCommitFree').textContent = (t.os_commit_avail_mb || 0) + ' МБ';
+  }
+
+  async function refreshStatus() {
+    try {
+      const r = await fetch('/api/status');
+      const d = await r.json();
+      if (!d.ok) return;
+      state.lastStatus = d;
+      if (!document.getElementById('scanDirInput').value && d.default_scan_dir) {
+        document.getElementById('scanDirInput').value = d.default_scan_dir;
+      }
+      if (d.telemetry) applyTelemetry(d.telemetry);
+    } catch (e) {}
+  }
+
+  function connectTelemetrySse() {
+    const es = new EventSource('/api/telemetry/stream');
+    es.onmessage = (ev) => {
+      try {
+        const t = JSON.parse(ev.data);
+        applyTelemetry(t);
+      } catch (e) {}
+    };
+    es.onerror = () => {
+      es.close();
+      setTimeout(connectTelemetrySse, 2000);
+    };
+  }
+
+  // Chat UX
+  function autoGrow(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(150, el.scrollHeight) + 'px';
+  }
+
+  function onComposerKey(ev) {
+    if (ev.key === 'Enter' && !ev.shiftKey) {
+      ev.preventDefault();
+      sendMessage();
+    }
+  }
+
+  function useStarter(text) {
+    const inp = document.getElementById('chatInput');
+    inp.value = text;
+    autoGrow(inp);
+    inp.focus();
+  }
+
+  function clearConversation() {
+    state.messages = [];
+    renderMessages();
+  }
+
+  function renderMessages() {
+    const wrap = document.getElementById('chatScroll');
+    if (state.messages.length === 0) {
+      document.getElementById('emptyHero').style.display = 'block';
+      wrap.querySelectorAll('.msg').forEach(n => n.remove());
+      return;
+    }
+    const hero = document.getElementById('emptyHero');
+    if (hero) hero.style.display = 'none';
+    wrap.querySelectorAll('.msg').forEach(n => n.remove());
+
+    for (const m of state.messages) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + (m.role === 'user' ? 'user' : 'assistant');
+      div.innerHTML = `
+        <div class="msg-head">
+          <span class="msg-role">${m.role === 'user' ? 'Вы' : 'DualMoE • Hermes'}</span>
+          <span class="mono">${escapeHtml(m.meta || '')}</span>
+        </div>
+        <div class="msg-body">${escapeHtml(m.content)}</div>
+      `;
+      wrap.appendChild(div);
+    }
+    wrap.scrollTop = wrap.scrollHeight;
+  }
+
+  async function stopGeneration() {
+    if (state.abortCtrl) state.abortCtrl.abort();
+    await fetch('/api/cancel', { method: 'POST' });
+  }
+
+  async function sendMessage() {
+    if (state.generating) return;
+    const inp = document.getElementById('chatInput');
+    const text = inp.value.trim();
+    if (!text) return;
+
+    inp.value = '';
+    autoGrow(inp);
+
+    state.messages.push({ role: 'user', content: text });
+    const assistantMsg = { role: 'assistant', content: '', meta: 'генерация…' };
+    state.messages.push(assistantMsg);
+    renderMessages();
+
+    state.generating = true;
+    state.abortCtrl = new AbortController();
+    document.getElementById('btnSendChat').disabled = true;
+    document.getElementById('btnStopGen').style.display = 'inline-flex';
+
+    const t0 = performance.now();
+    try {
+      const r = await fetch('/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'dualmoe-default',
+          stream: true,
+          messages: state.messages.slice(0, -1).map(x => ({ role: x.role, content: x.content }))
+        }),
+        signal: state.abortCtrl.signal
+      });
+
+      if (!r.ok) {
+        const errJson = await r.json().catch(() => ({}));
+        assistantMsg.content = '⚠ ' + (errJson?.error?.message || ('HTTP ' + r.status));
+        assistantMsg.meta = 'не загружена модель';
+        renderMessages();
+        return;
+      }
+
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      let tokCount = 0;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() || '';
+        for (const block of parts) {
+          const line = block.trim();
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          try {
+            const ev = JSON.parse(payload);
+            const delta = ev?.choices?.[0]?.delta?.content;
+            if (delta) {
+              assistantMsg.content += delta;
+              tokCount++;
+              const sec = Math.max(0.05, (performance.now() - t0) / 1000);
+              assistantMsg.meta = `${tokCount} фрагм. • ${(tokCount / sec).toFixed(1)} ток/с`;
+              const bodies = document.querySelectorAll('.msg.assistant .msg-body');
+              const metas = document.querySelectorAll('.msg.assistant .msg-head .mono');
+              if (bodies.length) bodies[bodies.length - 1].textContent = assistantMsg.content;
+              if (metas.length) metas[metas.length - 1].textContent = assistantMsg.meta;
+              const wrap = document.getElementById('chatScroll');
+              wrap.scrollTop = wrap.scrollHeight;
+            }
+          } catch (e) {}
+        }
+      }
+      if (!assistantMsg.meta || assistantMsg.meta === 'генерация…') {
+        assistantMsg.meta = 'готово';
+      }
+      renderMessages();
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        assistantMsg.content += '\n[Ошибка потока: ' + e.message + ']';
+      } else {
+        assistantMsg.meta = 'остановлено';
+      }
+      renderMessages();
+    } finally {
+      state.generating = false;
+      state.abortCtrl = null;
+      document.getElementById('btnSendChat').disabled = false;
+      document.getElementById('btnStopGen').style.display = 'none';
+    }
+  }
+
+  // Boot
+  (async function init() {
+    const savedTheme = localStorage.getItem('dualmoe_theme') || 'graphite';
+    setTheme(savedTheme);
+    document.getElementById('apiEndpointLabel').textContent = window.location.host + '/v1';
+    document.getElementById('lhUrlHint').textContent = window.location.origin + '/v1';
+    syncSliders();
+
+    await refreshStatus();
+    const d = await pollDiagnostics();
+    if (d?.prev_crash?.has_previous_crash) {
+      switchView('diag');
+    }
+    await scanModels(document.getElementById('scanDirInput').value);
+    connectTelemetrySse();
+    pollDiagnosticsLoop();
+  })();
+</script>
 </body>
 </html>

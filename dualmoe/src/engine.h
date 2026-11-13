@@ -7,8 +7,11 @@
 #include "llama.h"
 
 #include <atomic>
+#include <chrono>
+#include <deque>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -23,18 +26,28 @@ public:
     DualMoeEngine & operator=(const DualMoeEngine &) = delete;
 
     std::vector<DeviceInfo> list_devices() const;
+    SystemMemoryInfo query_system_memory() const;
 
+    // Synchronous load (used by CLI & deterministic unit tests)
     bool load_model(const EngineConfig & cfg, std::string & err);
+
+    // Asynchronous background load (used by Web UI for real-time step-by-step streaming)
+    bool start_load_async(const EngineConfig & cfg, std::string & err);
+    bool is_loading() const { return loading_.load(std::memory_order_acquire); }
+
     void unload_model();
     bool is_loaded() const;
 
     EngineConfig current_config() const;
     ModelSummary current_model() const;
     TelemetrySnapshot telemetry() const;
+    LoadDiagnosticsSnapshot diagnostics() const;
+    std::vector<LoadLogEntry> recent_logs(uint64_t since_seq = 0) const;
+    void clear_crash_banner();
 
     void request_cancel();
 
-    // Thread-safe chat generation (OpenAI / LearnHarness / Studio UI)
+    // Thread-safe chat generation (OpenAI / LearnHarness / Hermes Studio UI)
     bool generate_chat(const std::vector<ChatMessage> & messages,
                        const SamplingParams & sampling_override,
                        bool use_override,
@@ -53,10 +66,24 @@ public:
                       std::string & full_reply,
                       std::string & err);
 
+    // Internal hook for llama_log_set & crash handlers
+    void append_backend_log(int level, const char * text);
+
 private:
     static bool c_eval_callback(struct ggml_tensor * t, bool ask, void * user_data);
     static void c_moe_cache_callback(const struct llama_moe_cache_event * ev, void * user_data);
     static bool c_abort_callback(void * user_data);
+
+    void unload_model_locked();
+    bool load_model_impl(const EngineConfig & cfg, std::string & err);
+
+    void init_load_steps(const EngineConfig & cfg);
+    void begin_step(int32_t idx, const std::string & detail);
+    void finish_step(int32_t idx, const std::string & state, const std::string & detail);
+    void add_warning(const std::string & msg);
+    void write_flight_line(const std::string & line, bool flush_now = true);
+    void mark_flight_header(const std::string & status_tag, const std::string & stage_desc);
+    void inspect_previous_session_logs();
 
     bool on_eval_node(struct ggml_tensor * t, bool ask);
     void on_moe_cache_event(const struct llama_moe_cache_event * ev);
@@ -71,7 +98,10 @@ private:
                     std::string & err);
 
     mutable std::mutex api_mu_;       // Serializes load/unload/generate turns safely
-    mutable std::mutex state_mu_;     // Protects config/summary/status strings
+    mutable std::mutex state_mu_;     // Protects config/summary/diagnostics/status strings
+    mutable std::mutex log_mu_;       // Protects log ring buffer & flight-recorder file
+
+    std::thread async_load_thread_;
 
     EngineConfig cfg_;
     GgufLayout   layout_;
@@ -91,10 +121,22 @@ private:
     std::vector<bool> layer_on_gpu_cache_;
     std::vector<std::vector<int32_t>> prev_route_;
 
+    // Diagnostics & crash forensics state
+    std::string log_file_path_;
+    std::string crash_file_path_;
+    LoadDiagnosticsSnapshot diag_;
+    std::chrono::steady_clock::time_point step_t0_;
+    std::deque<LoadLogEntry> log_ring_;
+    uint64_t next_log_seq_ = 1;
+
     // Atomic live counters
     std::atomic<bool>     loaded_{false};
+    std::atomic<bool>     loading_{false};
     std::atomic<bool>     generating_{false};
     std::atomic<bool>     cancel_flag_{false};
+    std::atomic<int32_t>  load_progress_pct_{0};
+    std::atomic<int32_t>  load_phase_index_{0};
+
     std::atomic<double>   prefill_tps_{0.0};
     std::atomic<double>   decode_tps_{0.0};
     std::atomic<double>   ttft_ms_{0.0};
@@ -112,6 +154,7 @@ private:
     bool     parallel_gpu_cpu_     = false;
     int32_t  active_gpu_layers_    = 0;
     float    active_cpu_share_     = 0.0f;
+    uint32_t active_ubatch_        = 32;
     std::string status_text_       = "Готов к загрузке модели";
 };
 

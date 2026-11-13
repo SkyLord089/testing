@@ -72,7 +72,7 @@ public:
     // Rehome host dense weights into anonymous RAM so GGUF file mappings can be safely dropped
     bool rehome_dense_weights(const std::vector<DenseRehomeEntry> & entries, std::string & err);
 
-    // Drop OS file mappings of the GGUF shards and reopen clean positioned readers
+    // Drop OS file mappings strictly matching our .gguf shards and reopen clean positioned readers
     bool release_file_mappings(const std::vector<const void *> & check_host_ptrs);
 
     // Synchronous load (for GPU VRAM cache fills that are about to be DMA-uploaded)
@@ -94,6 +94,7 @@ public:
     uint64_t ram_hits() const { return ram_hits_.load(std::memory_order_relaxed); }
     uint64_t ssd_reads() const { return ssd_reads_.load(std::memory_order_relaxed); }
     uint64_t ssd_bytes_read() const { return ssd_bytes_read_.load(std::memory_order_relaxed); }
+    uint64_t commit_failures() const { return commit_failures_.load(std::memory_order_relaxed); }
     double   ssd_bandwidth_mbs() const;
     bool     mmap_released() const { return mmap_released_; }
     bool     has_layer(int32_t il) const {
@@ -119,7 +120,9 @@ private:
     void close_shards();
     bool pread_exact(int32_t shard_idx, void * dst, size_t len, uint64_t offset);
 
-    void commit_expert_locked(int32_t il, int32_t exp);
+    bool evict_one_lowest_locked(uint64_t current_pin_epoch);
+    bool commit_pages_with_recovery_locked(uint8_t * ptr, size_t bytes, uint64_t current_pin_epoch);
+    bool commit_expert_locked(int32_t il, int32_t exp, uint64_t current_pin_epoch);
     void evict_expert_locked(int32_t il, int32_t exp);
     void evict_to_budget_locked(uint64_t needed_bytes, uint64_t current_pin_epoch);
     void worker_loop();
@@ -160,6 +163,7 @@ private:
     std::atomic<uint64_t> ssd_reads_{0};
     std::atomic<uint64_t> ssd_bytes_read_{0};
     std::atomic<uint64_t> ssd_active_ns_{0};
+    std::atomic<uint64_t> commit_failures_{0};
 };
 
 } // namespace dualmoe

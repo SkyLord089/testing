@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(DualMoE VERSION 0.1.0 LANGUAGES C CXX)
+project(DualMoE VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -98,13 +98,16 @@ target_compile_definitions(dualmoe_core PUBLIC
 )
 target_link_libraries(dualmoe_core PUBLIC ${DUALMOE_LLAMA_LIBS} Threads::Threads)
 if (WIN32)
-    target_link_libraries(dualmoe_core PUBLIC ws2_32)
+    target_link_libraries(dualmoe_core PUBLIC ws2_32 shell32)
 endif()
 
 add_executable(dualmoe-server
     src/http_server.cpp
     "${EMBEDDED_WEBUI_H}"
 )
+if (WIN32)
+    set_target_properties(dualmoe-server PROPERTIES OUTPUT_NAME "DualMoE")
+endif()
 target_include_directories(dualmoe-server PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
     "${LLAMA_SOURCE_DIR}/vendor"
