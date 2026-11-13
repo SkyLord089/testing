@@ -135,7 +135,10 @@ set(DUALMOE_WEBVIEW_TAG "0.12.0" CACHE STRING "webview/webview release tag")
 
 if (DUALMOE_DESKTOP_WINDOW AND WIN32)
     include(FetchContent)
-    set(WEBVIEW_BUILD               OFF CACHE BOOL "" FORCE)
+    # WEBVIEW_BUILD must stay ON: it is what triggers webview's dependency
+    # discovery (MSWebView2 headers) and the core library target.
+    set(WEBVIEW_BUILD               ON  CACHE BOOL "" FORCE)
+    set(WEBVIEW_USE_COMPAT_MINGW    OFF CACHE BOOL "" FORCE)
     set(WEBVIEW_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
     set(WEBVIEW_BUILD_STATIC_LIBRARY ON  CACHE BOOL "" FORCE)
     set(WEBVIEW_BUILD_TESTS         OFF CACHE BOOL "" FORCE)
@@ -174,7 +177,9 @@ if (DUALMOE_DESKTOP_WINDOW AND WIN32)
         message(WARNING "DualMoE: assets/dualmoe.ico missing — EXE will use the default icon")
     endif()
     target_compile_definitions(DualMoE PRIVATE DUALMOE_DESKTOP=1 UNICODE _UNICODE)
-    target_link_libraries(DualMoE PRIVATE dualmoe_app)
+    # webview::core_static provides webview/webview.h + the WebView2 COM headers
+    # and links advapi32/ole32/shell32/shlwapi/user32/version.
+    target_link_libraries(DualMoE PRIVATE dualmoe_app webview::core_static)
     set_target_properties(DualMoE PROPERTIES
         OUTPUT_NAME "DualMoE"
         WIN32_EXECUTABLE ON

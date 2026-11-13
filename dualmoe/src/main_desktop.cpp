@@ -29,7 +29,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <shellapi.h>
 #include <shobjidl.h>
@@ -46,7 +48,7 @@
 #pragma comment(lib, "version.lib")
 #pragma comment(lib, "gdi32.lib")
 #endif
-#include "webview.h"
+#include "webview/webview.h"
 #endif
 
 namespace {
