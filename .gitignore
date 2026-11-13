@@ -1,0 +1,9 @@
+# Build & local environments
+build/
+build-*/
+dist/
+.venv/
+
+# Local GGUF model weights
+*.gguf
+models/

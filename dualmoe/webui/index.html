@@ -1,0 +1,1109 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DualMoE Studio — Параллельный гибридный движок GPU ∥ CPU ∥ SSD</title>
+  <style>
+    :root {
+      --bg-0: #080b11;
+      --bg-1: #0e131d;
+      --bg-2: #141b29;
+      --bg-3: #1b2436;
+      --line: rgba(148, 163, 184, 0.14);
+      --line-strong: rgba(56, 189, 248, 0.35);
+      --text: #e6edf7;
+      --muted: #8fa0b8;
+      --gpu: #38bdf8;
+      --gpu-glow: rgba(56, 189, 248, 0.18);
+      --cpu: #34d399;
+      --cpu-glow: rgba(52, 211, 153, 0.18);
+      --ssd: #a78bfa;
+      --amber: #fbbf24;
+      --danger: #fb7185;
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      background: radial-gradient(circle at 15% 0%, #111c30 0%, var(--bg-0) 55%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+      font-size: 14px;
+      overflow: hidden;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 330px 1fr 330px;
+      height: 100vh;
+      gap: 0;
+    }
+
+    @media (max-width: 1180px) {
+      .app { grid-template-columns: 290px 1fr; }
+      .right-pane { display: none; }
+    }
+    @media (max-width: 820px) {
+      .app { grid-template-columns: 1fr; }
+      .left-pane { display: none; }
+    }
+
+    .pane {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow-y: auto;
+      background: rgba(14, 19, 29, 0.86);
+      backdrop-filter: blur(14px);
+    }
+    .left-pane { border-right: 1px solid var(--line); padding: 16px; gap: 14px; }
+    .right-pane { border-left: 1px solid var(--line); padding: 16px; gap: 14px; }
+    .center-pane { display: flex; flex-direction: column; height: 100vh; background: transparent; }
+
+    /* Brand header */
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .logo-mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 11px;
+      background: linear-gradient(135deg, #0ea5e9 0%, #10b981 55%, #8b5cf6 100%);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      font-size: 15px;
+      color: #041019;
+      box-shadow: 0 6px 20px rgba(14, 165, 233, 0.28);
+      flex-shrink: 0;
+    }
+    .brand h1 { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+    .brand p { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+    /* Cards & sections */
+    .card {
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 13px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .card-title {
+      font-size: 11.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* Presets */
+    .preset-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px;
+    }
+    .preset-btn {
+      background: var(--bg-3);
+      border: 1px solid var(--line);
+      color: var(--text);
+      padding: 8px 9px;
+      border-radius: 10px;
+      font-size: 11.5px;
+      font-weight: 600;
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.16s ease;
+      line-height: 1.3;
+    }
+    .preset-btn span {
+      display: block;
+      font-size: 10.5px;
+      color: var(--muted);
+      font-weight: 400;
+      margin-top: 2px;
+    }
+    .preset-btn:hover, .preset-btn.active {
+      border-color: var(--gpu);
+      background: rgba(56, 189, 248, 0.1);
+    }
+
+    /* Inputs & controls */
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .field-val {
+      font-family: "JetBrains Mono", Consolas, monospace;
+      font-size: 11.5px;
+      color: var(--gpu);
+      font-weight: 600;
+    }
+    input[type="text"], input[type="number"], select, textarea {
+      width: 100%;
+      background: var(--bg-1);
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 12.5px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type="text"]:focus, textarea:focus, select:focus {
+      border-color: var(--gpu);
+    }
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--gpu);
+      cursor: pointer;
+    }
+
+    .check-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .check-row input { accent-color: var(--cpu); width: 15px; height: 15px; }
+
+    .btn {
+      border: none;
+      border-radius: 10px;
+      padding: 9px 13px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.16s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #0284c7, #10b981);
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(14, 165, 233, 0.25);
+    }
+    .btn-primary:hover { filter: brightness(1.08); }
+    .btn-secondary {
+      background: var(--bg-3);
+      border: 1px solid var(--line);
+      color: var(--text);
+    }
+    .btn-secondary:hover { border-color: var(--line-strong); }
+    .btn-danger {
+      background: rgba(251, 113, 133, 0.15);
+      border: 1px solid rgba(251, 113, 133, 0.4);
+      color: #fda4af;
+    }
+
+    /* Model list */
+    .model-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      max-height: 195px;
+      overflow-y: auto;
+    }
+    .model-item {
+      background: var(--bg-1);
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 8px 10px;
+      cursor: pointer;
+      transition: all 0.14s;
+    }
+    .model-item:hover, .model-item.selected {
+      border-color: var(--gpu);
+      background: rgba(56, 189, 248, 0.08);
+    }
+    .model-item-name {
+      font-weight: 600;
+      font-size: 12px;
+      word-break: break-all;
+    }
+    .model-item-meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 3px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: 5px;
+      font-size: 10.5px;
+      font-weight: 600;
+      background: rgba(148, 163, 184, 0.14);
+      color: var(--text);
+    }
+    .tag-moe { background: rgba(52, 211, 153, 0.16); color: #6ee7b7; }
+    .tag-gpu { background: rgba(56, 189, 248, 0.16); color: #7dd3fc; }
+
+    /* Center header */
+    .topbar {
+      padding: 13px 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(14, 19, 29, 0.78);
+      backdrop-filter: blur(12px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .dot.ready { background: var(--cpu); box-shadow: 0 0 10px var(--cpu); }
+    .dot.busy { background: var(--gpu); box-shadow: 0 0 12px var(--gpu); animation: pulse 1s infinite; }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.3); opacity: 0.65; }
+    }
+
+    /* Chat stream */
+    .chat-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 22px 26px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .empty-hero {
+      margin: auto;
+      max-width: 560px;
+      text-align: center;
+      padding: 28px;
+      background: rgba(20, 27, 41, 0.72);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+    }
+    .empty-hero h2 { font-size: 20px; margin-bottom: 8px; }
+    .empty-hero p { color: var(--muted); line-height: 1.55; font-size: 13px; }
+    .pipeline-diagram {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 9px;
+      margin-top: 18px;
+      text-align: left;
+    }
+    .pipe-step {
+      padding: 11px;
+      border-radius: 11px;
+      background: var(--bg-1);
+      border: 1px solid var(--line);
+    }
+    .pipe-step strong { display: block; font-size: 12px; margin-bottom: 4px; }
+    .pipe-step span { font-size: 11px; color: var(--muted); line-height: 1.4; display: block; }
+
+    .msg {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      max-width: 840px;
+      width: 100%;
+      margin: 0 auto;
+    }
+    .msg.user { align-items: flex-end; }
+    .msg.assistant { align-items: flex-start; }
+    .msg-role {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 0 4px;
+    }
+    .msg-bubble {
+      padding: 13px 16px;
+      border-radius: 14px;
+      line-height: 1.6;
+      font-size: 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-width: 92%;
+    }
+    .msg.user .msg-bubble {
+      background: linear-gradient(135deg, rgba(14, 165, 233, 0.24), rgba(16, 185, 129, 0.20));
+      border: 1px solid rgba(56, 189, 248, 0.35);
+    }
+    .msg.assistant .msg-bubble {
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+    }
+    .msg-bubble code {
+      font-family: "JetBrains Mono", Consolas, monospace;
+      background: rgba(0, 0, 0, 0.35);
+      padding: 1px 5px;
+      border-radius: 5px;
+      font-size: 12.5px;
+    }
+
+    /* Composer */
+    .composer-wrap {
+      padding: 14px 22px 18px;
+      border-top: 1px solid var(--line);
+      background: rgba(14, 19, 29, 0.88);
+    }
+    .composer-box {
+      max-width: 840px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+    .composer-row {
+      display: flex;
+      gap: 9px;
+      align-items: flex-end;
+    }
+    #chatInput {
+      min-height: 50px;
+      max-height: 160px;
+      resize: vertical;
+      font-family: inherit;
+      font-size: 13.5px;
+      line-height: 1.45;
+    }
+
+    /* Telemetry right pane */
+    .metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .metric-tile {
+      background: var(--bg-1);
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      padding: 10px;
+    }
+    .metric-label { font-size: 11px; color: var(--muted); }
+    .metric-value {
+      font-family: "JetBrains Mono", Consolas, monospace;
+      font-size: 19px;
+      font-weight: 700;
+      margin-top: 3px;
+    }
+    .metric-unit { font-size: 11px; color: var(--muted); font-weight: 400; }
+
+    .split-bar {
+      height: 12px;
+      border-radius: 999px;
+      background: var(--bg-1);
+      overflow: hidden;
+      display: flex;
+      border: 1px solid var(--line);
+    }
+    .seg-gpu { background: var(--gpu); transition: width 0.25s ease; }
+    .seg-cpu { background: var(--cpu); transition: width 0.25s ease; }
+    .seg-ssd { background: var(--ssd); transition: width 0.25s ease; }
+
+    .legend-list { display: flex; flex-direction: column; gap: 7px; font-size: 12px; }
+    .legend-item { display: flex; justify-content: space-between; align-items: center; }
+    .legend-left { display: flex; align-items: center; gap: 7px; }
+    .swatch { width: 9px; height: 9px; border-radius: 3px; }
+
+    .progress-track {
+      height: 8px;
+      border-radius: 999px;
+      background: var(--bg-1);
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--cpu), var(--gpu));
+      transition: width 0.25s ease;
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(3, 6, 12, 0.72);
+      backdrop-filter: blur(6px);
+      display: none;
+      place-items: center;
+      z-index: 50;
+    }
+    .modal-backdrop.open { display: grid; }
+    .modal {
+      width: min(540px, 92vw);
+      background: var(--bg-2);
+      border: 1px solid var(--line-strong);
+      border-radius: 16px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .code-box {
+      font-family: "JetBrains Mono", Consolas, monospace;
+      font-size: 12px;
+      background: var(--bg-0);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 11px;
+      color: #a5f3fc;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+    .safety-note {
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: #cbd5e1;
+      background: rgba(52, 211, 153, 0.09);
+      border: 1px solid rgba(52, 211, 153, 0.28);
+      border-radius: 10px;
+      padding: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- LEFT PANE: MODEL & HARDWARE PLANNER -->
+    <aside class="pane left-pane">
+      <div class="brand">
+        <div class="logo-mark">DM</div>
+        <div>
+          <h1>DualMoE Studio</h1>
+          <p>Параллельный GPU ∥ CPU ∥ SSD движок</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>Профили под железо</span>
+          <span class="tag tag-gpu" id="devBadge">Поиск устройств...</span>
+        </div>
+        <div class="preset-grid">
+          <button class="preset-btn active" onclick="applyPreset('rx580_parallel', this)">
+            ⚡ RX 580 + 5700X
+            <span>8 ГБ VRAM + 16 ГБ RAM</span>
+          </button>
+          <button class="preset-btn" onclick="applyPreset('learnharness', this)">
+            🎓 LearnHarness
+            <span>Контекст 24K · Q8 KV</span>
+          </button>
+          <button class="preset-btn" onclick="applyPreset('creative_ru', this)">
+            ✒️ Проза и стихи
+            <span>Temp 0.88 · богатый слог</span>
+          </button>
+          <button class="preset-btn" onclick="applyPreset('low_vram', this)">
+            🛡️ Эконом / 4 ГБ
+            <span>Мягкий буфер VRAM</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>Модели (.gguf)</span>
+          <button class="btn btn-secondary" style="padding:3px 8px;font-size:11px" onclick="scanModels()">Найти</button>
+        </div>
+        <div class="field">
+          <input type="text" id="scanDirInput" placeholder="Папка с .gguf (например D:\Models)" />
+        </div>
+        <div class="model-list" id="modelList"></div>
+        <div class="field">
+          <div class="field-row"><span>Путь к файлу .gguf</span></div>
+          <input type="text" id="modelPathInput" placeholder="Путь к модели .gguf" />
+        </div>
+        <div style="display:flex;gap:7px">
+          <button class="btn btn-primary" style="flex:1" id="loadBtn" onclick="loadModel()">Загрузить модель</button>
+          <button class="btn btn-danger" onclick="unloadModel()" title="Выгрузить">✕</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span>Параллельный конвейер</span></div>
+
+        <div class="field">
+          <div class="field-row">
+            <span>Слои Attention на GPU (`ngl`)</span>
+            <span class="field-val" id="nglVal">99 (все плотные)</span>
+          </div>
+          <input type="range" id="nglInput" min="0" max="99" value="99" oninput="syncLabels()" />
+        </div>
+
+        <div class="field">
+          <div class="field-row">
+            <span>Горячий кэш экспертов в VRAM</span>
+            <span class="field-val" id="vramVal">2800 MiB</span>
+          </div>
+          <input type="range" id="vramInput" min="0" max="6144" step="128" value="2800" oninput="syncLabels()" />
+        </div>
+
+        <div class="field">
+          <div class="field-row">
+            <span>Доля промахов на CPU параллельно</span>
+            <span class="field-val" id="shareVal">92%</span>
+          </div>
+          <input type="range" id="shareInput" min="0" max="100" step="2" value="92" oninput="syncLabels()" />
+        </div>
+
+        <div class="field">
+          <div class="field-row">
+            <span>Бюджет арены экспертов в DDR4</span>
+            <span class="field-val" id="ramVal">6144 MiB</span>
+          </div>
+          <input type="range" id="ramInput" min="256" max="12288" step="256" value="6144" oninput="syncLabels()" />
+        </div>
+
+        <div class="field">
+          <div class="field-row">
+            <span>Контекст (`n_ctx`) / Потоки CPU</span>
+            <span class="field-val" id="ctxVal">24576 / 8 потоков</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px">
+            <select id="ctxInput" onchange="syncLabels()">
+              <option value="4096">4 096</option>
+              <option value="8192">8 192</option>
+              <option value="16384">16 384</option>
+              <option value="24576" selected>24 576 (LearnHarness)</option>
+              <option value="32768">32 768</option>
+            </select>
+            <input type="number" id="threadsInput" min="1" max="32" value="8" oninput="syncLabels()" />
+          </div>
+        </div>
+
+        <label class="check-row">
+          <input type="checkbox" id="autoSplitCheck" checked />
+          <span>Защита от вылета на ≥2 GPU слоях (авто-разделение 3D экспертов)</span>
+        </label>
+        <label class="check-row">
+          <input type="checkbox" id="releaseMmapCheck" checked />
+          <span>Стриминг SSD + сброс блокировки NTFS (`release-mmap`)</span>
+        </label>
+      </div>
+    </aside>
+
+    <!-- CENTER PANE: CHAT & LEARNHARNESS BRIDGE -->
+    <main class="center-pane">
+      <header class="topbar">
+        <div class="status-pill">
+          <span class="dot" id="statusDot"></span>
+          <span id="statusText">Подключение к серверу DualMoE...</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-secondary" onclick="toggleModal(true)">🔗 Подключить LearnHarness</button>
+          <button class="btn btn-secondary" onclick="clearChat()">Очистить чат</button>
+          <button class="btn btn-danger" id="stopBtn" style="display:none" onclick="stopGeneration()">Стоп</button>
+        </div>
+      </header>
+
+      <section class="chat-scroll" id="chatScroll">
+        <div class="empty-hero" id="emptyHero">
+          <h2>Гибридный конвейер DualMoE</h2>
+          <p>
+            В отличие от обычного последовательного оффлоада, DualMoE держит <b>Attention + горячий банк экспертов</b> в видеопамяти (Vulkan GPU), а промахи кэша считает <b>одновременно на ядрах Ryzen в DDR4</b> со стримингом холодных слоёв с SSD — без вылетов при включении 2 и более GPU-слоёв.
+          </p>
+          <div class="pipeline-diagram">
+            <div class="pipe-step">
+              <strong style="color:var(--gpu)">1. Уровень VRAM (GPU)</strong>
+              <span>Attention, KV-кэш и ClassLRU-банк самых частых экспертов без копирования по PCIe.</span>
+            </div>
+            <div class="pipe-step">
+              <strong style="color:var(--cpu)">2. Уровень DDR4 (CPU)</strong>
+              <span>Ядра AVX2 считают промахи кэша в ту же миллисекунду, пока видеокарта считает хиты.</span>
+            </div>
+            <div class="pipe-step">
+              <strong style="color:var(--ssd)">3. Уровень SSD Arena</strong>
+              <span>Виртуальная арена подкачивает только двойные промахи без блокировки NTFS mmap.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="composer-wrap">
+        <div class="composer-box">
+          <details style="font-size:12px;color:var(--muted)">
+            <summary style="cursor:pointer;user-select:none">Системная инструкция и параметры генерации (Temp: <span id="tempLbl">0.70</span>)</summary>
+            <div style="display:grid;grid-template-columns:1fr 180px;gap:10px;margin-top:8px">
+              <input type="text" id="sysPromptInput" value="Ты умный, точный локальный ИИ-помощник и наставник. Отвечай ясно, по делу и на хорошем русском языке." />
+              <div style="display:flex;align-items:center;gap:6px">
+                <span>Temp</span>
+                <input type="range" id="tempInput" min="0" max="1.4" step="0.02" value="0.70" oninput="document.getElementById('tempLbl').textContent=Number(this.value).toFixed(2)" />
+              </div>
+            </div>
+          </details>
+          <div class="composer-row">
+            <textarea id="chatInput" placeholder="Напиши вопрос, попроси разобрать код или сочинить стихотворение... (Enter — отправить, Shift+Enter — перенос)"></textarea>
+            <button class="btn btn-primary" style="height:50px;padding:0 20px" onclick="sendMessage()">Отправить</button>
+          </div>
+        </div>
+      </footer>
+    </main>
+
+    <!-- RIGHT PANE: LIVE PARALLEL TELEMETRY -->
+    <aside class="pane right-pane">
+      <div class="card">
+        <div class="card-title">
+          <span>Скорость в реальном времени</span>
+          <span class="tag" id="archBadge">—</span>
+        </div>
+        <div class="metric-grid">
+          <div class="metric-tile">
+            <div class="metric-label">Генерация (Decode)</div>
+            <div class="metric-value" style="color:var(--gpu)"><span id="mDecode">0.0</span> <span class="metric-unit">tok/s</span></div>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-label">Чтение промпта</div>
+            <div class="metric-value" style="color:var(--cpu)"><span id="mPrefill">0.0</span> <span class="metric-unit">tok/s</span></div>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-label">Первый токен (TTFT)</div>
+            <div class="metric-value"><span id="mTtft">0</span> <span class="metric-unit">мс</span></div>
+          </div>
+          <div class="metric-tile">
+            <div class="metric-label">Занято контекста KV</div>
+            <div class="metric-value"><span id="mKv">0</span> <span class="metric-unit" id="mKvMax">/ 24k</span></div>
+          </div>
+        </div>
+        <svg id="sparkSvg" width="100%" height="46" viewBox="0 0 280 46" style="background:var(--bg-1);border-radius:9px;border:1px solid var(--line)">
+          <polyline id="sparkLine" fill="none" stroke="#38bdf8" stroke-width="2" points="0,42 280,42" />
+        </svg>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span>Распределение экспертов MoE</span></div>
+        <div class="split-bar">
+          <div class="seg-gpu" id="barGpu" style="width:50%"></div>
+          <div class="seg-cpu" id="barCpu" style="width:35%"></div>
+          <div class="seg-ssd" id="barSsd" style="width:15%"></div>
+        </div>
+        <div class="legend-list">
+          <div class="legend-item">
+            <div class="legend-left"><span class="swatch" style="background:var(--gpu)"></span><span>GPU VRAM кэш-хиты</span></div>
+            <strong id="statGpuHits">0 (0%)</strong>
+          </div>
+          <div class="legend-item">
+            <div class="legend-left"><span class="swatch" style="background:var(--cpu)"></span><span>Параллельный счёт CPU</span></div>
+            <strong id="statCpuPar">0 (0%)</strong>
+          </div>
+          <div class="legend-item">
+            <div class="legend-left"><span class="swatch" style="background:var(--ssd)"></span><span>Подкачки с SSD (холодные)</span></div>
+            <strong id="statSsdReads">0</strong>
+          </div>
+          <div class="legend-item">
+            <div class="legend-left"><span>Скорость потока SSD</span></div>
+            <strong id="statSsdBw" style="color:var(--ssd)">0.0 MB/s</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span>Память арены DDR4 и VRAM</span></div>
+        <div class="field">
+          <div class="field-row">
+            <span>Арена экспертов DDR4</span>
+            <span class="field-val" id="ramUsageLbl">0 / 6144 MiB</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="ramBar" style="width:0%"></div>
+          </div>
+        </div>
+        <div class="legend-list" style="margin-top:4px">
+          <div class="legend-item"><span>Кэш экспертов в VRAM</span><strong id="vramBudgetLbl">0 MiB</strong></div>
+          <div class="legend-item"><span>Плотные веса (Anon RAM)</span><strong id="denseAnonLbl">0 MiB</strong></div>
+          <div class="legend-item"><span>Сброс файлового mmap</span><strong id="mmapLbl">—</strong></div>
+        </div>
+      </div>
+
+      <div class="safety-note" id="safetyCard">
+        <b>Анти-вылет GPU активен:</b> при включении 2..99 GPU-слоёв в VRAM помещаются только Attention, роутер, KV-кэш и фиксированный банк горячих экспертов. Холодные 3D-тензоры экспертов автоматически остаются в виртуальной арене DDR4/SSD.
+      </div>
+    </aside>
+  </div>
+
+  <!-- LEARNHARNESS MODAL -->
+  <div class="modal-backdrop" id="lhModal" onclick="if(event.target===this)toggleModal(false)">
+    <div class="modal">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3 style="font-size:16px">Подключение DualMoE к LearnHarness</h3>
+        <button class="btn btn-secondary" style="padding:4px 9px" onclick="toggleModal(false)">✕</button>
+      </div>
+      <p style="font-size:12.5px;color:var(--muted);line-height:1.5">
+        DualMoE поднимает полностью совместимый OpenAI API на том же порту. В настройках <b>LearnHarness → Settings → Custom Provider</b> укажи эти значения:
+      </p>
+      <div class="code-box" id="lhSnippet">Provider:       Custom (OpenAI-compatible)
+Base URL:       http://127.0.0.1:8090/v1
+API Key:        dualmoe-local
+Model ID:       dualmoe-default
+Context Budget: 24576
+Max Output:     2048
+Reasoning:      Off
+Knowledge Graph: Off (экономит ~50% вызовов)</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn btn-primary" onclick="navigator.clipboard.writeText(document.getElementById('lhSnippet').innerText)">Скопировать настройки</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const chatHistory = [];
+    const tpsSamples = [];
+    let isGenerating = false;
+
+    function syncLabels() {
+      const ngl = Number(document.getElementById('nglInput').value);
+      document.getElementById('nglVal').textContent = ngl === 0 ? '0 (только CPU)' : (ngl >= 99 ? '99 (все плотные)' : ngl + ' сл.');
+      document.getElementById('vramVal').textContent = document.getElementById('vramInput').value + ' MiB';
+      document.getElementById('shareVal').textContent = document.getElementById('shareInput').value + '%';
+      document.getElementById('ramVal').textContent = document.getElementById('ramInput').value + ' MiB';
+      document.getElementById('ctxVal').textContent =
+        document.getElementById('ctxInput').value + ' / ' + document.getElementById('threadsInput').value + ' пот.';
+    }
+
+    function applyPreset(name, btnEl) {
+      document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+      if (btnEl) btnEl.classList.add('active');
+      if (name === 'rx580_parallel') {
+        document.getElementById('nglInput').value = 99;
+        document.getElementById('vramInput').value = 2800;
+        document.getElementById('shareInput').value = 92;
+        document.getElementById('ramInput').value = 6144;
+        document.getElementById('ctxInput').value = '24576';
+        document.getElementById('threadsInput').value = 8;
+        document.getElementById('tempInput').value = 0.70;
+      } else if (name === 'learnharness') {
+        document.getElementById('nglInput').value = 99;
+        document.getElementById('vramInput').value = 2560;
+        document.getElementById('shareInput').value = 94;
+        document.getElementById('ramInput').value = 6144;
+        document.getElementById('ctxInput').value = '24576';
+        document.getElementById('tempInput').value = 0.55;
+      } else if (name === 'creative_ru') {
+        document.getElementById('nglInput').value = 99;
+        document.getElementById('vramInput').value = 3072;
+        document.getElementById('shareInput').value = 90;
+        document.getElementById('ramInput').value = 6400;
+        document.getElementById('ctxInput').value = '16384';
+        document.getElementById('tempInput').value = 0.88;
+        document.getElementById('sysPromptInput').value =
+          'Ты талантливый русский писатель и поэт. Пиши живым, образным русским языком без канцелярита и англицизмов, строго выдерживай ритм и размер стиха.';
+      } else if (name === 'low_vram') {
+        document.getElementById('nglInput').value = 20;
+        document.getElementById('vramInput').value = 1024;
+        document.getElementById('shareInput').value = 96;
+        document.getElementById('ramInput').value = 5632;
+        document.getElementById('ctxInput').value = '16384';
+      }
+      document.getElementById('tempLbl').textContent = Number(document.getElementById('tempInput').value).toFixed(2);
+      syncLabels();
+    }
+
+    function toggleModal(open) {
+      document.getElementById('lhModal').classList.toggle('open', open);
+    }
+
+    async function fetchStatus() {
+      try {
+        const r = await fetch('/api/status');
+        const data = await r.json();
+        if (data.devices && data.devices.length) {
+          const gpu = data.devices.find(d => d.is_gpu);
+          document.getElementById('devBadge').textContent = gpu
+            ? `${gpu.backend}: ${gpu.total_mb} MiB`
+            : `CPU режим (${data.devices[0].name})`;
+        }
+        if (data.config && data.config.model_path && !document.getElementById('modelPathInput').value) {
+          document.getElementById('modelPathInput').value = data.config.model_path;
+        }
+        if (data.default_scan_dir && !document.getElementById('scanDirInput').value) {
+          document.getElementById('scanDirInput').value = data.default_scan_dir;
+          scanModels();
+        }
+        updateTelemetryUI(data.telemetry);
+      } catch (e) {
+        document.getElementById('statusText').textContent = 'Ожидание ответа сервера...';
+      }
+    }
+
+    async function scanModels() {
+      const dir = document.getElementById('scanDirInput').value.trim();
+      const r = await fetch('/api/models/scan?dir=' + encodeURIComponent(dir));
+      const data = await r.json();
+      const box = document.getElementById('modelList');
+      box.innerHTML = '';
+      if (!data.models || !data.models.length) {
+        box.innerHTML = '<div style="font-size:11.5px;color:var(--muted)">Файлы .gguf в указанной папке не найдены</div>';
+        return;
+      }
+      data.models.forEach(m => {
+        const el = document.createElement('div');
+        el.className = 'model-item';
+        const sizeGb = (m.file_size_bytes / (1024 ** 3)).toFixed(2);
+        el.innerHTML = `
+          <div class="model-item-name">${escapeHtml(m.filename)}</div>
+          <div class="model-item-meta">
+            <span class="tag">${escapeHtml(m.arch || 'gguf')}</span>
+            ${m.is_moe ? `<span class="tag tag-moe">MoE ${m.n_expert}×top${m.n_expert_used}</span>` : '<span class="tag">Dense</span>'}
+            <span>${sizeGb} ГБ</span>
+          </div>`;
+        el.onclick = () => {
+          document.querySelectorAll('.model-item').forEach(x => x.classList.remove('selected'));
+          el.classList.add('selected');
+          document.getElementById('modelPathInput').value = m.path;
+        };
+        box.appendChild(el);
+      });
+    }
+
+    async function loadModel() {
+      const path = document.getElementById('modelPathInput').value.trim();
+      if (!path) return alert('Укажи путь к файлу модели .gguf');
+      const btn = document.getElementById('loadBtn');
+      btn.disabled = true;
+      btn.textContent = 'Загрузка...';
+      try {
+        const payload = {
+          model_path: path,
+          n_gpu_layers: Number(document.getElementById('nglInput').value),
+          vram_cache_mb: Number(document.getElementById('vramInput').value),
+          cpu_share: Number(document.getElementById('shareInput').value) / 100.0,
+          ram_cache_mb: Number(document.getElementById('ramInput').value),
+          n_ctx: Number(document.getElementById('ctxInput').value),
+          n_threads: Number(document.getElementById('threadsInput').value),
+          auto_split_experts: document.getElementById('autoSplitCheck').checked,
+          moe_stream: document.getElementById('releaseMmapCheck').checked,
+          release_mmap: document.getElementById('releaseMmapCheck').checked,
+        };
+        const r = await fetch('/api/model/load', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json();
+        if (!data.ok) alert('Ошибка загрузки: ' + (data.error || 'неизвестно'));
+        else updateTelemetryUI(data.telemetry);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Загрузить модель';
+      }
+    }
+
+    async function unloadModel() {
+      await fetch('/api/model/unload', { method: 'POST' });
+      fetchStatus();
+    }
+
+    async function stopGeneration() {
+      await fetch('/api/cancel', { method: 'POST' });
+    }
+
+    function clearChat() {
+      chatHistory.length = 0;
+      const sc = document.getElementById('chatScroll');
+      sc.innerHTML = '';
+      document.getElementById('emptyHero')?.remove();
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    }
+
+    function appendMessage(role, text) {
+      const hero = document.getElementById('emptyHero');
+      if (hero) hero.style.display = 'none';
+      const sc = document.getElementById('chatScroll');
+      const wrap = document.createElement('div');
+      wrap.className = 'msg ' + role;
+      const roleLbl = document.createElement('div');
+      roleLbl.className = 'msg-role';
+      roleLbl.textContent = role === 'user' ? 'Ты' : 'DualMoE';
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble';
+      bubble.textContent = text;
+      wrap.appendChild(roleLbl);
+      wrap.appendChild(bubble);
+      sc.appendChild(wrap);
+      sc.scrollTop = sc.scrollHeight;
+      return bubble;
+    }
+
+    async function sendMessage() {
+      if (isGenerating) return;
+      const inp = document.getElementById('chatInput');
+      const text = inp.value.trim();
+      if (!text) return;
+      inp.value = '';
+
+      appendMessage('user', text);
+      chatHistory.push({ role: 'user', content: text });
+      const assistantBubble = appendMessage('assistant', '...');
+
+      isGenerating = true;
+      document.getElementById('stopBtn').style.display = 'inline-flex';
+
+      const sys = document.getElementById('sysPromptInput').value.trim();
+      const messages = sys ? [{ role: 'system', content: sys }, ...chatHistory] : [...chatHistory];
+
+      try {
+        const res = await fetch('/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'dualmoe-default',
+            stream: true,
+            temperature: Number(document.getElementById('tempInput').value),
+            messages,
+          }),
+        });
+
+        if (!res.ok) {
+          const errJson = await res.json().catch(() => ({}));
+          assistantBubble.textContent = 'Ошибка: ' + (errJson.error?.message || res.statusText);
+          chatHistory.pop();
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fullText = '';
+        assistantBubble.textContent = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const raw of lines) {
+            const line = raw.trim();
+            if (!line.startsWith('data:')) continue;
+            const payload = line.slice(5).trim();
+            if (payload === '[DONE]') break;
+            try {
+              const j = JSON.parse(payload);
+              const delta = j.choices?.[0]?.delta?.content || '';
+              if (delta) {
+                fullText += delta;
+                assistantBubble.textContent = fullText;
+                const sc = document.getElementById('chatScroll');
+                sc.scrollTop = sc.scrollHeight;
+              }
+            } catch (_) {}
+          }
+        }
+        chatHistory.push({ role: 'assistant', content: fullText });
+      } catch (e) {
+        assistantBubble.textContent = 'Ошибка соединения: ' + e.message;
+      } finally {
+        isGenerating = false;
+        document.getElementById('stopBtn').style.display = 'none';
+      }
+    }
+
+    function updateTelemetryUI(t) {
+      if (!t) return;
+      const dot = document.getElementById('statusDot');
+      dot.className = 'dot ' + (t.generating ? 'busy' : (t.model_loaded ? 'ready' : ''));
+      document.getElementById('statusText').textContent = t.model_loaded
+        ? `${t.model_name || 'Модель'} — ${t.status_text}`
+        : t.status_text;
+      document.getElementById('archBadge').textContent = t.model_arch || '—';
+
+      document.getElementById('mDecode').textContent = Number(t.decode_tps || 0).toFixed(1);
+      document.getElementById('mPrefill').textContent = Number(t.prefill_tps || 0).toFixed(1);
+      document.getElementById('mTtft').textContent = Math.round(t.ttft_ms || 0);
+      document.getElementById('mKv').textContent = t.kv_used_tokens || 0;
+      document.getElementById('mKvMax').textContent = '/ ' + Math.round((t.kv_max_tokens || 24576) / 1024) + 'k';
+
+      if (t.decode_tps > 0) {
+        tpsSamples.push(Number(t.decode_tps));
+        if (tpsSamples.length > 40) tpsSamples.shift();
+        const maxV = Math.max(10, ...tpsSamples);
+        const pts = tpsSamples.map((v, i) => {
+          const x = (i / Math.max(1, tpsSamples.length - 1)) * 280;
+          const y = 42 - (v / maxV) * 36;
+          return `${x.toFixed(1)},${y.toFixed(1)}`;
+        }).join(' ');
+        document.getElementById('sparkLine').setAttribute('points', pts);
+      }
+
+      const gpuHits = Number(t.gpu_expert_hits || 0);
+      const cpuPar  = Number(t.cpu_parallel_experts || 0);
+      const ssdRd   = Number(t.ssd_expert_reads || 0);
+      const totalEx = Math.max(1, gpuHits + cpuPar);
+      const gpuPct  = Math.round((gpuHits / totalEx) * 100);
+      const cpuPct  = 100 - gpuPct;
+      const ssdPct  = Math.min(35, Math.round((ssdRd / Math.max(1, gpuHits + cpuPar + ssdRd)) * 100));
+
+      document.getElementById('barGpu').style.width = Math.max(4, gpuPct - ssdPct / 2) + '%';
+      document.getElementById('barCpu').style.width = Math.max(4, cpuPct - ssdPct / 2) + '%';
+      document.getElementById('barSsd').style.width = ssdPct + '%';
+
+      document.getElementById('statGpuHits').textContent = `${gpuHits} (${gpuPct}%)`;
+      document.getElementById('statCpuPar').textContent = `${cpuPar} (${cpuPct}%)`;
+      document.getElementById('statSsdReads').textContent = `${ssdRd}`;
+      document.getElementById('statSsdBw').textContent = `${Number(t.ssd_bandwidth_mbs || 0).toFixed(1)} MB/s`;
+
+      const usedRam = Number(t.ram_arena_used_mb || 0);
+      const budRam  = Math.max(1, Number(t.ram_arena_budget_mb || 6144));
+      document.getElementById('ramUsageLbl').textContent = `${usedRam} / ${budRam} MiB`;
+      document.getElementById('ramBar').style.width = Math.min(100, (usedRam / budRam) * 100).toFixed(1) + '%';
+      document.getElementById('vramBudgetLbl').textContent = `${t.vram_cache_budget_mb || 0} MiB`;
+      document.getElementById('denseAnonLbl').textContent = `${t.dense_anon_mb || 0} MiB`;
+      document.getElementById('mmapLbl').textContent = t.mmap_released ? 'Снят (прямое I/O)' : 'Стандартный';
+    }
+
+    function connectTelemetryStream() {
+      const es = new EventSource('/api/telemetry/stream');
+      es.onmessage = ev => {
+        try { updateTelemetryUI(JSON.parse(ev.data)); } catch (_) {}
+      };
+      es.onerror = () => {
+        es.close();
+        setTimeout(connectTelemetryStream, 2000);
+      };
+    }
+
+    document.getElementById('chatInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    syncLabels();
+    fetchStatus();
+    connectTelemetryStream();
+  </script>
+</body>
+</html>

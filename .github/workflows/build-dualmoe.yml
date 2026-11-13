@@ -1,0 +1,161 @@
+name: Build & Publish DualMoE Release
+
+on:
+  push:
+    branches:
+      - 'arena/**'
+      - 'main'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux-x64:
+    name: Linux x64 Build & Byte-Identity Gates
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build & test dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ninja-build
+          pip install gguf numpy
+
+      - name: Clone & patch llama.cpp
+        run: |
+          git init /tmp/llama-cpp
+          git -C /tmp/llama-cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C /tmp/llama-cpp fetch --depth 1 origin 31953bcf74ba489a8bbb0c936c5fcf24fcf9485c
+          git -C /tmp/llama-cpp checkout FETCH_HEAD
+          git -C /tmp/llama-cpp apply "${GITHUB_WORKSPACE}/dualmoe/patches/0001-dualmoe-parallel-seam.patch"
+
+      - name: Configure & build DualMoE
+        run: |
+          cmake -S dualmoe -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_SOURCE_DIR=/tmp/llama-cpp \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_AVX2=ON \
+            -DGGML_FMA=ON \
+            -DGGML_F16C=ON \
+            -DGGML_OPENMP=OFF
+          cmake --build build -j $(nproc)
+
+      - name: Run MoE Streaming & Byte-Identity Gates
+        run: |
+          python3 dualmoe/scripts/make_tiny_moe_gguf.py build/tiny_moe.gguf
+          ./build/dualmoe-tests build/tiny_moe.gguf
+
+      - name: Package Linux Release Archive
+        run: |
+          mkdir -p pkg/DualMoE-v0.1.0-linux-x86_64 dist
+          cp build/dualmoe-server build/dualmoe-cli dualmoe/README.md pkg/DualMoE-v0.1.0-linux-x86_64/
+          tar -czvf dist/DualMoE-v0.1.0-linux-x86_64.tar.gz -C pkg DualMoE-v0.1.0-linux-x86_64
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DualMoE-v0.1.0-linux-x86_64
+          path: dist/DualMoE-v0.1.0-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  windows-vulkan-x64:
+    name: Windows x64 + Vulkan (Ryzen AVX2 + Radeon RX 580)
+    runs-on: windows-2025
+    env:
+      VULKAN_VERSION: 1.4.357.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          curl.exe -sSL -o "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
+          Start-Process -FilePath "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" -ArgumentList "--accept-licenses","--default-answer","--confirm-command","install" -Wait -NoNewWindow
+          if (-not (Test-Path "C:\VulkanSDK\${env:VULKAN_VERSION}\Bin")) {
+            throw "Vulkan SDK installation directory not found!"
+          }
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\Bin"
+
+      - name: Clone & patch llama.cpp
+        shell: bash
+        run: |
+          git init C:/llama-cpp
+          git -C C:/llama-cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C C:/llama-cpp fetch --depth 1 origin 31953bcf74ba489a8bbb0c936c5fcf24fcf9485c
+          git -C C:/llama-cpp checkout FETCH_HEAD
+          git -C C:/llama-cpp apply --ignore-whitespace "${GITHUB_WORKSPACE}/dualmoe/patches/0001-dualmoe-parallel-seam.patch"
+
+      - name: Build DualMoE Server & CLI (Vulkan + AVX2/FMA)
+        shell: pwsh
+        run: |
+          cmake -S dualmoe -B build-win -A x64 `
+            -DLLAMA_SOURCE_DIR=C:/llama-cpp `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DGGML_VULKAN=ON `
+            -DGGML_NATIVE=OFF `
+            -DGGML_AVX2=ON `
+            -DGGML_FMA=ON `
+            -DGGML_F16C=ON `
+            -DGGML_OPENMP=OFF `
+            -DDUALMOE_BUILD_TESTS=OFF
+          cmake --build build-win --config Release -j ${env:NUMBER_OF_PROCESSORS}
+
+      - name: Package Portable Windows Archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path pkg/DualMoE-v0.1.0-win-vulkan-x64, dist | Out-Null
+          Get-ChildItem -Path build-win -Recurse -Include dualmoe-server.exe, dualmoe-cli.exe, *.dll | Copy-Item -Destination pkg/DualMoE-v0.1.0-win-vulkan-x64 -Force
+          Copy-Item dualmoe/scripts/start-dualmoe.bat pkg/DualMoE-v0.1.0-win-vulkan-x64/ -Force
+          Copy-Item dualmoe/README.md pkg/DualMoE-v0.1.0-win-vulkan-x64/ -Force
+          if (-not (Test-Path "pkg/DualMoE-v0.1.0-win-vulkan-x64/dualmoe-server.exe")) {
+            throw "dualmoe-server.exe was not found in package directory!"
+          }
+          7z a "dist/DualMoE-v0.1.0-win-vulkan-x64.zip" ".\pkg\DualMoE-v0.1.0-win-vulkan-x64\*"
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DualMoE-v0.1.0-win-vulkan-x64
+          path: dist/DualMoE-v0.1.0-win-vulkan-x64.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release (dualmoe-v0.1.0)
+    needs: [linux-x64, windows-vulkan-x64]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Built Archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create or Update GitHub Release dualmoe-v0.1.0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="dualmoe-v0.1.0"
+          TITLE="DualMoE v0.1.0 — Параллельный MoE-движок (GPU Vulkan + CPU AVX2 + SSD Arena)"
+          ls -lh dist/
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/* --clobber
+            gh release edit "${TAG}" --title "${TITLE}" --notes-file dualmoe/README.md --latest
+          else
+            gh release create "${TAG}" dist/* \
+              --target "${GITHUB_SHA}" \
+              --title "${TITLE}" \
+              --notes-file dualmoe/README.md \
+              --latest
+          fi
