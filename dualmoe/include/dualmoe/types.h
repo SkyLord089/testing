@@ -22,34 +22,37 @@ struct SamplingParams {
 struct EngineConfig {
     std::string model_path;
 
-    // GPU + CPU parallel hybrid controls
-    int32_t  n_gpu_layers       = 99;     // Safe for 2..99: cold experts auto-routed to RAM/SSD arena
-    size_t   vram_cache_mb      = 2400;   // Hot expert ClassLRU bank in GPU VRAM (MiB) — auto-clamped to free VRAM
-    float    cpu_share          = 0.92f;  // Fraction of VRAM cache misses computed in parallel on CPU (0..1)
-    bool     auto_split_experts = true;   // Prevents >=2 GPU layer crashes by keeping cold 3D experts off VRAM
+    // GPU + CPU parallel hybrid & Zero-HDD VRAM <-> RAM engine controls
+    int32_t  n_gpu_layers         = 99;     // Safe for 2..99: cold experts auto-routed to RAM arena
+    size_t   vram_cache_mb        = 4600;   // Hot expert ClassLRU bank in GPU VRAM (MiB) — auto-clamped to ~90% free VRAM
+    float    cpu_share            = 0.85f;  // Initial fraction of VRAM misses computed in parallel on CPU (0..1)
+    bool     auto_split_experts   = true;   // Prevents >=2 GPU layer crashes by keeping cold 3D experts off VRAM
+    bool     zero_hdd_mode        = true;   // Sequential 1-pass HDD preload into VRAM + RAM -> 0 disk reads in chat
+    bool     auto_balance_compute = true;   // Live GPU || CPU dynamic load balancer + hot/cold swap hysteresis
+    float    swap_hysteresis      = 1.22f;  // CRF threshold multiplier before swapping hot RAM <-> cold VRAM
 
-    // Host DDR4 + SSD streaming controls
-    bool     moe_stream         = true;   // Virtual-arena on-demand expert streaming + RAM budget cap
-    size_t   ram_cache_mb       = 5632;   // Committed DDR4 budget for warm/cold streamed experts (MiB)
+    // Host DDR4 + fallback disk controls
+    bool     moe_stream           = true;   // Virtual-arena backing for MoE 3D experts (supports disjoint VRAM+RAM)
+    size_t   ram_cache_mb         = 9728;   // Committed DDR4 budget for RAM-resident experts (auto-clamped to safe RAM)
 #if defined(_WIN32)
-    bool     dense_anon         = false;  // Keep false on Windows 16 GB RAM to preserve commit headroom
-    bool     release_mmap       = false;  // Safe default on Windows: preserves Vulkan driver mappings
+    bool     dense_anon           = false;  // Keep false on Windows 16 GB RAM to preserve commit headroom
+    bool     release_mmap         = false;  // Safe default on Windows: preserves Vulkan driver mappings
 #else
-    bool     dense_anon         = true;   // Rehome host dense weights into anonymous RAM
-    bool     release_mmap       = true;   // Drop OS file mapping on POSIX
+    bool     dense_anon           = true;   // Rehome host dense weights into anonymous RAM
+    bool     release_mmap         = true;   // Drop OS file mapping on POSIX
 #endif
-    int32_t  io_lanes           = 4;      // Background positioned SSD reader threads
-    int32_t  prefetch_ahead     = 1;      // Prefetch previous-token expert route for layer il+1 on CPU path
+    int32_t  io_lanes             = 1;      // 1 = HDD-safe sequential reader (no head thrashing); 4 = NVMe SSD
+    int32_t  prefetch_ahead       = 1;      // Prefetch previous-token expert route for layer il+1 on CPU path
 
     // Context & batch sizing (tuned for RX 580 8 GB VRAM + 16 GB RAM + LearnHarness)
-    uint32_t n_ctx              = 24576;
-    uint32_t n_batch            = 512;
-    uint32_t n_ubatch           = 32;     // Must stay <= 32 (llama_moe_cache::max_batch) so 100% microbatches use cache
-    int32_t  n_threads          = 8;      // Decode CPU threads (physical cores on Ryzen 7 5700X)
-    int32_t  n_threads_batch    = 14;     // Prefill CPU threads
-    std::string kv_type_k       = "q8_0"; // f16 | q8_0 | q4_0
-    std::string kv_type_v       = "q8_0"; // Auto-falls back to f16 if backend lacks quantized-V FlashAttn
-    int32_t  n_expert_used_override = 0;  // 0 = model default
+    uint32_t n_ctx                = 16384;
+    uint32_t n_batch              = 512;
+    uint32_t n_ubatch             = 32;     // Must stay <= 32 (llama_moe_cache::max_batch) so 100% microbatches use cache
+    int32_t  n_threads            = 8;      // Decode CPU threads (physical cores on Ryzen 7 5700X)
+    int32_t  n_threads_batch      = 14;     // Prefill CPU threads
+    std::string kv_type_k         = "q8_0"; // f16 | q8_0 | q4_0
+    std::string kv_type_v         = "q8_0"; // Auto-falls back to f16 if backend lacks quantized-V FlashAttn
+    int32_t  n_expert_used_override = 0;    // 0 = model default
 
     SamplingParams sampling;
 };
@@ -150,52 +153,61 @@ struct LoadDiagnosticsSnapshot {
 };
 
 struct TelemetrySnapshot {
-    bool        model_loaded          = false;
-    bool        loading               = false;
-    bool        generating            = false;
+    bool        model_loaded            = false;
+    bool        loading                 = false;
+    bool        generating              = false;
     std::string model_name;
     std::string model_arch;
-    std::string status_text           = "Готов к загрузке модели";
-    int32_t     load_progress_pct     = 0;
-    int32_t     load_phase_index      = 0;
-    int32_t     load_phase_total      = 8;
+    std::string status_text             = "Готов к загрузке модели";
+    int32_t     load_progress_pct       = 0;
+    int32_t     load_phase_index        = 0;
+    int32_t     load_phase_total        = 8;
 
     // Live throughput
-    double      prefill_tps           = 0.0;
-    double      decode_tps            = 0.0;
-    double      ttft_ms               = 0.0;
-    uint64_t    prompt_tokens         = 0;
-    uint64_t    generated_tokens      = 0;
-    uint32_t    kv_used_tokens        = 0;
-    uint32_t    kv_max_tokens         = 0;
+    double      prefill_tps             = 0.0;
+    double      decode_tps              = 0.0;
+    double      ttft_ms                 = 0.0;
+    uint64_t    prompt_tokens           = 0;
+    uint64_t    generated_tokens        = 0;
+    uint32_t    kv_used_tokens          = 0;
+    uint32_t    kv_max_tokens           = 0;
 
-    // 3-Tier Parallel Execution Counters (GPU ∥ CPU ∥ SSD)
-    uint64_t    gpu_expert_hits       = 0;  // Computed on GPU from VRAM ClassLRU bank (0 PCIe, 0 SSD)
-    uint64_t    gpu_expert_fills      = 0;  // Promoted & uploaded to GPU VRAM bank
-    uint64_t    cpu_parallel_experts  = 0;  // Computed on CPU concurrently with GPU (or CPU-streamed)
-    uint64_t    ram_cache_hits        = 0;  // Served directly from committed DDR4 arena
-    uint64_t    ssd_expert_reads      = 0;  // Cold misses read from SSD via multi-lane I/O
-    uint64_t    ssd_bytes_read        = 0;
-    uint64_t    vram_upload_bytes     = 0;
-    double      ssd_bandwidth_mbs     = 0.0;
+    // Dual-Compute & VRAM <-> RAM Swap Counters
+    uint64_t    gpu_expert_hits         = 0;  // Computed on GPU from VRAM ClassLRU bank (0 PCIe, 0 HDD)
+    uint64_t    gpu_expert_fills        = 0;  // Hot promotions uploaded RAM -> VRAM
+    uint64_t    cpu_parallel_experts    = 0;  // Computed on Ryzen AVX2 concurrently from DDR4 RAM
+    uint64_t    ram_cache_hits          = 0;  // Served directly from committed DDR4 arena (0 HDD)
+    uint64_t    ram_to_vram_swaps       = 0;  // Hot RAM -> VRAM promotions
+    uint64_t    vram_to_ram_swaps       = 0;  // Cold VRAM -> RAM evictions
+    uint64_t    ssd_expert_reads        = 0;  // Runtime disk misses AFTER preload (0 in Zero-HDD mode!)
+    uint64_t    ssd_bytes_read          = 0;
+    uint64_t    vram_upload_bytes       = 0;
+    double      ssd_bandwidth_mbs       = 0.0;
+    double      preload_bandwidth_mbs   = 0.0;
 
-    // Memory Residency
-    uint64_t    vram_cache_budget_mb  = 0;
-    uint64_t    ram_arena_used_mb     = 0;
-    uint64_t    ram_arena_budget_mb   = 0;
-    uint64_t    dense_anon_mb         = 0;
-    uint64_t    os_ram_avail_mb       = 0;
-    uint64_t    os_commit_avail_mb    = 0;
-    uint64_t    gpu_vram_free_mb      = 0;
-    uint64_t    gpu_vram_total_mb     = 0;
-    uint64_t    arena_commit_failures = 0;
+    // Silicon Residency (VRAM + DDR4 RAM)
+    uint64_t    vram_cache_budget_mb    = 0;
+    uint64_t    vram_prewarmed_mb       = 0;
+    uint64_t    ram_arena_used_mb       = 0;
+    uint64_t    ram_arena_budget_mb     = 0;
+    uint64_t    ram_preloaded_mb        = 0;
+    uint64_t    dense_anon_mb           = 0;
+    uint64_t    os_ram_avail_mb         = 0;
+    uint64_t    os_commit_avail_mb      = 0;
+    uint64_t    gpu_vram_free_mb        = 0;
+    uint64_t    gpu_vram_total_mb       = 0;
+    uint64_t    arena_commit_failures   = 0;
+    double      silicon_residency_pct   = 0.0; // % of model held in VRAM + DDR4 RAM (100% = Zero HDD!)
 
-    bool        mmap_released         = false;
-    bool        auto_split_active     = false;
+    bool        mmap_released           = false;
+    bool        auto_split_active       = false;
     bool        parallel_gpu_cpu_active = false;
-    int32_t     active_gpu_layers     = 0;
-    float       active_cpu_share      = 0.0f;
-    uint32_t    active_ubatch         = 32;
+    bool        zero_hdd_active         = false;
+    bool        disjoint_swap_active    = false;
+    bool        auto_balance_active     = false;
+    int32_t     active_gpu_layers       = 0;
+    float       active_cpu_share        = 0.0f;
+    uint32_t    active_ubatch           = 32;
 };
 
 struct ChatMessage {
@@ -203,6 +215,7 @@ struct ChatMessage {
     std::string content;
 };
 
-using TokenCallback = std::function<bool(const std::string & piece)>;
+using TokenCallback       = std::function<bool(const std::string & piece)>;
+using TokenStreamCallback = TokenCallback;
 
 } // namespace dualmoe

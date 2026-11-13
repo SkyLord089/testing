@@ -29,11 +29,12 @@ int main(int argc, char ** argv) {
     {
         dualmoe::DualMoeEngine eng;
         dualmoe::EngineConfig cfg;
-        cfg.model_path = model_path;
-        cfg.moe_stream = false;
-        cfg.n_gpu_layers = 0;
-        cfg.n_ctx = 512;
-        cfg.n_threads = 2;
+        cfg.model_path    = model_path;
+        cfg.moe_stream    = false;
+        cfg.zero_hdd_mode = false;
+        cfg.n_gpu_layers  = 0;
+        cfg.n_ctx         = 512;
+        cfg.n_threads     = 2;
         std::string err;
         if (!eng.load_model(cfg, err)) {
             std::cerr << "[FAIL] Gate 2a load failed: " << err << "\n";
@@ -45,7 +46,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // Gate 2b: Virtual-Arena SSD Streamed + Aggressive Eviction + release_mmap + >=2 GPU Layers Safe Split!
+    // Gate 2b: Virtual-Arena On-Demand Streaming + Aggressive Eviction + release_mmap + >=2 GPU Layers Safe Split!
     std::string streamed_out;
     dualmoe::TelemetrySnapshot snap;
     {
@@ -53,13 +54,14 @@ int main(int argc, char ** argv) {
         dualmoe::EngineConfig cfg;
         cfg.model_path         = model_path;
         cfg.moe_stream         = true;
+        cfg.zero_hdd_mode      = false;
         cfg.dense_anon         = true;
         cfg.release_mmap       = true;
         cfg.auto_split_experts = true;
-        cfg.n_gpu_layers       = 4;   // Specifically exercises >=2 GPU layers path!
+        cfg.n_gpu_layers       = 4;
         cfg.vram_cache_mb      = 64;
         cfg.cpu_share          = 0.90f;
-        cfg.ram_cache_mb       = 1;   // Tight 1 MiB budget to stress page-refcounted commit/evict & async lanes
+        cfg.ram_cache_mb       = 1;
         cfg.io_lanes           = 4;
         cfg.n_ctx              = 512;
         cfg.n_threads          = 2;
@@ -83,10 +85,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
     if (snap.ssd_expert_reads == 0) {
-        std::cerr << "[FAIL] Gate 2: Expected >0 SSD expert reads, got 0\n";
+        std::cerr << "[FAIL] Gate 2: Expected >0 SSD expert reads in on-demand mode, got 0\n";
         return 1;
     }
-    std::cout << "[PASS] Gate 2: Streamed == Resident BYTE-IDENTICAL! (ssd_reads=" << snap.ssd_expert_reads
+    std::cout << "[PASS] Gate 2: On-Demand Streamed == Resident BYTE-IDENTICAL! (ssd_reads=" << snap.ssd_expert_reads
               << ", ram_hits=" << snap.ram_cache_hits
               << ", mmap_released=" << (snap.mmap_released ? "true" : "false") << ")\n";
 
@@ -94,11 +96,12 @@ int main(int argc, char ** argv) {
     {
         dualmoe::DualMoeEngine eng;
         dualmoe::EngineConfig cfg;
-        cfg.model_path = model_path;
-        cfg.moe_stream = true;
-        cfg.ram_cache_mb = 4;
-        cfg.n_ctx = 512;
-        cfg.n_threads = 2;
+        cfg.model_path           = model_path;
+        cfg.moe_stream           = true;
+        cfg.zero_hdd_mode        = true;
+        cfg.ram_cache_mb         = 32;
+        cfg.n_ctx                = 512;
+        cfg.n_threads            = 2;
         cfg.sampling.temperature = 0.0f;
         cfg.sampling.max_tokens  = 12;
 
@@ -125,6 +128,51 @@ int main(int argc, char ** argv) {
         std::cout << "[PASS] Gate 3: Multi-turn Chat & Prefix KV Cache verified (c1=" << c1 << ", c2=" << c2 << ")\n";
     }
 
-    std::cout << "ALL DUALMOE GATES PASSED!\n";
+    // Gate 4: Zero-HDD Sequential VRAM <-> RAM Preload Mode (0 runtime disk reads + 100% byte-identity!)
+    {
+        dualmoe::DualMoeEngine eng;
+        dualmoe::EngineConfig cfg;
+        cfg.model_path           = model_path;
+        cfg.moe_stream           = true;
+        cfg.zero_hdd_mode        = true;
+        cfg.auto_balance_compute = true;
+        cfg.n_gpu_layers         = 99;
+        cfg.vram_cache_mb        = 256;
+        cfg.ram_cache_mb         = 64;
+        cfg.io_lanes             = 1;
+        cfg.n_ctx                = 512;
+        cfg.n_threads            = 2;
+
+        std::string err, zero_hdd_out;
+        if (!eng.load_model(cfg, err)) {
+            std::cerr << "[FAIL] Gate 4 Zero-HDD load failed: " << err << "\n";
+            return 1;
+        }
+        if (!eng.generate_raw(test_prompt, 24, 0.0f, 42, nullptr, zero_hdd_out, err)) {
+            std::cerr << "[FAIL] Gate 4 Zero-HDD generate failed: " << err << "\n";
+            return 1;
+        }
+        const auto zsnap = eng.telemetry();
+        if (zero_hdd_out != baseline_out) {
+            std::cerr << "[FAIL] Gate 4: Zero-HDD output mismatch vs Resident!\n";
+            return 1;
+        }
+        if (zsnap.ssd_expert_reads != 0) {
+            std::cerr << "[FAIL] Gate 4: Expected 0 runtime HDD reads in Zero-HDD mode, got "
+                      << zsnap.ssd_expert_reads << "\n";
+            return 1;
+        }
+        if (!zsnap.zero_hdd_active || zsnap.silicon_residency_pct < 99.9) {
+            std::cerr << "[FAIL] Gate 4: Expected 100% silicon residency, got "
+                      << zsnap.silicon_residency_pct << "%\n";
+            return 1;
+        }
+        std::cout << "[PASS] Gate 4: Zero-HDD Sequential Preload == Resident BYTE-IDENTICAL! "
+                  << "(runtime_hdd_reads=" << zsnap.ssd_expert_reads
+                  << ", silicon_residency=" << zsnap.silicon_residency_pct << "%"
+                  << ", preload_bw=" << zsnap.preload_bandwidth_mbs << " MB/s)\n";
+    }
+
+    std::cout << "ALL DUALMOE v0.3.0 GATES PASSED!\n";
     return 0;
 }

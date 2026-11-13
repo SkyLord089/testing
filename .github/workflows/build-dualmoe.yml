@@ -137,7 +137,7 @@ jobs:
           if-no-files-found: error
 
   publish-release:
-    name: Publish Single-EXE Release (dualmoe-v0.2.0)
+    name: Publish Single-EXE Release (dualmoe-v0.3.0)
     needs: [verify-gates, windows-exe]
     runs-on: ubuntu-24.04
     steps:
@@ -149,31 +149,32 @@ jobs:
           name: DualMoE-exe
           path: dist
 
-      - name: Create or Update GitHub Release dualmoe-v0.2.0 (EXE Only)
+      - name: Create or Update GitHub Release dualmoe-v0.3.0 (EXE Only)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="dualmoe-v0.2.0"
-          TITLE="DualMoE v0.2.0 — Standalone EXE (LearnHarness × Hermes UI + 8-Step Crash Inspector)"
+          TAG="dualmoe-v0.3.0"
+          TITLE="DualMoE v0.3.0 — Standalone EXE (Zero-HDD VRAM ⇄ RAM Engine + Max Parallel GPU ∥ CPU)"
           ls -lh dist/DualMoE.exe
           NOTES=$(cat << 'EOF'
-          ## DualMoE v0.2.0 — Автономная `.exe` сборка (LearnHarness × Hermes Agent Edition)
+          ## DualMoE v0.3.0 — Бездисковый гибридный движок `VRAM ⇄ RAM` (LearnHarness × Hermes Agent Edition)
 
-          Один самодостаточный исполняемый файл **`DualMoE.exe`** для Windows 10/11 x64 (**Vulkan RX 580 + CPU AVX2/FMA + SSD Virtual Arena**) — без архивов, установщиков и `.bat`-скриптов.
+          Один самодостаточный исполняемый файл **`DualMoE.exe`** для Windows 10/11 x64 (**Ryzen 7 5700X AVX2/FMA + Radeon RX 580 8 ГБ Vulkan + 16 ГБ DDR4 + механический HDD**) — без архивов, установщиков и `.bat`-скриптов.
 
-          ### Что нового в v0.2.0
-          1. **Исправлены вылеты при загрузке моделей на Windows 11 + Radeon RX 580 + 16 ГБ RAM**:
-             - **Фикс `uBatch <= 32`**: микробатч строго согласован с `llama_moe_cache::max_batch = 32`, исключая обход кэша слотов и чтение невыделенных `PAGE_NOACCESS` страниц (`0xC0000005`) или 650-МБ всплеск копирования в VRAM.
-             - **Vulkan MMap Guard**: отключена выгрузка внутренних `MEM_MAPPED`-проекций драйвера AMD Adrenalin (SPIR-V кэш и PCIe BAR) и заблокирован 20-ГБ `PrefetchVirtualMemory` шторм при открытии крупных `.gguf`.
-             - **Авто-адаптация под свободную память**: автоматический контроль лимита `Commit / pagefile.sys`, авто-снижение числа GPU-слоёв (`NGL`) и динамическая подрезка банка `ClassLRU` под реальный остаток свободной VRAM после загрузки весов Attention/Router.
-             - **Защита лимита одиночного буфера Vulkan (`fits_max_buf`)** в `llama_moe_cache` для Polaris/RX 580.
-          2. **Дизайн в стиле LearnHarness × Hermes Agent (Nous Research)**:
-             - Переключатель фирменных тем (**Graphite**, **Nous Cobalt**, **Warm Paper**), встроенный навигатор по дискам (`C:\`, `D:\`, `E:\`...) и папкам прямо в браузере.
-          3. **8-этапный Инспектор загрузки и сбоев (Flight Recorder + Crash Forensics)**:
-             - Живая трассировка всех 8 этапов загрузки в реальном времени, индикаторы **GPU VRAM / Физической DDR4 / Виртуального Commit (Pagefile)**, лог `Vulkan / llama.cpp`, синхронная запись `dualmoe-load.log` и перехват системных исключений Windows SEH (`dualmoe-crash.txt`) с понятной расшифровкой причины.
+          ### Что нового в v0.3.0 (Специально под HDD + 8 ГБ VRAM + 16 ГБ RAM)
+          1. **Режим «Без HDD» (`100% в VRAM + RAM` / 0 обращений к диску во время чата)**:
+             - Линейный однопроходный предзагрузчик (`FILE_FLAG_SEQUENTIAL_SCAN`, блоки по `16 МБ` строго по возрастанию смещения на блине диска) загружает модель с HDD один раз без рывков головок (`140–190 МБ/с`).
+             - Для плотных моделей (`Dense`) автоматически используется прямое последовательное чтение в `VRAM + анонимную ОЗУ` (`LLAMA_LOAD_MODE_NONE`), исключающее страничные промахи на HDD.
+             - Для крупных MoE-моделей (`12–18 ГБ`), превышающих объём свободной ОЗУ отдельно, автоматически включается **раздельное размещение `VRAM ⊕ RAM` (`Disjoint Swap`)**: эксперты, находящиеся в `VRAM`, освобождают страницы `DDR4` (`MEM_DECOMMIT`), экономя до **4.5–5 ГБ ОЗУ** и предотвращая уход Windows 11 в медленный `pagefile.sys` на HDD!
+          2. **Максимальная параллельная нагрузка `GPU ∥ CPU` + Живой обмен горячих/холодных частей (`RAM ⇄ VRAM`)**:
+             - Предварительный прогрев `100%` слотов банка экспертов в VRAM видеокарты RX 580 до первого токена (`llama_moe_cache_prewarm`).
+             - Замкнутый авто-балансировщик (`Auto-Balancer`) с гистерезисом частоты `CRF`: одиночные промахи мгновенно считаются параллельно на ядрах Ryzen 7 5700X из `DDR4` без забивания шины PCIe, а реально ставшие горячими части автоматически мигрируют **`RAM → VRAM`**, вытесняя остывшие слоты обратно **`VRAM → RAM`**!
+          3. **Дополнительная защита от сбоев**:
+             - Исправлена фильтрация захваченных тензоров (`captured_weights_`) при 1-токенном прогоне и добавлено авто-согласование потоков батча с числом ядер CPU.
+             - В обновлённом интерфейсе **LearnHarness × Hermes Agent** добавлены индикаторы **резидентности в кремнии (`100% в памяти • 0 чтений HDD`)**, живой шкалы **баланса `CPU ∥ GPU`** и счётчики обменов **`RAM → VRAM` / `VRAM → RAM`**.
 
           ### Запуск
-          Скачайте **`DualMoE.exe`** в любую папку и запустите двойным кликом — интерфейс откроется в браузере автоматически (`http://127.0.0.1:8090`, OpenAI API для LearnHarness: `http://127.0.0.1:8090/v1`).
+          Скачайте **`DualMoE.exe`** в любую папку и запустите двойным кликом — профиль **«HDD-Турбо: VRAM ⇄ RAM»** включён по умолчанию (`http://127.0.0.1:8090`, OpenAI API для LearnHarness: `http://127.0.0.1:8090/v1`).
           EOF
           )
           if gh release view "${TAG}" >/dev/null 2>&1; then

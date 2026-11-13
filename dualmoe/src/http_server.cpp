@@ -93,22 +93,31 @@ json telemetry_to_json(const dualmoe::TelemetrySnapshot & t) {
         {"gpu_expert_fills", t.gpu_expert_fills},
         {"cpu_parallel_experts", t.cpu_parallel_experts},
         {"ram_cache_hits", t.ram_cache_hits},
+        {"ram_to_vram_swaps", t.ram_to_vram_swaps},
+        {"vram_to_ram_swaps", t.vram_to_ram_swaps},
         {"ssd_expert_reads", t.ssd_expert_reads},
         {"ssd_bytes_read", t.ssd_bytes_read},
         {"vram_upload_bytes", t.vram_upload_bytes},
         {"ssd_bandwidth_mbs", t.ssd_bandwidth_mbs},
+        {"preload_bandwidth_mbs", t.preload_bandwidth_mbs},
         {"vram_cache_budget_mb", t.vram_cache_budget_mb},
+        {"vram_prewarmed_mb", t.vram_prewarmed_mb},
         {"ram_arena_used_mb", t.ram_arena_used_mb},
         {"ram_arena_budget_mb", t.ram_arena_budget_mb},
+        {"ram_preloaded_mb", t.ram_preloaded_mb},
         {"dense_anon_mb", t.dense_anon_mb},
         {"os_ram_avail_mb", t.os_ram_avail_mb},
         {"os_commit_avail_mb", t.os_commit_avail_mb},
         {"gpu_vram_free_mb", t.gpu_vram_free_mb},
         {"gpu_vram_total_mb", t.gpu_vram_total_mb},
         {"arena_commit_failures", t.arena_commit_failures},
+        {"silicon_residency_pct", t.silicon_residency_pct},
         {"mmap_released", t.mmap_released},
         {"auto_split_active", t.auto_split_active},
         {"parallel_gpu_cpu_active", t.parallel_gpu_cpu_active},
+        {"zero_hdd_active", t.zero_hdd_active},
+        {"disjoint_swap_active", t.disjoint_swap_active},
+        {"auto_balance_active", t.auto_balance_active},
         {"active_gpu_layers", t.active_gpu_layers},
         {"active_cpu_share", t.active_cpu_share},
         {"active_ubatch", t.active_ubatch},
@@ -260,21 +269,29 @@ int main(int argc, char ** argv) {
         else if (arg == "--vram-cache-mb") boot_cfg.vram_cache_mb = (size_t) std::atoll(next_val().c_str());
         else if (arg == "--ram-cache-mb") boot_cfg.ram_cache_mb = (size_t) std::atoll(next_val().c_str());
         else if (arg == "--cpu-share") boot_cfg.cpu_share = std::strtof(next_val().c_str(), nullptr);
+        else if (arg == "--zero-hdd") boot_cfg.zero_hdd_mode = true;
+        else if (arg == "--no-zero-hdd") boot_cfg.zero_hdd_mode = false;
+        else if (arg == "--auto-balance") boot_cfg.auto_balance_compute = true;
+        else if (arg == "--no-auto-balance") boot_cfg.auto_balance_compute = false;
+        else if (arg == "--swap-hysteresis") boot_cfg.swap_hysteresis = std::strtof(next_val().c_str(), nullptr);
+        else if (arg == "--io-lanes") boot_cfg.io_lanes = std::atoi(next_val().c_str());
         else if (arg == "--ctx" || arg == "-c") boot_cfg.n_ctx = (uint32_t) std::atoi(next_val().c_str());
         else if (arg == "--threads" || arg == "-t") boot_cfg.n_threads = std::atoi(next_val().c_str());
         else if (arg == "--help" || arg == "-h") {
-            std::cout << "DualMoE v0.2.0 (LearnHarness x Hermes Edition — GPU || CPU || SSD MoE Runtime)\n"
-                      << "  --host <addr>           Bind address (default 0.0.0.0)\n"
-                      << "  --port <port>           HTTP/OpenAI port (default 8090)\n"
-                      << "  --no-browser            Do not auto-open Web UI on Windows startup\n"
-                      << "  --model <file.gguf>     Auto-load GGUF model at startup\n"
-                      << "  --models-dir <folder>   Default folder for GGUF UI scanner\n"
-                      << "  --ngl <N>               GPU layers for Attention/Router (default 99, auto-step-down)\n"
-                      << "  --vram-cache-mb <MiB>   Hot expert bank in GPU VRAM (default 2400, auto-clamped)\n"
-                      << "  --cpu-share <0..1>      Fraction of misses computed on CPU in parallel (default 0.92)\n"
-                      << "  --ram-cache-mb <MiB>    DDR4 virtual arena budget for experts (default 5632)\n"
-                      << "  --ctx <tokens>          Context window (default 24576)\n"
-                      << "  --threads <N>           CPU decode threads (default 8)\n";
+            std::cout << "DualMoE v0.3.0 (Zero-HDD VRAM <-> RAM Edition — LearnHarness x Hermes Runtime)\n"
+                      << "  --host <addr>             Bind address (default 0.0.0.0)\n"
+                      << "  --port <port>             HTTP/OpenAI port (default 8090)\n"
+                      << "  --no-browser              Do not auto-open Web UI on Windows startup\n"
+                      << "  --model <file.gguf>       Auto-load GGUF model at startup\n"
+                      << "  --models-dir <folder>     Default folder for GGUF UI scanner\n"
+                      << "  --ngl <N>                 GPU layers for Attention/Router (default 99, auto-step-down)\n"
+                      << "  --vram-cache-mb <MiB>     Hot expert bank in GPU VRAM (default 4600, auto-clamped)\n"
+                      << "  --cpu-share <0..1>        Initial CPU miss share (default 0.85, auto-balanced)\n"
+                      << "  --ram-cache-mb <MiB>      DDR4 virtual arena budget for experts (default 9728)\n"
+                      << "  --zero-hdd / --no-zero-hdd Sequential 1-pass HDD preload into VRAM+RAM (default ON)\n"
+                      << "  --auto-balance            Live GPU || CPU load balancer + CRF swap hysteresis (default ON)\n"
+                      << "  --ctx <tokens>            Context window (default 16384)\n"
+                      << "  --threads <N>             CPU decode threads (default 8)\n";
             return 0;
         }
     }
@@ -334,6 +351,10 @@ int main(int argc, char ** argv) {
                 {"vram_cache_mb", cfg.vram_cache_mb},
                 {"cpu_share", cfg.cpu_share},
                 {"ram_cache_mb", cfg.ram_cache_mb},
+                {"zero_hdd_mode", cfg.zero_hdd_mode},
+                {"auto_balance_compute", cfg.auto_balance_compute},
+                {"swap_hysteresis", cfg.swap_hysteresis},
+                {"io_lanes", cfg.io_lanes},
                 {"n_ctx", cfg.n_ctx},
                 {"n_threads", cfg.n_threads},
                 {"n_ubatch", cfg.n_ubatch},
@@ -453,10 +474,14 @@ int main(int argc, char ** argv) {
             cfg.n_ubatch           = body.value("n_ubatch", cfg.n_ubatch);
             cfg.kv_type_k          = body.value("kv_type_k", cfg.kv_type_k);
             cfg.kv_type_v          = body.value("kv_type_v", cfg.kv_type_v);
-            cfg.auto_split_experts = body.value("auto_split_experts", true);
-            cfg.moe_stream         = body.value("moe_stream", true);
-            cfg.dense_anon         = body.value("dense_anon", cfg.dense_anon);
-            cfg.release_mmap       = body.value("release_mmap", cfg.release_mmap);
+            cfg.auto_split_experts   = body.value("auto_split_experts", true);
+            cfg.zero_hdd_mode        = body.value("zero_hdd_mode", cfg.zero_hdd_mode);
+            cfg.auto_balance_compute = body.value("auto_balance_compute", cfg.auto_balance_compute);
+            cfg.swap_hysteresis      = body.value("swap_hysteresis", cfg.swap_hysteresis);
+            cfg.io_lanes             = body.value("io_lanes", cfg.io_lanes);
+            cfg.moe_stream           = body.value("moe_stream", true);
+            cfg.dense_anon           = body.value("dense_anon", cfg.dense_anon);
+            cfg.release_mmap         = body.value("release_mmap", cfg.release_mmap);
 
             const bool async_mode = body.value("async", false);
             std::string err;
@@ -709,7 +734,7 @@ int main(int argc, char ** argv) {
 
     const std::string local_url = "http://" + std::string(host == "0.0.0.0" ? "127.0.0.1" : host) + ":" + std::to_string(bound_port);
     std::cout << "\n==================================================================\n"
-              << "  DualMoE v0.2.0 — LearnHarness x Hermes Agent Runtime\n"
+              << "  DualMoE v0.3.0 — Zero-HDD VRAM <-> RAM • LearnHarness x Hermes\n"
               << "  Интерфейс в браузере:           " << local_url << "\n"
               << "  OpenAI / LearnHarness Base URL: " << local_url << "/v1\n"
               << "  Журнал загрузки (Flight Log):   dualmoe-load.log\n"

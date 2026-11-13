@@ -555,18 +555,18 @@ void DualMoeEngine::init_load_steps(const EngineConfig & cfg) {
         {4, "stage1_capture", "4. Этап 1: Захват графа экспертов (1-токен прогон)",
          "Создание компактного 64-токен контекста и фиксация точных адресов экспертных тензоров",
          "Проверяется совместимость квантованного KV-кэша (q8_0 -> f16 при необходимости).", "pending", 0.0},
-        {5, "virtual_arena", "5. Привязка VirtualExpertArena (DDR4 + SSD пул)",
-         "Резервирование виртуальных диапазонов MEM_RESERVE (0 МБ физической RAM на старте) и открытие SSD-потоков",
-         "Исключает мгновенное заполнение 16 ГБ RAM весами всех экспертов при старте.", "pending", 0.0},
+        {5, "virtual_arena", "5. Привязка VirtualExpertArena (VRAM ⇄ DDR4 пул)",
+         "Резервирование виртуальных диапазонов MEM_RESERVE и подготовка последовательного чтения без рывков HDD",
+         "Исключает хаотичные обращения головок HDD и мгновенное переполнение 16 ГБ RAM.", "pending", 0.0},
         {6, "mmap_guard", "6. Безопасная политика файловых проекций (Vulkan Guard)",
          "Сохранение целостности внутренних проекций драйвера AMD Adrenalin Vulkan",
          "Защищает от сбоя 0xC0000005 из-за выгрузки шейдерного кэша и BAR-областей драйвера.", "pending", 0.0},
-        {7, "stage2_context", "7. Этап 2: Рабочий контекст + GPU-банк ClassLRU",
-         "Выделение KV-кэша, буферов расчёта (uBatch<=32) и VRAM-кэша горячих экспертов с авто-адаптацией",
+        {7, "stage2_context", "7. Этап 2: Рабочий контекст + максимум VRAM под горячие слоты",
+         "Выделение KV-кэша, буферов расчёта (uBatch<=32) и максимального безопасного банка экспертов в VRAM",
          "Защищает от переполнения 8 ГБ VRAM и гарантирует, что все микробатчи идут через кэш слотов.", "pending", 0.0},
-        {8, "parallel_hooks", "8. Активация параллельного конвейера GPU ∥ CPU ∥ SSD",
-         "Подключение асинхронных хуков подкачки экспертов и проверка готовности токенизатора",
-         "Финальная точка запуска генерации.", "pending", 0.0},
+        {8, "parallel_hooks", "8. Линейная предзагрузка с HDD в VRAM + RAM и запуск GPU ∥ CPU",
+         "Однопроходное чтение модели с HDD в VRAM и ОЗУ (0 чтений диска в чате) + живой обмен горячих/холодных слотов",
+         "Финальная точка запуска бездисковой параллельной генерации.", "pending", 0.0},
     };
 }
 
@@ -664,6 +664,7 @@ void DualMoeEngine::unload_model_locked() {
     install_cpu_expert_hook(nullptr, nullptr);
     if (ctx_) {
         llama_set_moe_cache_host_cb(ctx_, nullptr, nullptr);
+        llama_set_moe_cache_swap_cbs(ctx_, nullptr, nullptr, 0.0f, nullptr);
         llama_free(ctx_);
         ctx_ = nullptr;
     }
@@ -686,15 +687,22 @@ void DualMoeEngine::unload_model_locked() {
     gpu_expert_fills_.store(0, std::memory_order_relaxed);
     cpu_parallel_experts_.store(0, std::memory_order_relaxed);
     vram_upload_bytes_.store(0, std::memory_order_relaxed);
+    active_cpu_share_.store(0.0f, std::memory_order_relaxed);
 
     {
         std::lock_guard<std::mutex> slk(state_mu_);
-        layout_ = GgufLayout{};
+        layout_               = GgufLayout{};
         active_vram_cache_mb_ = 0;
+        vram_prewarmed_bytes_ = 0;
+        ram_preloaded_bytes_  = 0;
         auto_split_active_    = false;
         parallel_gpu_cpu_     = false;
+        zero_hdd_active_      = false;
+        disjoint_swap_active_ = false;
+        auto_balance_active_  = false;
         active_gpu_layers_    = 0;
-        active_cpu_share_     = 0.0f;
+        ema_gpu_hit_ratio_    = 0.75f;
+        balance_events_       = 0;
         active_ubatch_        = 32;
         status_text_          = "Готов к загрузке модели";
     }
@@ -775,7 +783,7 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
         std::lock_guard<std::mutex> llk(log_mu_);
         FILE * fp = open_utf8_file(log_file_path_, "wb");
         if (fp) {
-            std::fprintf(fp, "=== DualMoE v0.2.0 Flight Recorder ===\n");
+            std::fprintf(fp, "=== DualMoE v0.3.0 Zero-HDD VRAM<->RAM Flight Recorder ===\n");
             std::fprintf(fp, "Start: %s\nModel: %s\n\n", now_iso_local().c_str(), input_cfg.model_path.c_str());
             std::fflush(fp);
             std::fclose(fp);
@@ -831,22 +839,43 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
         cfg.n_ubatch = 32;
     }
 
-    // Fix #4: Clamp DDR4 arena budget against available Windows Commit Limit so VirtualAlloc never starves!
-    if (stream_moe && pre_mem.commit_avail_mb > 0) {
-        const uint64_t safety_commit_reserve_mb = 2048; // Keep >= 2 GiB commit headroom for Vulkan driver, KV host, threads
-        if (pre_mem.commit_avail_mb <= safety_commit_reserve_mb + 384) {
-            add_warning("Внимание: в системе осталось мало виртуальной памяти Commit (" +
-                        std::to_string(pre_mem.commit_avail_mb) +
-                        " МБ). Рекомендуется включить автоматический файл подкачки Windows (>= 16 ГБ). Бюджет RAM-арены снижен до 384 МБ.");
-            cfg.ram_cache_mb = 384;
-        } else {
-            const uint64_t max_safe_arena = pre_mem.commit_avail_mb - safety_commit_reserve_mb;
-            if (cfg.ram_cache_mb > max_safe_arena) {
-                add_warning("Бюджет DDR4-арены автоматически адаптирован с " + std::to_string(cfg.ram_cache_mb) +
-                            " МБ до " + std::to_string(max_safe_arena) +
-                            " МБ с учётом доступного лимита виртуальной памяти ОС (" +
-                            std::to_string(pre_mem.commit_avail_mb) + " МБ).");
-                cfg.ram_cache_mb = (size_t) max_safe_arena;
+    // Fix #4 + Zero-HDD Physical RAM Guard:
+    // Clamp DDR4 arena against BOTH Windows Commit Limit AND Physical Free RAM (when Zero-HDD mode is on)
+    // so Windows 11 NEVER spills warm experts into pagefile.sys on a mechanical HDD!
+    const uint64_t safe_phys_ram_mb = pre_mem.ram_avail_mb > 1600
+        ? (pre_mem.ram_avail_mb - 1600)
+        : (pre_mem.ram_avail_mb * 2 / 3);
+    if (stream_moe) {
+        const uint64_t expert_total_mb = (lay.summary.expert_bytes >> 20) + 64;
+        if (cfg.zero_hdd_mode && safe_phys_ram_mb > 0) {
+            // Auto-expand RAM budget if user had a low slider value while free physical RAM can hold the experts
+            if (cfg.ram_cache_mb < expert_total_mb && safe_phys_ram_mb > cfg.ram_cache_mb) {
+                cfg.ram_cache_mb = (size_t) std::min<uint64_t>(expert_total_mb, safe_phys_ram_mb);
+            }
+            if (cfg.ram_cache_mb > safe_phys_ram_mb && safe_phys_ram_mb >= 512) {
+                add_warning("Для исключения подкачки Windows на медленный HDD (pagefile.sys) буфер экспертов в ОЗУ ограничен безопасным объёмом физической DDR4: " +
+                            std::to_string(safe_phys_ram_mb) + " МБ (остальная часть пойдёт в VRAM RX 580).");
+                cfg.ram_cache_mb = (size_t) safe_phys_ram_mb;
+            }
+        }
+        if (pre_mem.commit_avail_mb > 0) {
+            const uint64_t safety_commit_reserve_mb = 2048;
+            if (pre_mem.commit_avail_mb <= safety_commit_reserve_mb + 384) {
+                if (cfg.ram_cache_mb > 384) {
+                    add_warning("Внимание: в системе осталось мало виртуальной памяти Commit (" +
+                                std::to_string(pre_mem.commit_avail_mb) +
+                                " МБ). Рекомендуется включить автоматический файл подкачки Windows (>= 16 ГБ). Бюджет RAM-арены снижен до 384 МБ.");
+                    cfg.ram_cache_mb = 384;
+                }
+            } else {
+                const uint64_t max_safe_arena = pre_mem.commit_avail_mb - safety_commit_reserve_mb;
+                if (cfg.ram_cache_mb > max_safe_arena) {
+                    add_warning("Бюджет DDR4-арены автоматически адаптирован с " + std::to_string(cfg.ram_cache_mb) +
+                                " МБ до " + std::to_string(max_safe_arena) +
+                                " МБ с учётом доступного лимита виртуальной памяти ОС (" +
+                                std::to_string(pre_mem.commit_avail_mb) + " МБ).");
+                    cfg.ram_cache_mb = (size_t) max_safe_arena;
+                }
             }
         }
     }
@@ -935,9 +964,19 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
         if (try_ngl == 0) {
             mparams.devices = cpu_only_devs;
         }
-        mparams.load_mode       = LLAMA_LOAD_MODE_MMAP;
+        // Zero-HDD Optimization for Dense models: if host portion fits safe DDR4 RAM, read sequentially
+        // into anonymous RAM once (LLAMA_LOAD_MODE_NONE) -> 0 HDD page faults forever during chat!
+        const uint64_t total_model_mb = lay.summary.file_size_bytes >> 20;
+        const uint64_t est_gpu_mb     = (!lay.summary.is_moe && lay.summary.n_layer > 0)
+            ? (total_model_mb * (uint64_t) std::min<int32_t>(try_ngl, lay.summary.n_layer) / (uint64_t) lay.summary.n_layer)
+            : 0;
+        const uint64_t est_host_mb    = total_model_mb > est_gpu_mb ? (total_model_mb - est_gpu_mb) : 0;
+        const bool dense_zero_hdd_ram = (!lay.summary.is_moe) && cfg.zero_hdd_mode &&
+                                        (safe_phys_ram_mb == 0 || est_host_mb + 256 <= safe_phys_ram_mb);
+
+        mparams.load_mode       = dense_zero_hdd_ram ? LLAMA_LOAD_MODE_NONE : LLAMA_LOAD_MODE_MMAP;
         mparams.use_extra_bufts = false;
-        mparams.lazy_mode       = stream_moe ? LLAMA_LAZY_MODE_OFF : LLAMA_LAZY_MODE_AUTO;
+        mparams.lazy_mode       = (stream_moe || dense_zero_hdd_ram) ? LLAMA_LAZY_MODE_OFF : LLAMA_LAZY_MODE_AUTO;
         mparams.n_gpu_layers    = try_ngl;
 
         std::vector<llama_model_tensor_buft_override> overrides;
@@ -1003,8 +1042,9 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
         if (stream_moe) {
             cp.n_ubatch = std::min<uint32_t>(cp.n_ubatch, 32);
         }
-        cp.n_threads       = std::max<int32_t>(1, cfg.n_threads);
-        cp.n_threads_batch = std::max<int32_t>(1, cfg.n_threads_batch > 0 ? cfg.n_threads_batch : cfg.n_threads);
+        const int32_t hw_threads = std::max<int32_t>(2, (int32_t) std::thread::hardware_concurrency());
+        cp.n_threads       = std::clamp<int32_t>(cfg.n_threads, 1, hw_threads);
+        cp.n_threads_batch = std::clamp<int32_t>(cfg.n_threads_batch > 0 ? cfg.n_threads_batch : cfg.n_threads, 1, hw_threads);
         cp.n_outputs_max   = 32;
         cp.type_k          = parse_kv_type(cfg.kv_type_k);
         cp.type_v          = parse_kv_type(cfg.kv_type_v);
@@ -1076,11 +1116,12 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
                                " 3D-проекций экспертов и " + std::to_string(captured_weights_.size()) + " весовых листьев");
 
         // STEP 5: VirtualExpertArena
-        begin_step(5, "Инициализация виртуальной арены DDR4 (бюджет " + std::to_string(cfg.ram_cache_mb) +
-                      " МБ, потоков SSD: " + std::to_string(cfg.io_lanes) + ")...");
+        const bool seq_hdd_mode = cfg.zero_hdd_mode || cfg.io_lanes <= 1;
+        begin_step(5, "Инициализация арены VRAM ⇄ DDR4 (бюджет RAM " + std::to_string(cfg.ram_cache_mb) +
+                      " МБ, режим " + std::string(seq_hdd_mode ? "линейный HDD без рывков" : "многопоточный SSD") + ")...");
         const size_t ram_budget = cfg.ram_cache_mb > 0 ? (cfg.ram_cache_mb << 20) : (2048ull << 20);
         std::string arena_err;
-        if (!arena_.init(lay.summary.shard_paths, n_layer, lay.summary.n_expert, ram_budget, cfg.io_lanes, arena_err)) {
+        if (!arena_.init(lay.summary.shard_paths, n_layer, lay.summary.n_expert, ram_budget, cfg.io_lanes, seq_hdd_mode, arena_err)) {
             llama_model_free(model_);
             model_ = nullptr;
             return fail_at(5, arena_err);
@@ -1285,32 +1326,125 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
     }
 
     // -------------------------------------------------------------------------
-    // STEP 8: Arm Parallel GPU || CPU || SSD Hooks & Ready!
+    // STEP 8: Zero-HDD Sequential Prewarm (VRAM + DDR4 RAM) & Live VRAM <-> RAM Swapper
     // -------------------------------------------------------------------------
-    begin_step(8, "Подключение асинхронного маршрутизатора GPU ∥ CPU ∥ SSD...");
+    begin_step(8, cfg.zero_hdd_mode
+        ? "Линейное чтение весов с HDD в VRAM и ОЗУ без рывков головок (подготовка режима 0 чтений диска)..."
+        : "Подключение асинхронного маршрутизатора GPU ∥ CPU ∥ Диск...");
+
+    uint64_t prewarmed_vram_b = 0;
+    uint64_t preloaded_ram_b  = 0;
+    bool     disjoint_active  = false;
+
+    if (stream_moe) {
+        // Activate Disjoint VRAM (+) RAM Bidirectional Swap automatically whenever experts exceed DDR4 RAM budget alone,
+        // saving up to ~5 GB of physical DDR4 RAM so 14-18 GB models fit 100% in VRAM + RAM without pagefile.sys!
+        disjoint_active = cfg.zero_hdd_mode && (cparams.moe_cache_size > 0) && (effective_ngl > 0) &&
+                          (lay.summary.expert_bytes > ((uint64_t) cfg.ram_cache_mb << 20));
+        arena_.set_disjoint_vram_mode(disjoint_active);
+    }
 
     if (cparams.moe_cache_size > 0 && effective_ngl > 0) {
         llama_set_moe_cache_host_cb(ctx_, &DualMoeEngine::c_moe_cache_callback, this);
+
+        // Prewarm 100% of RX 580 VRAM MoE slots upfront sequentially so token #1 hits hot GPU + parallel CPU immediately!
+        if (cfg.zero_hdd_mode && stream_moe) {
+            prewarmed_vram_b = (uint64_t) llama_moe_cache_prewarm(ctx_, &DualMoeEngine::c_moe_prewarm_fetch, this);
+        }
+
+        const float hyst = cfg.auto_balance_compute ? std::max(1.05f, cfg.swap_hysteresis) : cfg.swap_hysteresis;
+        llama_set_moe_cache_swap_cbs(
+            ctx_,
+            disjoint_active ? &DualMoeEngine::c_moe_evict_cb : nullptr,
+            &DualMoeEngine::c_moe_promoted_cb,
+            hyst,
+            this);
+
+        if (stream_moe) {
+            arena_.set_vram_rescue_callback([this](int32_t il, int32_t exp) -> bool {
+                return ctx_ ? llama_moe_cache_rescue_expert(ctx_, il, exp, &DualMoeEngine::c_moe_evict_cb, this) : false;
+            });
+        }
     }
 
+    if (cfg.zero_hdd_mode && stream_moe) {
+        const uint64_t max_ram_bytes = (uint64_t) cfg.ram_cache_mb << 20;
+        preloaded_ram_b = arena_.preload_remaining_to_ram_sequential(
+            max_ram_bytes,
+            [this, prewarmed_vram_b](uint64_t done_b, uint64_t target_b, double mbs) {
+                const int32_t sub_pct = 90 + (int32_t) (9ull * done_b / std::max<uint64_t>(1, target_b));
+                load_progress_pct_.store(std::clamp<int32_t>(sub_pct, 90, 99), std::memory_order_relaxed);
+                std::ostringstream prog;
+                prog << "Линейная загрузка в ОЗУ: " << (done_b >> 20) << "/" << (target_b >> 20)
+                     << " МБ (" << (int) mbs << " МБ/с"
+                     << (prewarmed_vram_b > 0 ? (", в VRAM уже прогрето " + std::to_string(prewarmed_vram_b >> 20) + " МБ") : "")
+                     << ")";
+                std::lock_guard<std::mutex> slk(state_mu_);
+                diag_.progress_pct = std::clamp<int32_t>(sub_pct, 90, 99);
+                if (diag_.steps.size() >= 8) {
+                    diag_.steps[7].detail = prog.str();
+                }
+                status_text_ = prog.str();
+            });
+        arena_.mark_preload_complete();
+    }
+
+    // Verify whether 100% of the model now lives in Silicon (VRAM + DDR4 RAM) with 0 runtime HDD reads needed
+    bool full_silicon_resident = false;
+    if (stream_moe) {
+        const uint64_t in_silicon = arena_.silicon_resident_bytes(prewarmed_vram_b);
+        full_silicon_resident = cfg.zero_hdd_mode && (in_silicon + (4ull << 20) >= arena_.total_expert_bytes());
+    } else {
+        full_silicon_resident = cfg.zero_hdd_mode;
+    }
+
+    const float init_share = cparams.moe_cache_size > 0 ? cparams.moe_cache_cpu_share : 1.0f;
+    active_cpu_share_.store(init_share, std::memory_order_relaxed);
+
+    std::string step8_summary;
     {
         std::lock_guard<std::mutex> slk(state_mu_);
         cfg_                  = cfg;
         layout_               = std::move(lay);
         active_vram_cache_mb_ = (uint64_t) (cparams.moe_cache_size >> 20);
+        vram_prewarmed_bytes_ = prewarmed_vram_b;
+        ram_preloaded_bytes_  = preloaded_ram_b;
         auto_split_active_    = split_experts;
-        parallel_gpu_cpu_     = (cparams.moe_cache_size > 0 && cparams.moe_cache_cpu_share > 0.0f);
+        parallel_gpu_cpu_     = (cparams.moe_cache_size > 0 && cparams.moe_cache_cpu_share > 0.0f) ||
+                                (!layout_.summary.is_moe && effective_ngl > 0 && effective_ngl < n_layer);
+        zero_hdd_active_      = full_silicon_resident;
+        disjoint_swap_active_ = disjoint_active;
+        auto_balance_active_  = cfg.auto_balance_compute && (cparams.moe_cache_size > 0);
         active_gpu_layers_    = effective_ngl;
-        active_cpu_share_     = cparams.moe_cache_size > 0 ? cparams.moe_cache_cpu_share : 1.0f;
+        ema_gpu_hit_ratio_    = 0.75f;
+        balance_events_       = 0;
         active_ubatch_        = cparams.n_ubatch;
-        status_text_          = parallel_gpu_cpu_
-            ? "Готов • Параллельный режим GPU (VRAM) ∥ CPU (DDR4) ∥ SSD"
-            : (stream_moe ? "Готов • Стриминг экспертов DDR4 ∥ SSD" : "Готов • Модель загружена");
-        diag_.loading         = false;
-        diag_.current_stage   = status_text_;
+
+        if (full_silicon_resident && parallel_gpu_cpu_) {
+            status_text_ = std::string("Готов • Без HDD (100% в VRAM") +
+                           (disjoint_active ? " ⊕ " : " + ") +
+                           "RAM) • Макс. параллелизм GPU ∥ CPU";
+        } else if (parallel_gpu_cpu_) {
+            status_text_ = "Готов • Параллельный режим GPU (VRAM) ∥ CPU (DDR4)";
+        } else {
+            status_text_ = "Готов • Модель загружена в память";
+        }
+        diag_.loading       = false;
+        diag_.current_stage = status_text_;
+
+        std::ostringstream s8;
+        if (stream_moe && cfg.zero_hdd_mode) {
+            s8 << "В VRAM прогрето " << (prewarmed_vram_b >> 20) << " МБ, в DDR4 загружено "
+               << (preloaded_ram_b >> 20) << " МБ (" << (int) arena_.preload_bandwidth_mbs() << " МБ/с)"
+               << (disjoint_active ? " • Раздельный обмен VRAM ⊕ RAM активен" : " • Быстрый обмен VRAM ⇄ RAM активен")
+               << (full_silicon_resident ? " • 0 обращений к HDD в чате!" : "");
+        } else {
+            s8 << "Модель полностью готова к работе и принимает запросы";
+        }
+        step8_summary = s8.str();
     }
 
-    finish_step(8, "done", "Модель полностью готова к работе и принимает запросы");
+    finish_step(8, "done", step8_summary);
     mark_flight_header("READY", "Модель успешно загружена");
     loaded_.store(true, std::memory_order_release);
     loading_.store(false, std::memory_order_release);
@@ -1325,6 +1459,23 @@ bool DualMoeEngine::c_eval_callback(struct ggml_tensor * t, bool ask, void * use
 void DualMoeEngine::c_moe_cache_callback(const struct llama_moe_cache_event * ev, void * user_data) {
     if (!user_data || !ev) return;
     static_cast<DualMoeEngine *>(user_data)->on_moe_cache_event(ev);
+}
+
+bool DualMoeEngine::c_moe_prewarm_fetch(int32_t il, int32_t ip, int32_t expert_id, const char * tensor_name, void * dst_buf, size_t nbytes, void * user_data) {
+    (void) ip;
+    if (!user_data) return false;
+    return static_cast<DualMoeEngine *>(user_data)->arena_.fetch_expert_for_vram_prewarm(il, tensor_name, expert_id, dst_buf, nbytes);
+}
+
+void * DualMoeEngine::c_moe_evict_cb(int32_t evicted_il, int32_t ip, int32_t evicted_expert, const char * tensor_name, size_t nbytes, void * user_data) {
+    (void) ip;
+    if (!user_data) return nullptr;
+    return static_cast<DualMoeEngine *>(user_data)->arena_.prepare_vram_eviction_dst(evicted_il, tensor_name, evicted_expert, nbytes);
+}
+
+void DualMoeEngine::c_moe_promoted_cb(int32_t il, const int32_t * promoted_experts, size_t n_promoted, size_t n_evicted_to_ram, void * user_data) {
+    if (!user_data) return;
+    static_cast<DualMoeEngine *>(user_data)->arena_.on_experts_promoted_to_vram(il, promoted_experts, n_promoted, n_evicted_to_ram);
 }
 
 bool DualMoeEngine::c_abort_callback(void * user_data) {
@@ -1346,6 +1497,35 @@ void DualMoeEngine::on_moe_cache_event(const struct llama_moe_cache_event * ev) 
             arena_.prefetch_experts_async(ev->il, ev->cpu_experts, ev->n_cpu);
         }
     }
+
+    // Closed-Loop GPU || CPU Parallel Load Auto-Balancer:
+    // - When GPU VRAM hit ratio is high (>= 70%), RX 580 is heavily loaded with cached experts -> route 88-93% of misses
+    //   to Ryzen AVX2 in DDR4 RAM so both processors finish together with minimal PCIe traffic.
+    // - When GPU VRAM hit ratio dips (< 48%, topic shift!), lower cpu_share to ~0.62 so hotter RAM experts rapidly
+    //   promote into RX 580 VRAM and restore full GPU saturation!
+    if (auto_balance_active_ && ctx_) {
+        const size_t total_sel = ev->n_hits + ev->n_fills + ev->n_cpu;
+        if (total_sel > 0) {
+            const float inst_hit = (float) ev->n_hits / (float) total_sel;
+            ema_gpu_hit_ratio_   = 0.90f * ema_gpu_hit_ratio_ + 0.10f * inst_hit;
+            if ((++balance_events_ & 15ull) == 0ull) {
+                float target_share = cfg_.cpu_share;
+                if (ema_gpu_hit_ratio_ >= 0.72f) {
+                    target_share = std::clamp(std::max(cfg_.cpu_share, 0.90f), 0.55f, 0.94f);
+                } else if (ema_gpu_hit_ratio_ < 0.45f) {
+                    target_share = std::clamp(std::min(cfg_.cpu_share, 0.64f), 0.50f, 0.88f);
+                } else {
+                    const float t = (ema_gpu_hit_ratio_ - 0.45f) / (0.72f - 0.45f);
+                    target_share  = 0.64f + t * (0.90f - 0.64f);
+                }
+                const float prev = active_cpu_share_.load(std::memory_order_relaxed);
+                if (std::abs(target_share - prev) >= 0.02f) {
+                    active_cpu_share_.store(target_share, std::memory_order_relaxed);
+                    llama_set_moe_cache_cpu_share(ctx_, target_share);
+                }
+            }
+        }
+    }
 }
 
 bool DualMoeEngine::on_eval_node(struct ggml_tensor * t, bool ask) {
@@ -1358,7 +1538,7 @@ bool DualMoeEngine::on_eval_node(struct ggml_tensor * t, bool ask) {
                 if (!src) continue;
                 ggml_tensor * leaf = src;
                 while (leaf->view_src) leaf = leaf->view_src;
-                if (leaf->op == GGML_OP_NONE) {
+                if (leaf->op == GGML_OP_NONE && layout_.tensors.find(leaf->name) != layout_.tensors.end()) {
                     captured_weights_.insert(leaf);
                 }
                 const auto it = layout_.tensors.find(src->name);
@@ -1711,20 +1891,30 @@ TelemetrySnapshot DualMoeEngine::telemetry() const {
     t.load_phase_total  = 8;
 
     SystemMemoryInfo sm;
+    uint64_t prewarm_vram_b = 0;
+    bool     is_moe_model   = false;
     {
         std::lock_guard<std::mutex> slk(state_mu_);
         t.model_name              = layout_.summary.model_name;
         t.model_arch              = layout_.summary.arch;
+        is_moe_model              = layout_.summary.is_moe;
         t.status_text             = status_text_;
         t.kv_max_tokens           = cfg_.n_ctx;
         t.vram_cache_budget_mb    = active_vram_cache_mb_;
+        t.vram_prewarmed_mb       = vram_prewarmed_bytes_ >> 20;
+        t.ram_preloaded_mb        = ram_preloaded_bytes_ >> 20;
+        prewarm_vram_b            = vram_prewarmed_bytes_;
         t.auto_split_active       = auto_split_active_;
         t.parallel_gpu_cpu_active = parallel_gpu_cpu_;
+        t.zero_hdd_active         = zero_hdd_active_;
+        t.disjoint_swap_active    = disjoint_swap_active_;
+        t.auto_balance_active     = auto_balance_active_;
         t.active_gpu_layers       = active_gpu_layers_;
-        t.active_cpu_share        = active_cpu_share_;
         t.active_ubatch           = active_ubatch_;
         sm                        = diag_.sys_mem;
     }
+    t.active_cpu_share = active_cpu_share_.load(std::memory_order_relaxed);
+
     if (!t.generating) {
         sm = query_system_memory();
     }
@@ -1741,21 +1931,34 @@ TelemetrySnapshot DualMoeEngine::telemetry() const {
     t.generated_tokens     = generated_tokens_.load(std::memory_order_relaxed);
     t.kv_used_tokens       = kv_used_.load(std::memory_order_relaxed);
 
-    t.gpu_expert_hits      = gpu_expert_hits_.load(std::memory_order_relaxed);
-    t.gpu_expert_fills     = gpu_expert_fills_.load(std::memory_order_relaxed);
-    t.cpu_parallel_experts = cpu_parallel_experts_.load(std::memory_order_relaxed);
-    t.vram_upload_bytes    = vram_upload_bytes_.load(std::memory_order_relaxed);
+    t.gpu_expert_hits       = gpu_expert_hits_.load(std::memory_order_relaxed);
+    t.gpu_expert_fills      = gpu_expert_fills_.load(std::memory_order_relaxed);
+    t.cpu_parallel_experts  = cpu_parallel_experts_.load(std::memory_order_relaxed);
+    t.vram_upload_bytes     = vram_upload_bytes_.load(std::memory_order_relaxed);
 
-    t.ram_cache_hits       = arena_.ram_hits();
-    t.ssd_expert_reads     = arena_.ssd_reads();
-    t.ssd_bytes_read       = arena_.ssd_bytes_read();
-    t.ssd_bandwidth_mbs    = arena_.ssd_bandwidth_mbs();
-    const uint64_t comm_b  = arena_.committed_bytes();
-    t.ram_arena_used_mb    = comm_b > 0 ? ((comm_b + (1ull << 20) - 1) >> 20) : 0;
-    t.ram_arena_budget_mb  = arena_.budget_bytes() >> 20;
-    const uint64_t anon_b  = arena_.dense_anon_bytes();
-    t.dense_anon_mb        = anon_b > 0 ? ((anon_b + (1ull << 20) - 1) >> 20) : 0;
-    t.mmap_released        = arena_.mmap_released();
+    t.ram_cache_hits        = arena_.ram_hits();
+    t.ram_to_vram_swaps     = arena_.ram_to_vram_swaps();
+    t.vram_to_ram_swaps     = arena_.vram_to_ram_swaps();
+    t.ssd_expert_reads      = arena_.ssd_reads();
+    t.ssd_bytes_read        = arena_.ssd_bytes_read();
+    t.ssd_bandwidth_mbs     = arena_.ssd_bandwidth_mbs();
+    t.preload_bandwidth_mbs = arena_.preload_bandwidth_mbs();
+
+    const uint64_t comm_b   = arena_.committed_bytes();
+    t.ram_arena_used_mb     = comm_b > 0 ? ((comm_b + (1ull << 20) - 1) >> 20) : 0;
+    t.ram_arena_budget_mb   = arena_.budget_bytes() >> 20;
+    const uint64_t anon_b   = arena_.dense_anon_bytes();
+    t.dense_anon_mb         = anon_b > 0 ? ((anon_b + (1ull << 20) - 1) >> 20) : 0;
+    t.mmap_released         = arena_.mmap_released();
+
+    if (t.model_loaded) {
+        if (is_moe_model && arena_.total_expert_bytes() > 0) {
+            const uint64_t sil_b = arena_.silicon_resident_bytes(prewarm_vram_b);
+            t.silicon_residency_pct = std::min(100.0, 100.0 * (double) sil_b / (double) arena_.total_expert_bytes());
+        } else {
+            t.silicon_residency_pct = t.zero_hdd_active ? 100.0 : 50.0;
+        }
+    }
     return t;
 }
 

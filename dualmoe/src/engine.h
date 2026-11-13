@@ -70,9 +70,12 @@ public:
     void append_backend_log(int level, const char * text);
 
 private:
-    static bool c_eval_callback(struct ggml_tensor * t, bool ask, void * user_data);
-    static void c_moe_cache_callback(const struct llama_moe_cache_event * ev, void * user_data);
-    static bool c_abort_callback(void * user_data);
+    static bool   c_eval_callback    (struct ggml_tensor * t, bool ask, void * user_data);
+    static void   c_moe_cache_callback(const struct llama_moe_cache_event * ev, void * user_data);
+    static bool   c_moe_prewarm_fetch(int32_t il, int32_t ip, int32_t expert_id, const char * tensor_name, void * dst_buf, size_t nbytes, void * user_data);
+    static void * c_moe_evict_cb     (int32_t evicted_il, int32_t ip, int32_t evicted_expert, const char * tensor_name, size_t nbytes, void * user_data);
+    static void   c_moe_promoted_cb  (int32_t il, const int32_t * promoted_experts, size_t n_promoted, size_t n_evicted_to_ram, void * user_data);
+    static bool   c_abort_callback   (void * user_data);
 
     void unload_model_locked();
     bool load_model_impl(const EngineConfig & cfg, std::string & err);
@@ -149,13 +152,20 @@ private:
     std::atomic<uint64_t> cpu_parallel_experts_{0};
     std::atomic<uint64_t> vram_upload_bytes_{0};
 
-    uint64_t active_vram_cache_mb_ = 0;
-    bool     auto_split_active_    = false;
-    bool     parallel_gpu_cpu_     = false;
-    int32_t  active_gpu_layers_    = 0;
-    float    active_cpu_share_     = 0.0f;
-    uint32_t active_ubatch_        = 32;
-    std::string status_text_       = "Готов к загрузке модели";
+    uint64_t active_vram_cache_mb_  = 0;
+    uint64_t vram_prewarmed_bytes_  = 0;
+    uint64_t ram_preloaded_bytes_   = 0;
+    bool     auto_split_active_     = false;
+    bool     parallel_gpu_cpu_      = false;
+    bool     zero_hdd_active_       = false;
+    bool     disjoint_swap_active_  = false;
+    bool     auto_balance_active_   = false;
+    int32_t  active_gpu_layers_     = 0;
+    std::atomic<float> active_cpu_share_{0.0f};
+    float    ema_gpu_hit_ratio_     = 0.75f;
+    uint64_t balance_events_        = 0;
+    uint32_t active_ubatch_         = 32;
+    std::string status_text_        = "Готов к загрузке модели";
 };
 
 } // namespace dualmoe

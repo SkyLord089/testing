@@ -86,10 +86,10 @@ index 2978340..6a8048d 100644
      return NULL;
  
 diff --git a/include/llama.h b/include/llama.h
-index 181d840..fc70348 100644
+index 181d840..2e5befb 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -1730,6 +1730,21 @@ extern "C" {
+@@ -1730,6 +1730,30 @@ extern "C" {
              ggml_opt_epoch_callback   callback_train,
              ggml_opt_epoch_callback   callback_eval);
  
@@ -106,16 +106,25 @@ index 181d840..fc70348 100644
 +
 +    typedef void (*llama_moe_cache_host_cb_t)(const struct llama_moe_cache_event * ev, void * user_data);
 +
-+    LLAMA_API void llama_set_moe_cache_host_cb(struct llama_context * ctx, llama_moe_cache_host_cb_t cb, void * user_data);
++    // Bidirectional VRAM <-> RAM swap & prewarm callbacks for DualMoE Zero-HDD mode
++    typedef bool   (*llama_moe_cache_fetch_cb_t)   (int32_t il, int32_t ip, int32_t expert_id, const char * tensor_name, void * dst_buf, size_t nbytes, void * user_data);
++    typedef void * (*llama_moe_cache_evict_cb_t)   (int32_t evicted_il, int32_t ip, int32_t evicted_expert, const char * tensor_name, size_t nbytes, void * user_data);
++    typedef void   (*llama_moe_cache_promoted_cb_t)(int32_t il, const int32_t * promoted_experts, size_t n_promoted, size_t n_evicted_to_ram, void * user_data);
++
++    LLAMA_API void   llama_set_moe_cache_host_cb  (struct llama_context * ctx, llama_moe_cache_host_cb_t cb, void * user_data);
++    LLAMA_API size_t llama_moe_cache_prewarm      (struct llama_context * ctx, llama_moe_cache_fetch_cb_t fetch_cb, void * user_data);
++    LLAMA_API void   llama_set_moe_cache_swap_cbs (struct llama_context * ctx, llama_moe_cache_evict_cb_t evict_cb, llama_moe_cache_promoted_cb_t promoted_cb, float swap_hysteresis, void * user_data);
++    LLAMA_API void   llama_set_moe_cache_cpu_share(struct llama_context * ctx, float cpu_share);
++    LLAMA_API bool   llama_moe_cache_rescue_expert(struct llama_context * ctx, int32_t il, int32_t expert_id, llama_moe_cache_evict_cb_t dst_cb, void * user_data);
 +
  #ifdef __cplusplus
  }
  #endif
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 9066e06..78c93eb 100644
+index 9066e06..4cbd866 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -5183,3 +5183,15 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
+@@ -5183,3 +5183,55 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
  llama_context * llama_get_ctx_other(struct llama_context * ctx) {
      return ctx->get_cparams().ctx_other;
  }
@@ -131,15 +140,59 @@ index 9066e06..78c93eb 100644
 +        ctx->set_moe_cache_host_cb(cb, user_data);
 +    }
 +}
++
++size_t llama_context::moe_cache_prewarm(llama_moe_cache_fetch_cb_t fetch_cb, void * user_data) {
++    return moe_cache ? moe_cache->prewarm(fetch_cb, user_data) : 0;
++}
++
++void llama_context::set_moe_cache_swap_cbs(llama_moe_cache_evict_cb_t evict_cb, llama_moe_cache_promoted_cb_t promoted_cb, float swap_hysteresis, void * user_data) {
++    if (moe_cache) {
++        moe_cache->set_swap_cbs(evict_cb, promoted_cb, swap_hysteresis, user_data);
++    }
++}
++
++void llama_context::set_moe_cache_cpu_share(float cpu_share) {
++    if (moe_cache) {
++        moe_cache->set_cpu_share(cpu_share);
++    }
++}
++
++bool llama_context::moe_cache_rescue_expert(int32_t il, int32_t expert_id, llama_moe_cache_evict_cb_t dst_cb, void * user_data) {
++    return moe_cache ? moe_cache->rescue_expert(il, expert_id, dst_cb, user_data) : false;
++}
++
++size_t llama_moe_cache_prewarm(struct llama_context * ctx, llama_moe_cache_fetch_cb_t fetch_cb, void * user_data) {
++    return ctx ? ctx->moe_cache_prewarm(fetch_cb, user_data) : 0;
++}
++
++void llama_set_moe_cache_swap_cbs(struct llama_context * ctx, llama_moe_cache_evict_cb_t evict_cb, llama_moe_cache_promoted_cb_t promoted_cb, float swap_hysteresis, void * user_data) {
++    if (ctx) {
++        ctx->set_moe_cache_swap_cbs(evict_cb, promoted_cb, swap_hysteresis, user_data);
++    }
++}
++
++void llama_set_moe_cache_cpu_share(struct llama_context * ctx, float cpu_share) {
++    if (ctx) {
++        ctx->set_moe_cache_cpu_share(cpu_share);
++    }
++}
++
++bool llama_moe_cache_rescue_expert(struct llama_context * ctx, int32_t il, int32_t expert_id, llama_moe_cache_evict_cb_t dst_cb, void * user_data) {
++    return ctx ? ctx->moe_cache_rescue_expert(il, expert_id, dst_cb, user_data) : false;
++}
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 45eca45..2f066a9 100644
+index 45eca45..cf6c7e2 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -213,6 +213,8 @@ struct llama_context {
+@@ -213,6 +213,12 @@ struct llama_context {
  
      llama_memory_breakdown memory_breakdown() const;
  
-+    void set_moe_cache_host_cb(llama_moe_cache_host_cb_t cb, void * user_data);
++    void   set_moe_cache_host_cb  (llama_moe_cache_host_cb_t cb, void * user_data);
++    size_t moe_cache_prewarm      (llama_moe_cache_fetch_cb_t fetch_cb, void * user_data);
++    void   set_moe_cache_swap_cbs (llama_moe_cache_evict_cb_t evict_cb, llama_moe_cache_promoted_cb_t promoted_cb, float swap_hysteresis, void * user_data);
++    void   set_moe_cache_cpu_share(float cpu_share);
++    bool   moe_cache_rescue_expert(int32_t il, int32_t expert_id, llama_moe_cache_evict_cb_t dst_cb, void * user_data);
 +
      //
      // training
@@ -168,22 +221,173 @@ index 9688a7e..c0bb61a 100644
  #if _WIN32_WINNT >= 0x602
              BOOL (WINAPI *pPrefetchVirtualMemory) (HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
 diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-index 1070b92..11ecb5a 100644
+index 1070b92..0e09c88 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
-@@ -383,6 +383,11 @@ struct llama_moe_cache::impl {
+@@ -178,6 +178,8 @@ struct moe_cache_lru {
+     struct fill {
+         int32_t expert;
+         int32_t slot;
++        int32_t evicted_il     = -1;
++        int32_t evicted_expert = -1;
+     };
+ 
+     // give a slot to each expert selected by ids (n_tokens tokens) in layer il
+@@ -186,7 +188,7 @@ struct moe_cache_lru {
+     // returns false if the ids select more distinct experts than there are slots
+     template <typename F>
+     bool plan(int32_t il, const int32_t * ids, size_t n_ids, int64_t n_tokens, int32_t n_used, int32_t n_zero, F && n_cpu,
+-            std::vector<fill> & fills, std::vector<fill> & cpu, size_t & n_hit) {
++            float swap_hysteresis, std::vector<fill> & fills, std::vector<fill> & cpu, size_t & n_hit) {
+         fills.clear();
+         cpu.clear();
+         n_hit = 0;
+@@ -222,6 +224,40 @@ struct moe_cache_lru {
+             }
+         }
+ 
++        if (n_zero > 0) {
++            GGML_ASSERT((size_t) n_tokens*n_used == n_ids);
++            token_zero.assign(n_tokens, 0);
++        }
++
++        auto try_assign_cpu_zero = [&](int32_t e) -> bool {
++            if (n_zero <= 0) return false;
++            uint64_t used = 0;
++            for (int64_t it = 0; it < n_tokens; ++it) {
++                for (int32_t k = 0; k < n_used; ++k) {
++                    if (ids[it*n_used + k] == e) {
++                        used |= token_zero[it];
++                    }
++                }
++            }
++            int32_t z = 0;
++            while (z < 64 && (used >> z & 1)) {
++                z++;
++            }
++            if (z >= n_zero) {
++                return false;
++            }
++            for (int64_t it = 0; it < n_tokens; ++it) {
++                for (int32_t k = 0; k < n_used; ++k) {
++                    if (ids[it*n_used + k] == e) {
++                        token_zero[it] |= 1ull << z;
++                    }
++                }
++            }
++            slots[e] = n_slots + z;
++            cpu.push_back({ e, n_slots + z, -1, -1 });
++            return true;
++        };
++
+         // the misses with the lowest CRF are left to the CPU, a miss that keeps being used gains CRF and enters the cache
+         // all misses are used at the same clock, so their CRF compare without decay
+         const size_t n_c = std::min(n_cpu(misses.size()), misses.size());
+@@ -231,48 +267,52 @@ struct moe_cache_lru {
+                 const float crf_b = crf[make_key(il, b)];
+                 return crf_a != crf_b ? crf_a < crf_b : a < b;
+             });
+-            GGML_ASSERT((size_t) n_tokens*n_used == n_ids);
+-            token_zero.assign(n_tokens, 0);
+             size_t n_keep = n_c;
+             for (size_t i = 0; i < n_keep; ) {
+-                const int32_t e = misses[i];
+-                uint64_t used = 0;
+-                for (int64_t it = 0; it < n_tokens; ++it) {
+-                    for (int32_t k = 0; k < n_used; ++k) {
+-                        if (ids[it*n_used + k] == e) {
+-                            used |= token_zero[it];
+-                        }
+-                    }
+-                }
+-                int32_t z = 0;
+-                while (z < 64 && (used >> z & 1)) {
+-                    z++;
+-                }
+-                if (z >= n_zero) {
++                if (!try_assign_cpu_zero(misses[i])) {
+                     std::swap(misses[i], misses[--n_keep]);
+                     continue;
+                 }
+-                for (int64_t it = 0; it < n_tokens; ++it) {
+-                    for (int32_t k = 0; k < n_used; ++k) {
+-                        if (ids[it*n_used + k] == e) {
+-                            token_zero[it] |= 1ull << z;
+-                        }
+-                    }
+-                }
+-                slots[e] = n_slots + z;
+-                cpu.push_back({ e, n_slots + z });
+                 i++;
+             }
+             misses.erase(misses.begin(), misses.begin() + n_keep);
+         }
+ 
++        // CRF hysteresis gate: only swap RAM -> VRAM when the candidate miss is genuinely hotter than the coldest VRAM victim
++        if (swap_hysteresis > 0.0f && n_zero > 0 && !misses.empty()) {
++            std::sort(misses.begin(), misses.end(), [&](int32_t a, int32_t b) {
++                const float crf_a = crf[make_key(il, a)];
++                const float crf_b = crf[make_key(il, b)];
++                return crf_a != crf_b ? crf_a > crf_b : a < b;
++            });
++            std::vector<int32_t> promote;
++            promote.reserve(misses.size());
++            for (int32_t e : misses) {
++                const int32_t cand_s  = victim(il);
++                const int32_t vic_key = key_of[cand_s];
++                if (vic_key >= 0) {
++                    const float miss_crf = decayed_crf(il, make_key(il, e));
++                    const float vic_crf  = decayed_crf(key_layer(vic_key), vic_key);
++                    if (miss_crf < vic_crf * swap_hysteresis && try_assign_cpu_zero(e)) {
++                        continue;
++                    }
++                }
++                promote.push_back(e);
++            }
++            misses.swap(promote);
++        }
++
+         // fill the misses in expert order: victim() takes unused slots, and slots filled by one plan(), in list order,
+         // so consecutive experts often get consecutive slots and one upload
+         std::sort(misses.begin(), misses.end());
+         for (int32_t e : misses) {
+             const int32_t s = victim(il);
++            int32_t ev_il  = -1;
++            int32_t ev_exp = -1;
+             if (key_of[s] >= 0) {
+-                slot_map[key_layer(key_of[s])][key_expert(key_of[s])] = empty;
++                ev_il  = key_layer(key_of[s]);
++                ev_exp = key_expert(key_of[s]);
++                slot_map[ev_il][ev_exp] = empty;
+             } else {
+                 n_filled++;
+             }
+@@ -280,7 +320,7 @@ struct moe_cache_lru {
+             key_of[s] = key;
+             slots[e]  = s;
+             move(s, class_of(key));
+-            fills.push_back({ e, s });
++            fills.push_back({ e, s, ev_il, ev_exp });
+         }
+         clock[il] += n_tokens;
+         return true;
+@@ -383,6 +423,15 @@ struct llama_moe_cache::impl {
      std::vector<int32_t> ids;
      std::vector<moe_cache_lru::fill> fills;
      std::vector<moe_cache_lru::fill> cpu;
 +    std::vector<int32_t> fill_ids_buf;
 +    std::vector<int32_t> cpu_ids_buf;
 +
-+    llama_moe_cache_host_cb_t host_cb    = nullptr;
-+    void *                    host_cb_ud = nullptr;
++    llama_moe_cache_host_cb_t     host_cb         = nullptr;
++    void *                        host_cb_ud      = nullptr;
++    llama_moe_cache_evict_cb_t    evict_cb        = nullptr;
++    llama_moe_cache_promoted_cb_t promoted_cb     = nullptr;
++    void *                        swap_cb_ud      = nullptr;
++    float                         swap_hysteresis = 0.0f;
  
      float    cpu_share = 0.0f;
      uint32_t cpu_share_q = 0; // cpu_share in 1/65536, integer so that a simulator can reproduce the rounding
-@@ -506,7 +511,17 @@ struct llama_moe_cache::impl {
+@@ -506,7 +555,17 @@ struct llama_moe_cache::impl {
              const int32_t n_expert  = g.ref[0]->ne[2];
              const size_t  budget    = (size_t) ((double) size*d.split/split_sum*g.host_bytes/d.host_bytes);
              const int32_t max_slots = g.layers.size()*n_expert;
@@ -202,15 +406,51 @@ index 1070b92..11ecb5a 100644
                  g.n_slots++;
              }
              if (g.n_slots < n_expert_used) {
-@@ -832,6 +847,31 @@ struct llama_moe_cache::impl {
+@@ -817,7 +876,7 @@ struct llama_moe_cache::impl {
+             return (size_t) (acc >> 16);
+         };
+         size_t n_hit = 0;
+-        if (!g.lru.plan(il, ids.data(), ids.size(), sel->src[0]->ne[1], n_used, n_zero, n_cpu, fills, cpu, n_hit)) {
++        if (!g.lru.plan(il, ids.data(), ids.size(), sel->src[0]->ne[1], n_used, n_zero, n_cpu, swap_hysteresis, fills, cpu, n_hit)) {
+             GGML_ABORT("the MoE cache is too small for the experts selected in layer %d", il);
+         }
+         if (has_cpu) {
+@@ -832,6 +891,58 @@ struct llama_moe_cache::impl {
              }
          }
  
-+        if (host_cb != nullptr) {
-+            fill_ids_buf.resize(fills.size());
-+            for (size_t i = 0; i < fills.size(); ++i) {
-+                fill_ids_buf[i] = fills[i].expert;
++        // Step 1: Bidirectional VRAM -> RAM swap rescue for evicted cold VRAM experts BEFORE overwriting slots
++        size_t n_evicted_to_ram = 0;
++        if (evict_cb != nullptr && !fills.empty()) {
++            for (const auto & f : fills) {
++                if (f.evicted_il >= 0 && f.evicted_expert >= 0) {
++                    const auto & vic_exps = layers[f.evicted_il].experts;
++                    bool any_pulled = false;
++                    for (size_t ip = 0; ip < vic_exps.size() && ip < g.banks.size(); ++ip) {
++                        const ggml_tensor * vw = vic_exps[ip];
++                        const size_t eb = vw->nb[2];
++                        void * ram_dst = evict_cb(f.evicted_il, (int32_t) ip, f.evicted_expert, vw->name, eb, swap_cb_ud);
++                        if (ram_dst != nullptr) {
++                            ggml_backend_tensor_get_async(backend, g.banks[ip], ram_dst, (size_t) f.slot * eb, eb);
++                            any_pulled = true;
++                        }
++                    }
++                    if (any_pulled) {
++                        n_evicted_to_ram++;
++                    }
++                }
 +            }
++            if (n_evicted_to_ram > 0) {
++                ggml_backend_synchronize(backend);
++            }
++        }
++
++        fill_ids_buf.resize(fills.size());
++        for (size_t i = 0; i < fills.size(); ++i) {
++            fill_ids_buf[i] = fills[i].expert;
++        }
++
++        if (host_cb != nullptr) {
 +            cpu_ids_buf.resize(cpu.size());
 +            for (size_t i = 0; i < cpu.size(); ++i) {
 +                cpu_ids_buf[i] = cpu[i].expert;
@@ -234,7 +474,22 @@ index 1070b92..11ecb5a 100644
          // upload the missing experts, consecutive experts going to consecutive slots are uploaded together
          size_t bytes = 0;
          for (size_t ip = 0; ip < l.experts.size(); ++ip) {
-@@ -970,6 +1010,11 @@ int64_t llama_moe_cache::copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -849,6 +960,14 @@ struct llama_moe_cache::impl {
+             }
+         }
+ 
++        if (promoted_cb != nullptr && (!fills.empty() || n_evicted_to_ram > 0)) {
++            if (!fills.empty() && evict_cb != nullptr) {
++                // Disjoint VRAM (+) RAM mode: ensure upload finished reading w->data before host pages are released
++                ggml_backend_synchronize(backend);
++            }
++            promoted_cb(il, fill_ids_buf.empty() ? nullptr : fill_ids_buf.data(), fill_ids_buf.size(), n_evicted_to_ram, swap_cb_ud);
++        }
++
+         stats & st = ids.size() <= (size_t) 8*n_expert_used ? stats_small : stats_large;
+         st.hits   += n_hit;
+         st.misses += fills.size() + cpu.size();
+@@ -970,6 +1089,119 @@ int64_t llama_moe_cache::copy_experts(ggml_backend_t backend, const ggml_tensor
      return pimpl->copy_experts(backend, w, dst, e, last);
  }
  
@@ -243,11 +498,119 @@ index 1070b92..11ecb5a 100644
 +    pimpl->host_cb_ud = user_data;
 +}
 +
++size_t llama_moe_cache::prewarm(llama_moe_cache_fetch_cb_t fetch_cb, void * user_data) {
++    if (!fetch_cb) {
++        return 0;
++    }
++    size_t total_uploaded = 0;
++    for (auto & g : pimpl->groups) {
++        if (g.n_slots <= 0 || g.layers.empty() || g.banks.empty()) {
++            continue;
++        }
++        size_t max_eb = 0;
++        for (const ggml_tensor * w : g.ref) {
++            max_eb = std::max<size_t>(max_eb, w->nb[2]);
++        }
++        if (max_eb == 0) {
++            continue;
++        }
++        std::vector<uint8_t> staging(max_eb);
++        const int32_t n_exp = g.lru.n_expert;
++        const size_t  n_lay = g.layers.size();
++
++        // Iterate layer-by-layer (disk sequential order) while mapping each (li, exp) to balanced slot s
++        for (size_t li = 0; li < n_lay; ++li) {
++            const int32_t il   = g.layers[li];
++            const auto &  exps = pimpl->layers[il].experts;
++            for (int32_t exp = 0; exp < n_exp; ++exp) {
++                const size_t slot_idx = (size_t) exp * n_lay + li;
++                if (slot_idx >= (size_t) g.n_slots) {
++                    break;
++                }
++                const int32_t s = (int32_t) slot_idx;
++                if (g.lru.slot_map[il][exp] < g.n_slots) {
++                    continue;
++                }
++                bool ok = true;
++                for (size_t ip = 0; ip < exps.size() && ip < g.banks.size(); ++ip) {
++                    const ggml_tensor * w = exps[ip];
++                    const size_t eb = w->nb[2];
++                    if (!fetch_cb(il, (int32_t) ip, exp, w->name, staging.data(), eb, user_data)) {
++                        ok = false;
++                        break;
++                    }
++                    ggml_backend_tensor_set(g.banks[ip], staging.data(), (size_t) s * eb, eb);
++                    total_uploaded += eb;
++                }
++                if (!ok) {
++                    break;
++                }
++                if (g.lru.key_of[s] >= 0) {
++                    const int32_t old_il  = g.lru.key_layer(g.lru.key_of[s]);
++                    const int32_t old_exp = g.lru.key_expert(g.lru.key_of[s]);
++                    g.lru.slot_map[old_il][old_exp] = g.lru.empty;
++                } else {
++                    g.lru.n_filled++;
++                }
++                const int32_t key = g.lru.make_key(il, exp);
++                g.lru.key_of[s]         = key;
++                g.lru.slot_map[il][exp] = s;
++                g.lru.crf[key]          = 1.5f;
++                g.lru.last_use[key]     = 0;
++                g.lru.move(s, g.lru.class_of(key));
++            }
++        }
++    }
++    return total_uploaded;
++}
++
++void llama_moe_cache::set_swap_cbs(llama_moe_cache_evict_cb_t evict_cb, llama_moe_cache_promoted_cb_t promoted_cb, float swap_hysteresis, void * user_data) {
++    pimpl->evict_cb        = evict_cb;
++    pimpl->promoted_cb     = promoted_cb;
++    pimpl->swap_hysteresis = std::max(0.0f, swap_hysteresis);
++    pimpl->swap_cb_ud      = user_data;
++}
++
++void llama_moe_cache::set_cpu_share(float cpu_share) {
++    const float clamped = std::max(0.0f, std::min(1.0f, cpu_share));
++    pimpl->cpu_share   = clamped;
++    pimpl->cpu_share_q = (uint32_t) std::round(clamped * 65536.0f);
++}
++
++bool llama_moe_cache::rescue_expert(int32_t il, int32_t expert_id, llama_moe_cache_evict_cb_t dst_cb, void * user_data) {
++    if (!dst_cb || il < 0 || (size_t) il >= pimpl->layers.size()) {
++        return false;
++    }
++    const auto & l = pimpl->layers[il];
++    if (l.ig < 0 || (size_t) l.ig >= pimpl->groups.size()) {
++        return false;
++    }
++    const auto & g = pimpl->groups[l.ig];
++    if (expert_id < 0 || expert_id >= g.lru.n_expert || l.slot_map == nullptr) {
++        return false;
++    }
++    const int32_t s = g.lru.slot_map[il][expert_id];
++    if (s < 0 || s >= g.n_slots) {
++        return false;
++    }
++    bool any_rescued = false;
++    for (size_t ip = 0; ip < l.experts.size() && ip < g.banks.size(); ++ip) {
++        const ggml_tensor * w = l.experts[ip];
++        const size_t eb = w->nb[2];
++        void * dst = dst_cb(il, (int32_t) ip, expert_id, w->name, eb, user_data);
++        if (dst != nullptr) {
++            ggml_backend_tensor_get(g.banks[ip], dst, (size_t) s * eb, eb);
++            any_rescued = true;
++        }
++    }
++    return any_rescued;
++}
++
  std::map<ggml_backend_buffer_type_t, size_t> llama_moe_cache::memory_breakdown() const {
      std::map<ggml_backend_buffer_type_t, size_t> res;
      for (const auto & d : pimpl->devices) {
 diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
-index 833eac3..30167c7 100644
+index 833eac3..43febf9 100644
 --- a/src/llama-moe-cache.h
 +++ b/src/llama-moe-cache.h
 @@ -1,5 +1,6 @@
@@ -257,11 +620,15 @@ index 833eac3..30167c7 100644
  #include "ggml-backend.h"
  
  #include <map>
-@@ -60,6 +61,8 @@ public:
+@@ -60,6 +61,12 @@ public:
      // returns the number of experts copied, 0 if expert e is not in the cache
      int64_t copy_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e, int64_t last);
  
 +    void set_host_cb(llama_moe_cache_host_cb_t cb, void * user_data);
++    size_t prewarm(llama_moe_cache_fetch_cb_t fetch_cb, void * user_data);
++    void set_swap_cbs(llama_moe_cache_evict_cb_t evict_cb, llama_moe_cache_promoted_cb_t promoted_cb, float swap_hysteresis, void * user_data);
++    void set_cpu_share(float cpu_share);
++    bool rescue_expert(int32_t il, int32_t expert_id, llama_moe_cache_evict_cb_t dst_cb, void * user_data);
 +
      std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
  

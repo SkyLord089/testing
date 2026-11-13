@@ -1074,8 +1074,8 @@
           <circle cx="12" cy="3" r="1.3"/>
         </svg>
       </div>
-      <span class="brand-title mono">DUALMOE <span style="color:var(--nous-cream)">v0.2</span></span>
-      <span class="brand-sub">LearnHarness × Hermes Agent • GPU ∥ CPU ∥ SSD</span>
+      <span class="brand-title mono">DUALMOE <span style="color:var(--nous-cream)">v0.3</span></span>
+      <span class="brand-sub">LearnHarness × Hermes • Без HDD (VRAM ⇄ RAM) • Макс. GPU ∥ CPU</span>
     </div>
 
     <nav class="nav-tabs">
@@ -1146,34 +1146,50 @@
       <!-- 2. One-Click Hardware Presets -->
       <section class="panel">
         <div class="panel-head">
-          <span class="panel-title">2. Профили под железо</span>
+          <span class="panel-title">2. Профили под HDD + RX 580</span>
         </div>
         <div class="preset-grid">
           <button class="preset-chip active" id="presetRxTurbo" onclick="applyPreset('rx_turbo')">
-            <div class="preset-chip-title">RX 580 8ГБ • Турбо</div>
-            <div class="preset-chip-sub">NGL 99 • VRAM 2.2ГБ • 24K</div>
+            <div class="preset-chip-title">HDD-Турбо: VRAM ⇄ RAM</div>
+            <div class="preset-chip-sub">0 чтений HDD • Макс GPU∥CPU</div>
           </button>
           <button class="preset-chip" id="presetLearn" onclick="applyPreset('learnharness')">
             <div class="preset-chip-title">LearnHarness 24K</div>
-            <div class="preset-chip-sub">Стабильный KV q8_0 • 24K</div>
+            <div class="preset-chip-sub">Без HDD • KV q8_0 • 24K</div>
           </button>
           <button class="preset-chip" id="presetSafe" onclick="applyPreset('safe_rx580')">
             <div class="preset-chip-title">Безопасный (Анти-краш)</div>
-            <div class="preset-chip-sub">NGL 20 • VRAM 1ГБ • 8K</div>
+            <div class="preset-chip-sub">NGL 28 • VRAM 1.8ГБ • 8K</div>
           </button>
-          <button class="preset-chip" id="presetCpu" onclick="applyPreset('cpu_ssd')">
-            <div class="preset-chip-title">Только CPU + SSD</div>
-            <div class="preset-chip-sub">0 МБ VRAM • DDR4 стрим</div>
+          <button class="preset-chip" id="presetCpu" onclick="applyPreset('giant_hdd')">
+            <div class="preset-chip-title">Гигант &gt;20 ГБ (HDD)</div>
+            <div class="preset-chip-sub">VRAM+RAM + 1-поток HDD</div>
           </button>
         </div>
       </section>
 
-      <!-- 3. Hybrid GPU || CPU || SSD Sliders -->
+      <!-- 3. Zero-HDD VRAM <-> RAM & Parallel GPU || CPU Controls -->
       <section class="panel">
         <div class="panel-head">
-          <span class="panel-title">3. Гибридный планировщик</span>
-          <span class="tag mono">uBatch=32 Guard</span>
+          <span class="panel-title">3. Движок VRAM ⇄ RAM (Без HDD)</span>
+          <span class="tag moe mono">0 HDD Seeks</span>
         </div>
+
+        <label style="display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border-radius:6px;background:var(--nous-cream-bg);border:1px solid var(--nous-cream-border);cursor:pointer;margin-bottom:7px">
+          <input type="checkbox" id="chkZeroHdd" checked onchange="evaluatePreLoadRisk()" style="margin-top:2px;accent-color:var(--nous-blue-hi)" />
+          <div style="font-size:11.5px;line-height:1.38">
+            <strong style="color:var(--nous-cream);display:block">Режим «Без HDD» (100% в VRAM + RAM)</strong>
+            <span style="color:var(--muted);font-size:10.5px">Линейно читает веса с HDD один раз при старте; во время диалога диск вообще не трогается.</span>
+          </div>
+        </label>
+
+        <label style="display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border-radius:6px;background:var(--input);border:1px solid var(--border);cursor:pointer;margin-bottom:10px">
+          <input type="checkbox" id="chkAutoBalance" checked style="margin-top:2px;accent-color:var(--nous-blue-hi)" />
+          <div style="font-size:11.5px;line-height:1.38">
+            <strong style="color:var(--fg);display:block">Авто-баланс GPU ∥ CPU и горячих слотов</strong>
+            <span style="color:var(--muted);font-size:10.5px">Грузит RX 580 и Ryzen на максимум параллельно, поднимая горячие блоки RAM → VRAM.</span>
+          </div>
+        </label>
 
         <div class="control-group">
           <div class="field-label">
@@ -1185,26 +1201,26 @@
 
         <div class="control-group">
           <div class="field-label">
-            <span>Горячий кэш экспертов в VRAM</span>
-            <span class="field-val" id="valVram">2200 МБ</span>
+            <span>Горячий банк в VRAM (авто под остаток)</span>
+            <span class="field-val" id="valVram">4600 МБ</span>
           </div>
-          <input type="range" id="inpVram" min="0" max="5500" step="100" value="2200" oninput="syncSliders()" />
+          <input type="range" id="inpVram" min="0" max="6200" step="100" value="4600" oninput="syncSliders()" />
         </div>
 
         <div class="control-group">
           <div class="field-label">
-            <span>Доля параллельного CPU на промахах</span>
-            <span class="field-val" id="valCpuShare">92%</span>
+            <span>Базовая доля параллельного CPU</span>
+            <span class="field-val" id="valCpuShare">85%</span>
           </div>
-          <input type="range" id="inpCpuShare" min="0" max="100" step="2" value="92" oninput="syncSliders()" />
+          <input type="range" id="inpCpuShare" min="0" max="100" step="1" value="85" oninput="syncSliders()" />
         </div>
 
         <div class="control-group">
           <div class="field-label">
-            <span>Бюджет виртуальной арены DDR4</span>
-            <span class="field-val" id="valRam">5632 МБ</span>
+            <span>Бюджет экспертов в ОЗУ DDR4</span>
+            <span class="field-val" id="valRam">9728 МБ</span>
           </div>
-          <input type="range" id="inpRam" min="512" max="12288" step="256" value="5632" oninput="syncSliders()" />
+          <input type="range" id="inpRam" min="512" max="13312" step="256" value="9728" oninput="syncSliders()" />
         </div>
 
         <div class="row-gap" style="margin-top:8px">
@@ -1213,8 +1229,8 @@
             <select class="input-box mono" id="inpCtx" onchange="evaluatePreLoadRisk()">
               <option value="4096">4 096</option>
               <option value="8192">8 192</option>
-              <option value="16384">16 384</option>
-              <option value="24576" selected>24 576 (LearnHarness)</option>
+              <option value="16384" selected>16 384 (HDD-Турбо)</option>
+              <option value="24576">24 576 (LearnHarness)</option>
               <option value="32768">32 768</option>
             </select>
           </div>
@@ -1249,10 +1265,10 @@
       <section class="view-pane active" id="viewChat">
         <div class="chat-scroll" id="chatScroll">
           <div class="empty-hero" id="emptyHero">
-            <div class="tag moe" style="display:inline-block;margin-bottom:10px">HERMES × LEARNHARNESS WORKSPACE</div>
-            <h2>Параллельный гибридный рантайм DualMoE</h2>
+            <div class="tag moe" style="display:inline-block;margin-bottom:10px">HERMES × LEARNHARNESS • ZERO-HDD ENGINE</div>
+            <h2>Бездисковый параллельный движок DualMoE (VRAM ⇄ RAM)</h2>
             <p>
-              Горячие эксперты вычисляются в VRAM RX 580, промахи идут параллельно на ядрах Ryzen 7 5700X с прямой многопоточной подкачкой SSD — с полной 8-этапной диагностикой памяти и защитой от сбоев Windows.
+              Модель линейно читается с HDD один раз в VRAM RX 580 и ОЗУ DDR4: оба процессора (GPU Vulkan и Ryzen AVX2) работают параллельно на максимуме, а нужные горячие части автоматически переезжают из ОЗУ в VRAM без обращений к HDD!
             </p>
             <div class="starter-grid">
               <div class="starter-card" onclick="useStarter('Объясни на пальцах разницу между стек-трейсом исключения 0xC0000005 и нехваткой лимита виртуальной памяти Commit в Windows 11, и дай 3 коротких контрольных вопроса в стиле LearnHarness.')">
@@ -1419,37 +1435,63 @@
 
       <section class="panel">
         <div class="panel-head">
-          <span class="panel-title">Маршрутизация экспертов</span>
+          <span class="panel-title">Кремний (VRAM ⇄ RAM) и GPU ∥ CPU</span>
+          <span class="tag moe mono" id="telZeroHddBadge">Ожидание</span>
         </div>
+
+        <div style="margin-bottom:8px">
+          <div class="field-label">
+            <span>Резидентность в памяти (без HDD)</span>
+            <strong class="mono" style="color:var(--ok)" id="telSiliconPct">0%</strong>
+          </div>
+          <div class="mem-bar" style="margin:4px 0 2px">
+            <div id="telSiliconBar" style="width:0%;background:var(--ok)"></div>
+          </div>
+        </div>
+
+        <div style="margin-bottom:9px">
+          <div class="field-label">
+            <span>Параллельный баланс промахов</span>
+            <strong class="mono" style="color:var(--nous-blue-hi)" id="telCpuShareLive">GPU ∥ CPU</strong>
+          </div>
+          <div class="mem-bar" style="margin:4px 0 2px;background:var(--nous-cream-border)">
+            <div id="telBalanceBar" style="width:85%;background:var(--nous-blue-hi)"></div>
+          </div>
+        </div>
+
         <div class="tier-row">
-          <span>GPU VRAM попадания</span>
+          <span>Вычислено в VRAM (GPU)</span>
           <strong class="mono" style="color:var(--ok)" id="telGpuHits">0</strong>
         </div>
         <div class="tier-row">
-          <span>GPU VRAM подгрузки</span>
-          <strong class="mono" id="telGpuFills">0</strong>
-        </div>
-        <div class="tier-row">
-          <span>Параллельно на CPU</span>
+          <span>Параллельно в ОЗУ (CPU)</span>
           <strong class="mono" style="color:var(--nous-blue-hi)" id="telCpuPar">0</strong>
         </div>
         <div class="tier-row">
-          <span>Попадания DDR4-арены</span>
+          <span>Горячие RAM → VRAM</span>
+          <strong class="mono" style="color:var(--nous-cream)" id="telGpuFills">0</strong>
+        </div>
+        <div class="tier-row">
+          <span>Холодные VRAM → RAM</span>
+          <strong class="mono" id="telVramEvicts">0</strong>
+        </div>
+        <div class="tier-row">
+          <span>Попадания в DDR4</span>
           <strong class="mono" id="telRamHits">0</strong>
         </div>
         <div class="tier-row">
-          <span>Чтений с SSD (4 линии)</span>
-          <strong class="mono" style="color:var(--nous-cream)" id="telSsdReads">0</strong>
+          <span>Обращений к HDD в чате</span>
+          <strong class="mono" style="color:var(--ok)" id="telSsdReads">0</strong>
         </div>
         <div class="tier-row">
-          <span>Поток SSD</span>
+          <span>Скорость чтения HDD</span>
           <strong class="mono" id="telSsdBw">0.0 МБ/с</strong>
         </div>
       </section>
 
       <section class="panel">
         <div class="panel-head">
-          <span class="panel-title">Активная память арен</span>
+          <span class="panel-title">Активная память VRAM + RAM</span>
         </div>
         <div class="tier-row">
           <span>GPU банк экспертов</span>
@@ -1563,31 +1605,39 @@
     });
     if (id === 'rx_turbo') {
       document.getElementById('presetRxTurbo').classList.add('active');
+      document.getElementById('chkZeroHdd').checked = true;
+      document.getElementById('chkAutoBalance').checked = true;
       document.getElementById('inpNgl').value = 99;
-      document.getElementById('inpVram').value = 2200;
-      document.getElementById('inpCpuShare').value = 92;
-      document.getElementById('inpRam').value = 5632;
-      document.getElementById('inpCtx').value = '24576';
+      document.getElementById('inpVram').value = 4600;
+      document.getElementById('inpCpuShare').value = 85;
+      document.getElementById('inpRam').value = 9728;
+      document.getElementById('inpCtx').value = '16384';
     } else if (id === 'learnharness') {
       document.getElementById('presetLearn').classList.add('active');
+      document.getElementById('chkZeroHdd').checked = true;
+      document.getElementById('chkAutoBalance').checked = true;
       document.getElementById('inpNgl').value = 99;
-      document.getElementById('inpVram').value = 1800;
-      document.getElementById('inpCpuShare').value = 92;
-      document.getElementById('inpRam').value = 5120;
+      document.getElementById('inpVram').value = 3400;
+      document.getElementById('inpCpuShare').value = 88;
+      document.getElementById('inpRam').value = 9728;
       document.getElementById('inpCtx').value = '24576';
     } else if (id === 'safe_rx580') {
       document.getElementById('presetSafe').classList.add('active');
-      document.getElementById('inpNgl').value = 20;
-      document.getElementById('inpVram').value = 1000;
-      document.getElementById('inpCpuShare').value = 96;
-      document.getElementById('inpRam').value = 3584;
+      document.getElementById('chkZeroHdd').checked = true;
+      document.getElementById('chkAutoBalance').checked = true;
+      document.getElementById('inpNgl').value = 28;
+      document.getElementById('inpVram').value = 1800;
+      document.getElementById('inpCpuShare').value = 92;
+      document.getElementById('inpRam').value = 4608;
       document.getElementById('inpCtx').value = '8192';
-    } else if (id === 'cpu_ssd') {
+    } else if (id === 'giant_hdd' || id === 'cpu_ssd') {
       document.getElementById('presetCpu').classList.add('active');
-      document.getElementById('inpNgl').value = 0;
-      document.getElementById('inpVram').value = 0;
-      document.getElementById('inpCpuShare').value = 100;
-      document.getElementById('inpRam').value = 6144;
+      document.getElementById('chkZeroHdd').checked = false;
+      document.getElementById('chkAutoBalance').checked = true;
+      document.getElementById('inpNgl').value = 99;
+      document.getElementById('inpVram').value = 3800;
+      document.getElementById('inpCpuShare').value = 90;
+      document.getElementById('inpRam').value = 7680;
       document.getElementById('inpCtx').value = '16384';
     }
     syncSliders();
@@ -1608,7 +1658,7 @@
     evaluatePreLoadRisk();
   }
 
-  // Pre-Flight Crash Risk Estimator (explains memory fit BEFORE clicking Load!)
+  // Pre-Flight Silicon Fit & Crash Risk Estimator
   function evaluatePreLoadRisk() {
     const box = document.getElementById('preLoadRiskBox');
     const m = state.selectedModel;
@@ -1618,31 +1668,48 @@
     }
     box.style.display = 'block';
     const sys = state.lastDiag?.sys_mem || {};
+    const zeroHdd = document.getElementById('chkZeroHdd').checked;
     const ngl = parseInt(document.getElementById('inpNgl').value, 10) || 0;
     const vramReq = parseInt(document.getElementById('inpVram').value, 10) || 0;
     const ramReq = parseInt(document.getElementById('inpRam').value, 10) || 0;
     const denseMb = Math.round((m.dense_bytes || 0) / (1024 * 1024));
     const expMb = Math.round((m.expert_bytes || 0) / (1024 * 1024));
+    const totalMb = Math.round((m.file_size_bytes || 0) / (1024 * 1024));
 
     let notes = [];
     let cls = 'ok';
 
     if (m.is_moe) {
-      notes.push(`<strong>MoE ${m.n_expert}×Top${m.n_expert_used}:</strong> плотные веса ${denseMb} МБ, эксперты ${fmtBytesMb(m.expert_bytes)} (мин. цикл ${m.cycle_floor_mb} МБ).`);
+      notes.push(`<strong>MoE ${m.n_expert}×Top${m.n_expert_used}:</strong> плотные ${denseMb} МБ, эксперты ${fmtBytesMb(m.expert_bytes)}.`);
     } else {
       notes.push(`<strong>Плотная модель:</strong> общий объём ${fmtBytesMb(m.file_size_bytes)}.`);
     }
 
+    const safePhysRam = sys.ram_avail_mb > 1600 ? (sys.ram_avail_mb - 1600) : 0;
+    const estVramForExps = (ngl > 0 && sys.vram_free_mb > denseMb + 700)
+      ? Math.min(vramReq, sys.vram_free_mb - denseMb - 700)
+      : 0;
+
+    if (zeroHdd && safePhysRam > 0) {
+      const combinedCap = safePhysRam + estVramForExps;
+      const targetWeights = m.is_moe ? expMb : Math.max(0, totalMb - Math.min(totalMb, Math.max(0, (sys.vram_free_mb || 0) - 900)));
+      if (m.is_moe && expMb <= safePhysRam) {
+        notes.push(`<span style="color:var(--ok)">⚡ 100% Без HDD (Зеркало VRAM + RAM):</span> все веса поместятся в физическую память — 0 чтений диска в чате!`);
+      } else if (m.is_moe && expMb <= combinedCap) {
+        notes.push(`<span style="color:var(--nous-cream)">⚡ 100% Без HDD (Раздельный обмен VRAM ⊕ RAM):</span> веса разделятся между VRAM (~${estVramForExps} МБ) и ОЗУ (~${expMb - estVramForExps} МБ) без файла подкачки!`);
+      } else if (!m.is_moe && targetWeights <= safePhysRam) {
+        notes.push(`<span style="color:var(--ok)">⚡ 100% Без HDD:</span> слои распределятся между VRAM и физической ОЗУ (0 обращений к диску).`);
+      } else {
+        cls = 'warn';
+        notes.push(`Модель крупнее суммы свободной VRAM+RAM (~${combinedCap} МБ) — максимум памяти будет предзагружен, а редкий хвост пойдёт через щадящее 1-поточное чтение HDD.`);
+      }
+    }
+
     if (sys.commit_avail_mb > 0 && ramReq + 1800 > sys.commit_avail_mb) {
-      cls = 'warn';
-      notes.push(`В ОС свободно <strong>${sys.commit_avail_mb} МБ Commit</strong> — DualMoE автоматически снизит RAM-арену, чтобы не вызвать сбой нехватки памяти Windows.`);
+      notes.push(`Бюджет ОЗУ будет автоматически адаптирован под свободный лимит памяти ОС (${sys.commit_avail_mb} МБ).`);
     }
     if (ngl > 0 && sys.vram_free_mb > 0 && denseMb + vramReq + 500 > sys.vram_free_mb) {
-      cls = 'warn';
-      notes.push(`Свободно <strong>${sys.vram_free_mb} МБ VRAM</strong>, запрошено ~${denseMb + vramReq} МБ — сработает авто-подбор слоёв/кэша под остаток памяти карты.`);
-    }
-    if (cls === 'ok') {
-      notes.push(`Защита uBatch=32 и Vulkan MMap Guard активны — конфигурация безопасна для загрузки.`);
+      notes.push(`Банк VRAM автоматически подстроится под остаток памяти видеокарты (${sys.vram_free_mb} МБ свободно).`);
     }
 
     box.className = 'risk-box ' + cls;
@@ -1784,6 +1851,9 @@
       vram_cache_mb: parseInt(document.getElementById('inpVram').value, 10),
       cpu_share: parseInt(document.getElementById('inpCpuShare').value, 10) / 100.0,
       ram_cache_mb: parseInt(document.getElementById('inpRam').value, 10),
+      zero_hdd_mode: !!document.getElementById('chkZeroHdd').checked,
+      auto_balance_compute: !!document.getElementById('chkAutoBalance').checked,
+      io_lanes: 1,
       n_ctx: parseInt(document.getElementById('inpCtx').value, 10),
       n_threads: parseInt(document.getElementById('inpThreads').value, 10) || 8,
       n_ubatch: 32
@@ -2006,7 +2076,7 @@
   function copyDiagnosticsReport() {
     const d = state.lastDiag || {};
     const lines = [
-      '=== DualMoE v0.2 Diagnostics Report ===',
+      '=== DualMoE v0.3 Zero-HDD VRAM<->RAM Diagnostics Report ===',
       `Stage: ${d.current_stage || ''}`,
       `Error: ${d.last_error || 'none'}`,
       `GPU: ${d.sys_mem?.gpu_name || 'CPU'} | VRAM Free: ${d.sys_mem?.vram_free_mb}/${d.sys_mem?.vram_total_mb} MB | MaxBuf: ${d.sys_mem?.vram_max_buffer_mb} MB`,
@@ -2031,7 +2101,7 @@
       txt.textContent = `Загрузка ${t.load_phase_index}/${t.load_phase_total} (${t.load_progress_pct}%)`;
     } else if (t.model_loaded) {
       dot.className = 'dot ready';
-      txt.textContent = t.model_name || 'Модель активна';
+      txt.textContent = (t.zero_hdd_active ? '⚡ Без HDD • ' : '') + (t.model_name || 'Модель активна');
     } else {
       dot.className = 'dot';
       txt.textContent = t.status_text || 'Ожидание модели';
@@ -2042,14 +2112,46 @@
     document.getElementById('telTtft').textContent = Math.round(t.ttft_ms || 0) + ' мс';
     document.getElementById('telKvUsed').textContent = `${t.kv_used_tokens || 0}`;
 
+    // Silicon Residency & Zero-HDD Status
+    const silPct = Math.round(t.silicon_residency_pct || 0);
+    const zBadge = document.getElementById('telZeroHddBadge');
+    if (!t.model_loaded) {
+      zBadge.textContent = 'Ожидание';
+      document.getElementById('telSiliconPct').textContent = '0%';
+      document.getElementById('telSiliconBar').style.width = '0%';
+    } else if (t.zero_hdd_active) {
+      zBadge.textContent = t.disjoint_swap_active ? 'VRAM ⊕ RAM' : 'Без HDD';
+      document.getElementById('telSiliconPct').textContent = '100% в памяти';
+      document.getElementById('telSiliconBar').style.width = '100%';
+    } else {
+      zBadge.textContent = 'Гибрид';
+      document.getElementById('telSiliconPct').textContent = silPct + '% в памяти';
+      document.getElementById('telSiliconBar').style.width = silPct + '%';
+    }
+
+    // Live GPU || CPU Parallel Balance Bar
+    const cpuSharePct = Math.round((t.active_cpu_share || 0) * 100);
+    document.getElementById('telCpuShareLive').textContent = t.parallel_gpu_cpu_active
+      ? `CPU ${cpuSharePct}% ∥ GPU ${100 - cpuSharePct}%`
+      : (t.active_gpu_layers > 0 ? 'GPU + CPU' : 'CPU 100%');
+    document.getElementById('telBalanceBar').style.width = cpuSharePct + '%';
+
     document.getElementById('telGpuHits').textContent = (t.gpu_expert_hits || 0).toLocaleString('ru-RU');
-    document.getElementById('telGpuFills').textContent = (t.gpu_expert_fills || 0).toLocaleString('ru-RU');
+    document.getElementById('telGpuFills').textContent = (t.ram_to_vram_swaps || t.gpu_expert_fills || 0).toLocaleString('ru-RU');
+    document.getElementById('telVramEvicts').textContent = (t.vram_to_ram_swaps || 0).toLocaleString('ru-RU');
     document.getElementById('telCpuPar').textContent = (t.cpu_parallel_experts || 0).toLocaleString('ru-RU');
     document.getElementById('telRamHits').textContent = (t.ram_cache_hits || 0).toLocaleString('ru-RU');
-    document.getElementById('telSsdReads').textContent = (t.ssd_expert_reads || 0).toLocaleString('ru-RU');
-    document.getElementById('telSsdBw').textContent = (t.ssd_bandwidth_mbs || 0).toFixed(1) + ' МБ/с';
 
-    document.getElementById('telVramBank').textContent = (t.vram_cache_budget_mb || 0) + ' МБ';
+    const hddReads = t.ssd_expert_reads || 0;
+    const hddEl = document.getElementById('telSsdReads');
+    hddEl.textContent = hddReads.toLocaleString('ru-RU');
+    hddEl.style.color = hddReads === 0 ? 'var(--ok)' : 'var(--nous-cream)';
+
+    const bw = (t.ssd_bandwidth_mbs && t.ssd_bandwidth_mbs > 0) ? t.ssd_bandwidth_mbs : (t.preload_bandwidth_mbs || 0);
+    document.getElementById('telSsdBw').textContent = bw.toFixed(1) + ' МБ/с';
+
+    document.getElementById('telVramBank').textContent =
+      (t.vram_prewarmed_mb > 0 ? `${t.vram_prewarmed_mb} / ` : '') + (t.vram_cache_budget_mb || 0) + ' МБ';
     document.getElementById('telRamArena').textContent = `${t.ram_arena_used_mb || 0} / ${t.ram_arena_budget_mb || 0} МБ`;
     document.getElementById('telActiveNgl').textContent = `${t.active_gpu_layers || 0}`;
     document.getElementById('telCommitFree').textContent = (t.os_commit_avail_mb || 0) + ' МБ';
