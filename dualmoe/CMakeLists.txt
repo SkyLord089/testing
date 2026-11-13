@@ -7,6 +7,10 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     add_compile_options(/utf-8)
+    # MSVC keeps __cplusplus at 199711L unless this flag is present; llama.cpp
+    # relies on it to pick its UTF-8 literal handling (otherwise u8"" becomes
+    # char8_t under /std:c++20 and fails to stream into std::stringstream).
+    add_compile_options(/Zc:__cplusplus)
 endif()
 
 find_package(Threads REQUIRED)
