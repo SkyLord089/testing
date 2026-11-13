@@ -65,12 +65,14 @@ std::wstring widen(const std::string & s) {
 // Best-effort: put a real application icon in the title bar / taskbar.
 void apply_app_icon(HWND hwnd) {
     if (!hwnd) return;
-    HICON big = (HICON) LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1), IMAGE_ICON,
-                                   GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
-    HICON small = (HICON) LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1), IMAGE_ICON,
-                                     GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
-    if (big) SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM) big);
-    if (small) SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM) small);
+    // NOTE: identifiers "small"/"big" are #defined away by rpcndr.h (via
+    // windows.h) under MSVC, so the locals must use different names.
+    HICON icon_large = (HICON) LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                         GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
+    HICON icon_small = (HICON) LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                          GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+    if (icon_large) SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM) icon_large);
+    if (icon_small) SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM) icon_small);
 }
 
 void show_native_error(const std::wstring & title, const std::wstring & text) {
