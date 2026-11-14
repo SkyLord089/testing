@@ -1,5 +1,9 @@
 #include "engine.h"
 #include "chat.h"
+#include "bench.h"
+
+#include <chrono>
+#include <thread>
 
 #include <cassert>
 #include <cstdlib>
@@ -389,6 +393,95 @@ int main(int argc, char ** argv) {
         std::cout << "[PASS] Gate 6: Gemma 4 Jinja2 Chat Template + Single-BOS + Past-Thought Stripping verified!\n";
     }
 
-    std::cout << "ALL DUALMOE v0.4.1 GATES PASSED!\n";
+    // Gate 7: Benchmark autotuner — plan must be sane and Full mode must measure.
+    {
+        dualmoe::DualMoeEngine eng;
+        dualmoe::EngineConfig cfg;
+        cfg.model_path   = model_path;
+        cfg.n_gpu_layers = 0;
+        cfg.n_ctx        = 512;
+        cfg.n_threads    = 2;
+
+        dualmoe::BenchmarkRunner runner(eng);
+        dualmoe::BenchOptions plan_opt;
+        plan_opt.model_path = model_path;
+        plan_opt.mode       = dualmoe::BenchMode::Plan;
+
+        std::string berr;
+        if (!runner.start(plan_opt, berr)) {
+            std::cerr << "[FAIL] Gate 7: Plan benchmark refused to start: " << berr << "\n";
+            return 1;
+        }
+        for (int i = 0; i < 200 && runner.running(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        auto snap = runner.snapshot();
+        if (snap.stage != "done" || !snap.recommendation.ok) {
+            std::cerr << "[FAIL] Gate 7: Plan did not finish (stage=" << snap.stage
+                      << ", error=" << snap.error << ")\n";
+            return 1;
+        }
+        const auto & pcfg = snap.recommendation.cfg;
+        if (pcfg.n_threads < 1 || pcfg.n_ubatch == 0 || pcfg.n_ubatch > 32 ||
+            pcfg.n_ctx == 0 || pcfg.kv_type_v != "f16" || !pcfg.zero_hdd_mode) {
+            std::cerr << "[FAIL] Gate 7: Unsafe planned config (threads=" << pcfg.n_threads
+                      << " ubatch=" << pcfg.n_ubatch << " ctx=" << pcfg.n_ctx
+                      << " kv_v=" << pcfg.kv_type_v << ")\n";
+            return 1;
+        }
+        if (snap.recommendation.reasons.empty()) {
+            std::cerr << "[FAIL] Gate 7: Plan produced no rationale\n";
+            return 1;
+        }
+        std::cout << "[PASS] Gate 7: Benchmark plan verified (threads=" << pcfg.n_threads
+                  << ", ubatch=" << pcfg.n_ubatch << ", ctx=" << pcfg.n_ctx
+                  << ", vram_bank=" << pcfg.vram_cache_mb << " MiB, reasons="
+                  << snap.recommendation.reasons.size() << ")\n";
+
+        // Full mode with a tiny sweep: must measure real tok/s, mark a winner and
+        // leave that config loaded for the chat.
+        dualmoe::BenchOptions full_opt;
+        full_opt.model_path         = model_path;
+        full_opt.mode               = dualmoe::BenchMode::Full;
+        full_opt.tokens             = 16;
+        full_opt.max_candidates     = 3;
+        full_opt.sweep_vram_bank    = false;
+        full_opt.sweep_ubatch       = false;
+        if (!runner.start(full_opt, berr)) {
+            std::cerr << "[FAIL] Gate 7: Full benchmark refused to start: " << berr << "\n";
+            return 1;
+        }
+        for (int i = 0; i < 6000 && runner.running(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        snap = runner.snapshot();
+        if (snap.stage != "done" || snap.best_index < 0 || snap.candidates.size() < 2) {
+            std::cerr << "[FAIL] Gate 7: Full benchmark finished without a winner (stage="
+                      << snap.stage << ", best=" << snap.best_index << ", cands="
+                      << snap.candidates.size() << ")\n";
+            return 1;
+        }
+        const auto & best = snap.candidates[(size_t) snap.best_index];
+        if (!best.ok || !best.measured || !(best.decode_tps > 0.0)) {
+            std::cerr << "[FAIL] Gate 7: Winner has no measured throughput\n";
+            return 1;
+        }
+        int measured = 0;
+        for (const auto & c : snap.candidates) if (c.measured && c.ok) ++measured;
+        if (measured < 2) {
+            std::cerr << "[FAIL] Gate 7: Expected >=2 measured candidates, got " << measured << "\n";
+            return 1;
+        }
+        dualmoe::EngineConfig applied;
+        if (!runner.best_config(applied) || applied.n_threads < 1) {
+            std::cerr << "[FAIL] Gate 7: best_config() did not return the winner\n";
+            return 1;
+        }
+        std::cout << "[PASS] Gate 7: Benchmark full sweep verified (" << measured
+                  << " candidates measured, winner='" << best.label << "' @ "
+                  << best.decode_tps << " tok/s, " << best.hdd_reads << " HDD reads)!\n";
+    }
+
+    std::cout << "ALL DUALMOE v0.5.0 GATES PASSED!\n";
     return 0;
 }

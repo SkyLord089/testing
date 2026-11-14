@@ -1,5 +1,6 @@
 #include "app_http.h"
 #include "win_dialogs.h"
+#include "bench.h"
 
 #include "engine.h"
 #include "embedded_webui.h"
@@ -242,6 +243,110 @@ std::string extract_message_text(const json & content_node) {
     return "";
 }
 
+json bench_candidate_to_json(const dualmoe::BenchCandidate & c) {
+    json knobs = json::array();
+    for (const auto & k : c.knobs) knobs.push_back(k);
+    return {
+        {"index", c.index},
+        {"label", c.label},
+        {"knobs", knobs},
+        {"ok", c.ok},
+        {"measured", c.measured},
+        {"error", c.error},
+        {"prefill_tps", c.prefill_tps},
+        {"decode_tps", c.decode_tps},
+        {"ttft_ms", c.ttft_ms},
+        {"vram_hit_pct", c.vram_hit_pct},
+        {"hdd_reads", c.hdd_reads},
+        {"ram_used_mb", c.ram_used_mb},
+        {"vram_used_mb", c.vram_used_mb},
+        {"score", c.score},
+        {"elapsed_s", c.elapsed_s},
+        {"best", c.best},
+        {"config", {
+            {"n_threads", c.cfg.n_threads},
+            {"n_threads_batch", c.cfg.n_threads_batch},
+            {"cpu_share", c.cfg.cpu_share},
+            {"vram_cache_mb", c.cfg.vram_cache_mb},
+            {"ram_cache_mb", c.cfg.ram_cache_mb},
+            {"n_ubatch", c.cfg.n_ubatch},
+            {"n_batch", c.cfg.n_batch},
+            {"n_ctx", c.cfg.n_ctx},
+            {"n_gpu_layers", c.cfg.n_gpu_layers},
+            {"kv_type_k", c.cfg.kv_type_k},
+            {"kv_type_v", c.cfg.kv_type_v},
+            {"swap_hysteresis", c.cfg.swap_hysteresis},
+            {"auto_balance_compute", c.cfg.auto_balance_compute},
+            {"zero_hdd_mode", c.cfg.zero_hdd_mode},
+            {"enable_thinking", c.cfg.enable_thinking},
+        }},
+    };
+}
+
+json bench_to_json(const dualmoe::BenchmarkSnapshot & b) {
+    json cands = json::array();
+    for (const auto & c : b.candidates) cands.push_back(bench_candidate_to_json(c));
+
+    json logs = json::array();
+    for (const auto & l : b.log) logs.push_back(l);
+
+    json reasons = json::array();
+    for (const auto & r : b.recommendation.reasons) reasons.push_back(r);
+
+    json rec;
+    if (b.recommendation.ok) {
+        const auto & c = b.recommendation.cfg;
+        rec = {
+            {"ok", true},
+            {"config", {
+                {"n_threads", c.n_threads},
+                {"n_threads_batch", c.n_threads_batch},
+                {"cpu_share", c.cpu_share},
+                {"vram_cache_mb", c.vram_cache_mb},
+                {"ram_cache_mb", c.ram_cache_mb},
+                {"n_ubatch", c.n_ubatch},
+                {"n_batch", c.n_batch},
+                {"n_ctx", c.n_ctx},
+                {"n_gpu_layers", c.n_gpu_layers},
+                {"kv_type_k", c.kv_type_k},
+                {"kv_type_v", c.kv_type_v},
+                {"swap_hysteresis", c.swap_hysteresis},
+                {"auto_balance_compute", c.auto_balance_compute},
+                {"zero_hdd_mode", c.zero_hdd_mode},
+                {"enable_thinking", c.enable_thinking},
+            }},
+            {"reasons", reasons},
+            {"predicted_decode_tps", b.recommendation.predicted_decode_tps},
+            {"predicted_vram_mb", b.recommendation.predicted_vram_mb},
+            {"predicted_ram_mb", b.recommendation.predicted_ram_mb},
+            {"predicted_kv_mb", b.recommendation.predicted_kv_mb},
+        };
+    } else {
+        rec = {{"ok", false}};
+    }
+
+    return {
+        {"ok", true},
+        {"stage", b.stage},
+        {"mode", b.mode},
+        {"progress_pct", b.progress_pct},
+        {"message", b.message},
+        {"error", b.error},
+        {"candidates_total", b.candidates_total},
+        {"candidates_done", b.candidates_done},
+        {"current_index", b.current_index},
+        {"current_label", b.current_label},
+        {"model_path", b.model_path},
+        {"model_name", b.model_name},
+        {"elapsed_s", b.elapsed_s},
+        {"best_index", b.best_index},
+        {"running", b.stage == "planning" || b.stage == "running"},
+        {"candidates", cands},
+        {"log", logs},
+        {"recommendation", rec},
+    };
+}
+
 void add_cors(httplib::Response & res) {
     res.set_header("Access-Control-Allow-Origin", "*");
     res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -289,10 +394,10 @@ int parse_app_options(int argc, char ** argv, AppOptions & opt, bool desktop_def
         else if (arg == "--thinking") opt.boot_cfg.enable_thinking = true;
         else if (arg == "--no-thinking") opt.boot_cfg.enable_thinking = false;
         else if (arg == "--version") {
-            std::cout << "DualMoE v0.4.1\n";
+            std::cout << "DualMoE v0.5.0\n";
             return 1;
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "DualMoE v0.4.1 — нативное приложение (окно Windows, без браузера)\n"
+            std::cout << "DualMoE v0.5.0 — нативное приложение (окно Windows, без браузера)\n"
                       << "  --model <file.gguf>       Auto-load GGUF model at startup\n"
                       << "  --models-dir <folder>     Default folder for GGUF UI scanner\n"
                       << "  --host <addr>             Bind address (desktop default 127.0.0.1)\n"
@@ -313,7 +418,8 @@ int parse_app_options(int argc, char ** argv, AppOptions & opt, bool desktop_def
 }
 
 struct AppServer::Impl {
-    dualmoe::DualMoeEngine engine;
+    dualmoe::DualMoeEngine  engine;
+    dualmoe::BenchmarkRunner bench{engine};
     httplib::Server       svr;
     AppOptions            opt;
     std::atomic<int>      bound_port{-1};
@@ -367,7 +473,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
         const auto cfg = engine.current_config();
         json out = {
             {"ok", true},
-            {"version", "0.4.1"},
+            {"version", "0.5.0"},
             {"default_scan_dir", opt.scan_dir},
             {"roots", list_roots_utf8()},
             {"devices", devs},
@@ -426,7 +532,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             {"ok", true},
             {"mode", opt.desktop_window ? "desktop" : "console"},
             {"native_dialogs", dualmoe::native_file_dialog_available()},
-            {"version", "0.4.1"},
+            {"version", "0.5.0"},
             {"port", bound_port.load(std::memory_order_acquire)},
             {"openai_base_url", openai_base_url_for_json()},
             {"scan_dir", opt.scan_dir},
@@ -607,6 +713,101 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             const bool en = body.value("enable_thinking", true);
             engine.set_thinking_enabled(en);
             res.set_content(json{{"ok", true}, {"enable_thinking", en}}.dump(), "application/json; charset=utf-8");
+        } catch (const std::exception & e) {
+            res.status = 400;
+            res.set_content(json{{"ok", false}, {"error", e.what()}}.dump(), "application/json; charset=utf-8");
+        }
+    });
+
+    // ---------------------------------------------------------------------
+    // Benchmark / autotuner (own tab in the UI)
+    // ---------------------------------------------------------------------
+    svr.Get("/api/bench/status", [&](const httplib::Request &, httplib::Response & res) {
+        add_cors(res);
+        res.set_content(bench_to_json(bench.snapshot()).dump(), "application/json; charset=utf-8");
+    });
+
+    svr.Post("/api/bench/start", [&](const httplib::Request & req, httplib::Response & res) {
+        add_cors(res);
+        try {
+            const json body = req.body.empty() ? json::object() : json::parse(req.body);
+            dualmoe::BenchOptions opt;
+            opt.mode      = (body.value("mode", std::string("full")) == "plan")
+                                ? dualmoe::BenchMode::Plan : dualmoe::BenchMode::Full;
+            opt.model_path = body.value("model_path", std::string(""));
+            opt.tokens     = body.value("tokens", 96);
+            opt.prompt     = body.value("prompt", std::string(""));
+            opt.sweep_threads   = body.value("sweep_threads", true);
+            opt.sweep_cpu_share = body.value("sweep_cpu_share", true);
+            opt.sweep_vram_bank = body.value("sweep_vram_bank", true);
+            opt.sweep_ubatch    = body.value("sweep_ubatch", true);
+            opt.max_candidates  = body.value("max_candidates", 16);
+            std::string err;
+            if (!bench.start(opt, err)) {
+                res.status = 409;
+                res.set_content(json{{"ok", false}, {"error", err}}.dump(), "application/json; charset=utf-8");
+                return;
+            }
+            res.set_content(bench_to_json(bench.snapshot()).dump(), "application/json; charset=utf-8");
+        } catch (const std::exception & e) {
+            res.status = 400;
+            res.set_content(json{{"ok", false}, {"error", e.what()}}.dump(), "application/json; charset=utf-8");
+        }
+    });
+
+    svr.Post("/api/bench/cancel", [&](const httplib::Request &, httplib::Response & res) {
+        add_cors(res);
+        bench.cancel();
+        res.set_content(json{{"ok", true}}.dump(), "application/json; charset=utf-8");
+    });
+
+    // Applies the winning (or a chosen) candidate: reloads the model with it and
+    // returns the effective diagnostics so the UI can show the tuned setup.
+    svr.Post("/api/bench/apply", [&](const httplib::Request & req, httplib::Response & res) {
+        add_cors(res);
+        try {
+            const json body = req.body.empty() ? json::object() : json::parse(req.body);
+            const auto snap = bench.snapshot();
+            if (snap.candidates.empty()) {
+                res.status = 400;
+                res.set_content(json{{"ok", false}, {"error", "Сначала запустите бенчмарк"}}.dump(),
+                                "application/json; charset=utf-8");
+                return;
+            }
+            int32_t idx = body.value("index", snap.best_index);
+            if (idx < 0 || idx >= (int32_t) snap.candidates.size()) {
+                res.status = 400;
+                res.set_content(json{{"ok", false}, {"error", "Некорректный индекс кандидата"}}.dump(),
+                                "application/json; charset=utf-8");
+                return;
+            }
+            dualmoe::EngineConfig cfg = snap.candidates[(size_t) idx].cfg;
+            if (cfg.model_path.empty()) cfg.model_path = snap.model_path;
+            const bool async_mode = body.value("async", false);
+            std::string err;
+            if (async_mode) {
+                if (!engine.start_load_async(cfg, err)) {
+                    res.status = 400;
+                    res.set_content(json{{"ok", false}, {"error", err}}.dump(), "application/json; charset=utf-8");
+                    return;
+                }
+                res.set_content(json{{"ok", true}, {"async", true}, {"index", idx}}.dump(),
+                                "application/json; charset=utf-8");
+                return;
+            }
+            engine.unload_model();
+            if (!engine.load_model(cfg, err)) {
+                res.status = 400;
+                res.set_content(json{{"ok", false}, {"error", err}}.dump(), "application/json; charset=utf-8");
+                return;
+            }
+            res.set_content(json{
+                {"ok", true},
+                {"index", idx},
+                {"model", summary_to_json(engine.current_model())},
+                {"telemetry", telemetry_to_json(engine.telemetry())},
+                {"diagnostics", diagnostics_to_json(engine.diagnostics(), engine.recent_logs(0))},
+            }.dump(), "application/json; charset=utf-8");
         } catch (const std::exception & e) {
             res.status = 400;
             res.set_content(json{{"ok", false}, {"error", e.what()}}.dump(), "application/json; charset=utf-8");
