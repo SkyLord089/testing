@@ -159,6 +159,13 @@ private:
     std::string spec_cache_path(const std::string & model_path) const;
     void        spec_load_or_build(const EngineConfig & cfg);
     void        spec_save();
+    void        record_parallel_seam();   // GPU || CPU split-timeline accounting
+    // GPU || CPU seam measurement (see llama_parallel_profile)
+    std::atomic<uint64_t> par_dual_total_{0};
+    std::atomic<uint64_t> par_serial_total_{0};
+    double      last_par_gpu_ms_ = 0.0;
+    double      last_par_cpu_ms_ = 0.0;
+    double      last_par_overlap_ms_ = 0.0;
     uint64_t    spec_drafted_ = 0;
     uint64_t    spec_graphs_  = 0;   // graphs vs tokens emitted: the honest speed-up factor
     uint64_t    spec_emitted_ = 0;
@@ -212,6 +219,7 @@ private:
     bool     auto_balance_active_   = false;
     int32_t  active_gpu_layers_     = 0;
     std::atomic<float> active_cpu_share_{0.0f};
+    std::atomic<float> active_seam_share_{0.0f}; // forced GPU || CPU seam, 0 = off
     float    ema_gpu_hit_ratio_     = 0.75f;
     uint64_t balance_events_        = 0;
     uint32_t active_ubatch_         = 32;

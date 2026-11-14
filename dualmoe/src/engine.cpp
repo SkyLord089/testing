@@ -720,6 +720,11 @@ bool DualMoeEngine::apply_live_config(const EngineConfig & cfg, std::string & er
         llama_set_moe_cache_cpu_share(ctx_, std::clamp(cfg.cpu_share, 0.0f, 1.0f));
         active_cpu_share_.store(std::clamp(cfg.cpu_share, 0.0f, 1.0f), std::memory_order_relaxed);
     }
+    if (ctx_) {
+        const float seam = std::clamp(cfg.parallel_seam_share, 0.0f, 0.9f);
+        llama_set_moe_cache_forced_seam(ctx_, seam > 0.02f ? seam : -1.0f);
+        active_seam_share_.store(seam > 0.02f ? seam : 0.0f, std::memory_order_relaxed);
+    }
     {
         std::lock_guard<std::mutex> slk(state_mu_);
         cfg_.n_threads       = threads;
@@ -781,6 +786,7 @@ void DualMoeEngine::unload_model_locked() {
     cpu_parallel_experts_.store(0, std::memory_order_relaxed);
     vram_upload_bytes_.store(0, std::memory_order_relaxed);
     active_cpu_share_.store(0.0f, std::memory_order_relaxed);
+    active_seam_share_.store(0.0f, std::memory_order_relaxed);
 
     {
         std::lock_guard<std::mutex> slk(state_mu_);
@@ -1400,7 +1406,12 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
     llama_context_params cparams = make_base_cparams(target_ctx);
     if (target_moe_cache_mb > 0) {
         cparams.moe_cache_size      = target_moe_cache_mb << 20;
-        cparams.moe_cache_cpu_share = std::clamp(cfg.cpu_share, 0.0f, 1.0f);
+        // The MoE cache is the only path that can run the GPU and the CPU on the same token, so the CPU
+        // share must be a real value here: 0 disables the CPU part for good (it stays disabled even if
+        // the user raises cpu_share later with apply_live_config).
+        const float share_init = cfg.cpu_share > 0.0f ? std::clamp(cfg.cpu_share, 0.0f, 1.0f)
+                                                     : (cfg.moe_stream ? 0.85f : 0.0f);
+        cparams.moe_cache_cpu_share = share_init;
         apply_gpu_layer_mask(true);
     } else {
         cparams.moe_cache_size = 0;
@@ -1575,6 +1586,15 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
 
     const float init_share = cparams.moe_cache_size > 0 ? cparams.moe_cache_cpu_share : 1.0f;
     active_cpu_share_.store(init_share, std::memory_order_relaxed);
+
+    // Forced GPU || CPU seam: without it the CPU only works once the VRAM bank is full, so on a model
+    // that fits the bank the GPU does 100% and the seam never forms. Negative disables, as the llama API
+    // expects; the share itself is clamped to a sane range so the CPU cannot become the bottleneck.
+    if (ctx_) {
+        const float seam = std::clamp(cfg.parallel_seam_share, 0.0f, 0.9f);
+        llama_set_moe_cache_forced_seam(ctx_, seam > 0.02f ? seam : -1.0f);
+        active_seam_share_.store(seam > 0.02f ? seam : 0.0f, std::memory_order_relaxed);
+    }
 
     std::string step8_summary;
     {
@@ -2115,7 +2135,9 @@ bool DualMoeEngine::on_eval_node(struct ggml_tensor * t, bool ask) {
         ggml_backend_tensor_get(t, selected.data(), 0, selected.size() * sizeof(int32_t));
     }
 
-    cpu_parallel_experts_.fetch_add(selected.size(), std::memory_order_relaxed);
+    // NOTE: this is the number of *selected* experts (a routing statistic), not the number of experts
+    // the CPU actually computed. The real GPU || CPU accounting comes from the MoE cache event and from
+    // the split timeline (see record_parallel_seam), so no counter is bumped here.
 
     if (cfg_.moe_stream && arena_.has_layer(il) && !selected.empty()) {
         arena_.prefetch_experts_async(il, selected.data(), selected.size());
@@ -2706,6 +2728,7 @@ bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
                 const int rc = llama_decode(ctx_, batch);
                 arena_.flush_deferred_promotions();
                 ++n_graphs;
+                record_parallel_seam();
                 if (rc != 0) break;
 
                 // Row i predicts the token after position base+i, i.e. it confirms cand[i], so the
@@ -2766,6 +2789,7 @@ bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
             const int rc = llama_decode(ctx_, batch);
             arena_.flush_deferred_promotions();
             ++n_graphs;
+            record_parallel_seam();
             if (rc != 0) break;
             kv_tokens_.push_back(next_tok);
             kv_used_.store((uint32_t) kv_tokens_.size(), std::memory_order_relaxed);
@@ -2803,6 +2827,27 @@ bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
     return true;
 }
 
+void DualMoeEngine::record_parallel_seam() {
+    if (!ctx_) return;
+    llama_parallel_profile prof;
+    if (!llama_moe_cache_parallel_profile(ctx_, &prof)) return;
+    if (prof.n_dual > 0) {
+        par_dual_total_.fetch_add((uint64_t) prof.n_dual, std::memory_order_relaxed);
+    }
+    par_serial_total_.fetch_add((uint64_t) prof.n_serial, std::memory_order_relaxed);
+    last_par_gpu_ms_ = prof.gpu_ms;
+    last_par_cpu_ms_ = prof.cpu_ms;
+    last_par_overlap_ms_ = prof.overlap_ms;
+    if (std::getenv("DUALMOE_VERBOSE")) {
+        append_backend_log(GGML_LOG_LEVEL_INFO,
+            ("[seam] граф: GPU " + std::to_string(prof.n_gpu) + " сплитов " +
+             std::to_string((int) prof.gpu_ms) + " мс, CPU " + std::to_string(prof.n_cpu) +
+             " сплитов " + std::to_string((int) prof.cpu_ms) + " мс, параллельно " +
+             std::to_string(prof.n_dual) + " слоёв, последовательно " +
+             std::to_string(prof.n_serial) + " слоёв\n").c_str());
+    }
+}
+
 TelemetrySnapshot DualMoeEngine::telemetry() const {
     TelemetrySnapshot t;
     t.model_loaded      = loaded_.load(std::memory_order_acquire);
@@ -2836,7 +2881,8 @@ TelemetrySnapshot DualMoeEngine::telemetry() const {
         t.thinking_enabled        = cfg_.enable_thinking;
         sm                        = diag_.sys_mem;
     }
-    t.active_cpu_share = active_cpu_share_.load(std::memory_order_relaxed);
+    t.active_cpu_share  = active_cpu_share_.load(std::memory_order_relaxed);
+    t.active_seam_share = active_seam_share_.load(std::memory_order_relaxed);
 
     if (!t.generating) {
         sm = query_system_memory();
@@ -2849,6 +2895,20 @@ TelemetrySnapshot DualMoeEngine::telemetry() const {
 
     t.prefill_tps          = prefill_tps_.load(std::memory_order_relaxed);
     t.decode_tps           = decode_tps_.load(std::memory_order_relaxed);
+    // GPU || CPU seam: read the split timeline of the last decode graph. n_dual > 0 means the same
+    // token really had experts computed on the GPU and on the CPU at the same time.
+    if (ctx_) {
+        llama_parallel_profile prof;
+        if (llama_moe_cache_parallel_profile(ctx_, &prof)) {
+            t.par_layers_dual   = par_dual_total_.load(std::memory_order_relaxed);
+            t.par_layers_serial = par_serial_total_.load(std::memory_order_relaxed);
+            t.par_gpu_ms        = last_par_gpu_ms_;
+            t.par_cpu_ms        = last_par_cpu_ms_;
+            t.par_overlap_pct   = (prof.cpu_ms > 1e-9) ? 100.0 * prof.overlap_ms / prof.cpu_ms : 0.0;
+            t.par_gpu_nodes     = (uint64_t) prof.n_gpu;
+            t.par_cpu_nodes     = (uint64_t) prof.n_cpu;
+        }
+    }
     t.spec_tokens          = spec_.n_max();
     t.spec_drafted         = spec_drafted_;
     t.spec_accepted        = spec_accepted_;

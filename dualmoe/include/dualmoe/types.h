@@ -27,6 +27,10 @@ struct EngineConfig {
     int32_t  n_gpu_layers         = 99;     // Safe for 2..99: cold experts auto-routed to RAM arena
     size_t   vram_cache_mb        = 4600;   // Hot expert ClassLRU bank in GPU VRAM (MiB) — auto-clamped to ~90% free VRAM
     float    cpu_share            = 0.85f;  // Initial fraction of VRAM misses computed in parallel on CPU (0..1)
+    // Forced GPU || CPU seam: hand this share of every layer's experts to the CPU even when the VRAM bank
+    // still has free slots, so both engines compute the SAME token at the same time. 0 = off (the CPU only
+    // helps once the bank is full), 0.2-0.4 is the useful range: the CPU must not become the slow half.
+    float    parallel_seam_share  = 0.0f;
     bool     auto_split_experts   = true;   // Prevents >=2 GPU layer crashes by keeping cold 3D experts off VRAM
     bool     zero_hdd_mode        = true;   // Sequential 1-pass HDD preload into VRAM + RAM -> 0 disk reads in chat
     bool     auto_balance_compute = true;   // Live GPU || CPU dynamic load balancer + hot/cold swap hysteresis
@@ -201,6 +205,16 @@ struct TelemetrySnapshot {
     uint64_t    gpu_expert_hits         = 0;  // Computed on GPU from VRAM ClassLRU bank (0 PCIe, 0 HDD)
     uint64_t    gpu_expert_fills        = 0;  // Hot promotions uploaded RAM -> VRAM
     uint64_t    cpu_parallel_experts    = 0;  // Computed on Ryzen AVX2 concurrently from DDR4 RAM
+    // Actual GPU || CPU overlap of the last answer, measured on the split timeline (not a guess):
+    // how many layers really ran their expert matmuls on both engines at the same time, how long a
+    // single GPU split blocked the CPU and how much CPU work fit inside the GPU time.
+    uint64_t    par_layers_dual         = 0;  // decode graphs where one layer had a GPU split and a CPU split
+    uint64_t    par_layers_serial       = 0;  // decode graphs where the CPU split ran alone in a gap
+    double      par_gpu_ms              = 0.0; // GPU time per token (sum of GPU splits)
+    double      par_cpu_ms              = 0.0; // CPU expert-matmul time per token
+    double      par_overlap_pct         = 0.0; // 100 = the CPU work fully hides inside the GPU time
+    uint64_t    par_gpu_nodes           = 0;
+    uint64_t    par_cpu_nodes           = 0;
     uint64_t    ram_cache_hits          = 0;  // Served directly from committed DDR4 arena (0 HDD)
     uint64_t    ram_to_vram_swaps       = 0;  // Hot RAM -> VRAM promotions
     uint64_t    vram_to_ram_swaps       = 0;  // Cold VRAM -> RAM evictions
@@ -233,6 +247,7 @@ struct TelemetrySnapshot {
     bool        thinking_enabled        = true;
     int32_t     active_gpu_layers       = 0;
     float       active_cpu_share        = 0.0f;
+    float       active_seam_share       = 0.0f;  // forced GPU || CPU seam share, 0 = off
     uint32_t    active_ubatch           = 32;
 };
 

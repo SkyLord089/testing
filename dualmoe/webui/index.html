@@ -1085,6 +1085,8 @@
         <div class="kv-row"><span>Prefill</span><strong id="telPrefill">0 tok/s</strong></div>
         <div class="kv-row"><span>TTFT</span><strong id="telTtft">0 мс</strong></div>
         <div class="kv-row"><span>Разгон (токенов на граф)</span><strong id="telSpec">—</strong></div>
+        <div class="kv-row"><span>GPU ∥ CPU (слоёв вместе / порознь)</span><strong id="telSeam">—</strong></div>
+        <div class="kv-row"><span>CPU-работа внутри GPU</span><strong id="telSeamPct">—</strong></div>
         <div class="kv-row"><span>Черновики / принято</span><strong id="telSpecAcc">—</strong></div>
         <div class="kv-row"><span>VRAM-попадания</span><strong id="telVramHits">0%</strong></div>
         <div class="meter"><i id="telVramBar" style="width:0%"></i></div>
@@ -1688,6 +1690,15 @@
     const specEl = document.getElementById('telSpec');
     specEl.textContent = t.spec_tokens > 0 && eff > 0 ? '×' + eff.toFixed(2) : 'выкл.';
     specEl.style.color = eff >= 1.15 ? 'var(--ok)' : (eff > 0 && eff < 1.05 && t.spec_tokens > 0 ? 'var(--cream)' : '');
+    // GPU ∥ CPU seam: layers whose GPU and CPU expert splits overlapped in time (real parallel work)
+    // versus layers where the CPU split ran only after the GPU one (serialised).
+    const dual = t.par_layers_dual || 0, serial = t.par_layers_serial || 0;
+    const seamEl = document.getElementById('telSeam');
+    seamEl.textContent = (dual + serial) > 0 ? `${dual} / ${serial}` : '—';
+    seamEl.style.color = dual > 0 ? 'var(--ok)' : (serial > 0 ? '#e8a33d' : '');
+    document.getElementById('telSeamPct').textContent = (t.par_overlap_pct > 0)
+      ? `${Math.round(t.par_overlap_pct)}% · GPU ${(t.par_gpu_ms || 0).toFixed(1)} мс / CPU ${(t.par_cpu_ms || 0).toFixed(1)} мс`
+      : '—';
     document.getElementById('telSpecAcc').textContent = t.spec_drafted > 0
       ? `${t.spec_drafted} / ${t.spec_accepted} (${Math.round(t.spec_accepted * 100 / t.spec_drafted)}%)`
       : '—';

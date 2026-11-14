@@ -94,6 +94,13 @@ json telemetry_to_json(const dualmoe::TelemetrySnapshot & t) {
         {"spec_drafted", t.spec_drafted},
         {"spec_accepted", t.spec_accepted},
         {"spec_efficiency", t.spec_efficiency},
+        {"par_layers_dual", t.par_layers_dual},
+        {"par_layers_serial", t.par_layers_serial},
+        {"par_gpu_ms", t.par_gpu_ms},
+        {"par_cpu_ms", t.par_cpu_ms},
+        {"par_overlap_pct", t.par_overlap_pct},
+        {"par_gpu_nodes", t.par_gpu_nodes},
+        {"par_cpu_nodes", t.par_cpu_nodes},
         {"prompt_tokens", t.prompt_tokens},
         {"generated_tokens", t.generated_tokens},
         {"kv_used_tokens", t.kv_used_tokens},
@@ -129,6 +136,7 @@ json telemetry_to_json(const dualmoe::TelemetrySnapshot & t) {
         {"auto_balance_active", t.auto_balance_active},
         {"active_gpu_layers", t.active_gpu_layers},
         {"active_cpu_share", t.active_cpu_share},
+        {"active_seam_share", t.active_seam_share},
         {"active_ubatch", t.active_ubatch},
         {"thinking_enabled", t.thinking_enabled},
     };
@@ -551,6 +559,70 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
         res.set_content(out.dump(), "application/json; charset=utf-8");
     });
 
+    // /api/seam?cpu_share=0.9&tokens=32
+    // A "GPU ‖ CPU" probe for the live model: applies the CPU share to the running context (no reload),
+    // generates a few tokens and reports, from the scheduler's own split timeline, whether the GPU and
+    // the CPU really computed experts of the SAME token at the same time (par_layers_dual) or ran one
+    // after the other (par_layers_serial). Numbers come from the engine, not from a heuristic.
+    svr.Get("/api/seam", [&](const httplib::Request & req, httplib::Response & res) {
+        add_cors(res);
+        if (!engine.is_loaded()) {
+            res.status = 409;
+            res.set_content(json{{"ok", false}, {"error", "Модель не загружена"}}.dump(),
+                            "application/json; charset=utf-8");
+            return;
+        }
+        float share = 0.85f;
+        int32_t tokens = 32;
+        try {
+            if (req.has_param("cpu_share")) share = std::strtof(req.get_param_value("cpu_share").c_str(), nullptr);
+            if (req.has_param("tokens"))    tokens = std::atoi(req.get_param_value("tokens").c_str());
+        } catch (...) {}
+        share = std::clamp(share, 0.0f, 1.0f);
+        tokens = std::clamp(tokens, 8, 256);
+
+        dualmoe::EngineConfig live = engine.current_config();
+        live.cpu_share = share;
+        std::string err;
+        if (!engine.apply_live_config(live, err)) {
+            res.status = 409;
+            res.set_content(json{{"ok", false}, {"error", err}}.dump(), "application/json; charset=utf-8");
+            return;
+        }
+
+        // A discard answer warms the route, the second one is the measurement.
+        std::string sink, gerr;
+        engine.generate_raw("Разогрев маршрута экспертов.", 16, 0.0f, 1u, nullptr, sink, gerr);
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok = engine.generate_raw(
+            "Объясни по пунктам, как движок распределяет экспертов между GPU, CPU и диском.",
+            tokens, 0.0f, 1u, nullptr, sink, gerr);
+        const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        const auto t = engine.telemetry();
+
+        res.set_content(json{
+            {"ok", ok},
+            {"error", ok ? "" : gerr},
+            {"cpu_share", share},
+            {"tokens", tokens},
+            {"decode_tps", ok ? (double) tokens / std::max(1e-6, sec) : 0.0},
+            {"parallel", {
+                {"dual_layers", t.par_layers_dual},
+                {"serial_layers", t.par_layers_serial},
+                {"gpu_ms_per_token", t.par_gpu_ms},
+                {"cpu_ms_per_token", t.par_cpu_ms},
+                {"overlap_pct", t.par_overlap_pct},
+                {"gpu_splits", t.par_gpu_nodes},
+                {"cpu_splits", t.par_cpu_nodes},
+            }},
+            {"experts", {
+                {"gpu_from_vram", t.gpu_expert_hits},
+                {"cpu_parallel", t.cpu_parallel_experts},
+                {"ssd_reads", t.ssd_expert_reads},
+            }},
+        }.dump(), "application/json; charset=utf-8");
+    });
+
     svr.Get("/api/diagnostics", [&](const httplib::Request & req, httplib::Response & res) {
         add_cors(res);
         uint64_t since_seq = 0;
@@ -672,6 +744,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             cfg.warm_state           = body.value("warm_state", cfg.warm_state);
             cfg.spec_tokens          = std::clamp(body.value("spec_tokens", cfg.spec_tokens), 0, 8);
             cfg.spec_disk_cache      = body.value("spec_disk_cache", cfg.spec_disk_cache);
+            cfg.parallel_seam_share  = std::clamp(body.value("parallel_seam_share", cfg.parallel_seam_share), 0.0f, 0.9f);
 
             const bool async_mode = body.value("async", false);
             std::string err;
