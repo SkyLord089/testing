@@ -1791,6 +1791,9 @@ void DualMoeEngine::spec_load_or_build(const EngineConfig & cfg) {
     spec_.clear();
     spec_drafted_  = 0;
     spec_accepted_ = 0;
+    spec_graphs_   = 0;
+    spec_emitted_  = 0;
+    spec_accepted_ = 0;
     if (cfg.spec_tokens <= 0 || cfg.model_path.empty()) return;
 
     // 1. The lookahead table of this model from the previous run: instant speed-up on the first answer.
@@ -2848,10 +2851,11 @@ TelemetrySnapshot DualMoeEngine::telemetry() const {
     t.decode_tps           = decode_tps_.load(std::memory_order_relaxed);
     t.spec_tokens          = spec_.n_max();
     t.spec_drafted         = spec_drafted_;
-    t.spec_efficiency      = (spec_graphs_ > 0)
-        ? (double) spec_emitted_ / (double) spec_graphs_ : t.spec_efficiency;
     t.spec_accepted        = spec_accepted_;
-    t.spec_efficiency      = spec_.stats().efficiency;
+    // Tokens per graph over the whole session: the number the user actually cares about. Before the
+    // first graph it falls back to the per-round efficiency of the drafter.
+    t.spec_efficiency      = (spec_graphs_ > 0)
+        ? (double) spec_emitted_ / (double) spec_graphs_ : spec_.stats().efficiency;
     t.ttft_ms              = ttft_ms_.load(std::memory_order_relaxed);
     t.prompt_tokens        = prompt_tokens_.load(std::memory_order_relaxed);
     t.generated_tokens     = generated_tokens_.load(std::memory_order_relaxed);
