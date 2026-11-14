@@ -31,6 +31,7 @@ struct BenchOptions {
     std::string prompt;                  // empty -> built-in benchmark prompt
     bool        sweep_threads     = true;
     bool        sweep_cpu_share   = true;
+    bool        sweep_seam        = true;   // forced GPU || CPU on the same token (parallel_seam_share)
     bool        sweep_vram_bank   = true;
     bool        sweep_ubatch      = true;
     int32_t     max_candidates    = 8;   // hard cap: every VRAM-bank point = one model reload

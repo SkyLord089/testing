@@ -704,11 +704,17 @@ bool DualMoeEngine::apply_live_config(const EngineConfig & cfg, std::string & er
     // A different bank size (or KV precision / context) needs a reload: refuse instead of silently
     // ignoring the request, the caller then falls back to a full reload.
     size_t bank_mb = 0;
+    size_t bank_req_mb = 0;
     {
         std::lock_guard<std::mutex> slk(state_mu_);
-        bank_mb = active_vram_cache_mb_;
+        bank_mb     = active_vram_cache_mb_;
+        bank_req_mb = cfg_.vram_cache_mb;
     }
-    if (cfg.vram_cache_mb != bank_mb || cfg.kv_type_k != cfg_.kv_type_k || cfg.kv_type_v != cfg_.kv_type_v ||
+    // The bank the load actually got may be smaller than the one the user asked for (VRAM headroom
+    // clamp). The request stays the same in that case, so it must not look like a reload trigger —
+    // otherwise every live change (threads, CPU share, seam) would be refused on such a machine.
+    const bool bank_changed = cfg.vram_cache_mb != bank_mb && cfg.vram_cache_mb != bank_req_mb;
+    if (bank_changed || cfg.kv_type_k != cfg_.kv_type_k || cfg.kv_type_v != cfg_.kv_type_v ||
         cfg.n_ctx != cfg_.n_ctx) {
         err = "Эти параметры требуют перезагрузки модели";
         return false;

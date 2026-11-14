@@ -572,6 +572,15 @@ void BenchmarkRunner::run_full(const BenchOptions & opt) {
             {0.60, 0.70, 0.80, 0.90, 0.96},
             "CPU ∥ GPU", "cpu_share="});
     }
+    // Forced seam: the only axis that makes the CPU compute experts of the SAME token the GPU is working
+    // on. 0 (off) is always in the set, so the sweep can prove that the seam is not slower.
+    if (opt.sweep_seam) {
+        sweeps.push_back({true, [](const EngineConfig & base, double v) {
+            EngineConfig c = base; c.parallel_seam_share = (float) v; return c; },
+            {0.0, 0.25, 0.45},
+            {0.0, 0.15, 0.30, 0.45},
+            "GPU ∥ CPU", "seam="});
+    }
 
     // Group 1+: the VRAM bank sizes, each of which is one reload.
     std::vector<EngineConfig> groups;
@@ -689,8 +698,10 @@ void BenchmarkRunner::run_full(const BenchOptions & opt) {
             for (double v : pts) {
                 if ((int32_t) cands.size() >= cap) break;
                 EngineConfig c = sw.mk(groups[g], v);
-                const std::string lbl = sw.label + " " + (sw.knob == "cpu_share=" ? fmt("%.2f", v) : std::to_string((int) v));
-                if (!add(c, lbl, {sw.knob + (sw.knob == "cpu_share=" ? fmt("%.2f", v) : std::to_string((int) v))})) break;
+                const bool pct = sw.knob == "cpu_share=" || sw.knob == "seam=";
+                const std::string knob_val = pct ? fmt("%.2f", v) : std::to_string((int) v);
+                const std::string lbl = sw.label + " " + knob_val;
+                if (!add(c, lbl, {sw.knob + knob_val})) break;
                 const size_t i = cands.size() - 1;
                 if (measure_at(i, /*allow_in_place=*/true) && cands[i].ok) {
                     scored.push_back({cands[i].decode_tps, v});

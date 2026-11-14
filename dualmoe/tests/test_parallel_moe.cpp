@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <cmath>
 
 int main(int argc, char ** argv) {
     if (argc < 2) {
@@ -711,6 +712,78 @@ int main(int argc, char ** argv) {
                   << "), survives a restart and disables itself when unprofitable!\n";
     }
 
-    std::cout << "ALL DUALMOE v0.6.0 GATES PASSED!\n";
+    // Gate 10: the GPU || CPU seam is configurable, applied live, clamped, and honest.
+    // Without a GPU the seam cannot form, and the app must then say so (dual_layers == 0, seam off)
+    // instead of printing a pretty number. With a GPU the same knob engages the forced seam, which
+    // hands a share of every layer's experts to the CPU while the GPU works on the same token.
+    {
+        std::cout << "\n[Gate 10] GPU || CPU seam control...\n";
+        dualmoe::DualMoeEngine eng;
+        dualmoe::EngineConfig cfg;
+        cfg.model_path          = model_path;
+        cfg.moe_stream          = true;
+        cfg.zero_hdd_mode       = false;
+        cfg.n_gpu_layers        = 0;
+        cfg.vram_cache_mb       = 16;
+        cfg.cpu_share           = 0.85f;
+        cfg.parallel_seam_share = 0.30f;
+        cfg.n_ctx               = 512;
+        cfg.n_threads           = 2;
+        cfg.warm_state          = true;
+        std::string err;
+        if (!eng.load_model(cfg, err)) {
+            std::cerr << "[FAIL] Gate 10: load failed: " << err << "\n";
+            return 1;
+        }
+        // Case A: the requested share reaches the engine (it is the value the scheduler is given).
+        dualmoe::TelemetrySnapshot t = eng.telemetry();
+        if (std::abs(t.active_seam_share - 0.30f) > 1e-4f) {
+            std::cerr << "[FAIL] Gate 10: seam share was not applied (active=" << t.active_seam_share << ")\n";
+            return 1;
+        }
+        // Case B: an absurd request is clamped instead of starving the GPU. (Start from the live config:
+        // a bank size that the load had to clamp would be refused as "needs a reload" instead.)
+        dualmoe::EngineConfig live = eng.current_config();
+        live.parallel_seam_share = 0.99f;
+        if (!eng.apply_live_config(live, err)) {
+            std::cerr << "[FAIL] Gate 10: apply_live_config failed: " << err << "\n";
+            return 1;
+        }
+        t = eng.telemetry();
+        if (t.active_seam_share > 0.9f + 1e-4f) {
+            std::cerr << "[FAIL] Gate 10: seam share was not clamped (active=" << t.active_seam_share << ")\n";
+            return 1;
+        }
+        // Case C: 0 turns the seam off again without a model reload, so the CPU cannot be forced to
+        // compete with the GPU when the user does not want it.
+        live.parallel_seam_share = 0.0f;
+        if (!eng.apply_live_config(live, err)) {
+            std::cerr << "[FAIL] Gate 10: disabling the seam failed: " << err << "\n";
+            return 1;
+        }
+        t = eng.telemetry();
+        if (t.active_seam_share != 0.0f) {
+            std::cerr << "[FAIL] Gate 10: seam share did not switch off (active=" << t.active_seam_share << ")\n";
+            return 1;
+        }
+        // Case D: no GPU => no overlap is claimable, and the app reports exactly zero instead of
+        // inventing CPU work. This is the honesty check the user asked for.
+        std::string out;
+        if (!eng.generate_raw(test_prompt, 24, 0.0f, 7u, nullptr, out, err)) {
+            std::cerr << "[FAIL] Gate 10: generate failed: " << err << "\n";
+            return 1;
+        }
+        t = eng.telemetry();
+        // (par_layers_dual can only be non-zero when a GPU backend exists: the seam needs two backends.)
+        if (t.vram_cache_budget_mb == 0 && t.par_layers_dual != 0) {
+            std::cerr << "[FAIL] Gate 10: layered parallelism was reported without an expert bank\n";
+            return 1;
+        }
+        std::cout << "[PASS] Gate 10: seam share is applied, clamped, switchable live; "
+                  << "overlap is reported as " << t.par_layers_dual << " layer(s) (bank "
+                  << t.vram_cache_budget_mb << " MiB) — honest zeros when there is nothing to overlap!\n";
+    }
+
+    std::cout << "ALL DUALMOE v0.6.1 GATES PASSED!\n";
     return 0;
 }

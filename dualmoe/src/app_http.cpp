@@ -410,10 +410,10 @@ int parse_app_options(int argc, char ** argv, AppOptions & opt, bool desktop_def
         else if (arg == "--thinking") opt.boot_cfg.enable_thinking = true;
         else if (arg == "--no-thinking") opt.boot_cfg.enable_thinking = false;
         else if (arg == "--version") {
-            std::cout << "DualMoE v0.6.0\n";
+            std::cout << "DualMoE v0.6.1\n";
             return 1;
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "DualMoE v0.6.0 — нативное приложение (окно Windows, без браузера)\n"
+            std::cout << "DualMoE v0.6.1 — нативное приложение (окно Windows, без браузера)\n"
                       << "  --model <file.gguf>       Auto-load GGUF model at startup\n"
                       << "  --models-dir <folder>     Default folder for GGUF UI scanner\n"
                       << "  --host <addr>             Bind address (desktop default 127.0.0.1)\n"
@@ -489,7 +489,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
         const auto cfg = engine.current_config();
         json out = {
             {"ok", true},
-            {"version", "0.6.0"},
+            {"version", "0.6.1"},
             {"default_scan_dir", opt.scan_dir},
             {"roots", list_roots_utf8()},
             {"devices", devs},
@@ -551,7 +551,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             {"ok", true},
             {"mode", opt.desktop_window ? "desktop" : "console"},
             {"native_dialogs", dualmoe::native_file_dialog_available()},
-            {"version", "0.6.0"},
+            {"version", "0.6.1"},
             {"port", bound_port.load(std::memory_order_acquire)},
             {"openai_base_url", openai_base_url_for_json()},
             {"scan_dir", opt.scan_dir},
@@ -828,6 +828,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             opt.prompt     = body.value("prompt", std::string(""));
             opt.sweep_threads   = body.value("sweep_threads", true);
             opt.sweep_cpu_share = body.value("sweep_cpu_share", true);
+            opt.sweep_seam      = body.value("sweep_seam", opt.sweep_cpu_share);
             opt.sweep_vram_bank = body.value("sweep_vram_bank", true);
             opt.sweep_ubatch    = body.value("sweep_ubatch", true);
             opt.max_candidates  = std::clamp(body.value("max_candidates", 8), 1, 32);

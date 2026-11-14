@@ -950,6 +950,7 @@
             <div class="bench-opts">
               <label class="bench-opt-row"><input type="checkbox" id="optThreads" checked> Потоки CPU (физические / SMT / половина)</label>
               <label class="bench-opt-row"><input type="checkbox" id="optCpuShare" checked> Доля CPU ∥ GPU (0.60 … 0.96 + уточнение вокруг победителя)</label>
+              <label class="bench-opt-row"><input type="checkbox" id="optSeam" checked> GPU ∥ CPU на одном токене (0 / 15 / 30 / 45% экспертов слоя — проверяет, что не медленнее)</label>
               <label class="bench-opt-row"><input type="checkbox" id="optVram" checked> Банк горячих экспертов VRAM (65% / 100%) — 1 перезагрузка на точку</label>
               <label class="bench-opt-row"><input type="checkbox" id="optUbatch" checked> Микробатч (16 / 32)</label>
             </div>
@@ -1059,6 +1060,11 @@
         <div class="field">
           <span class="field-label">Доля CPU ∥ GPU <output id="valCpuShare">85%</output></span>
           <input type="range" id="inpCpuShare" min="50" max="96" value="85" oninput="syncSliders()">
+        </div>
+        <div class="field">
+          <span class="field-label">GPU ∥ CPU на одном токене <output id="valSeam">выкл.</output></span>
+          <input type="range" id="inpSeam" min="0" max="60" step="5" value="0" oninput="syncSliders()"
+                 title="Доля экспертов, которую CPU считает в тот же момент, что GPU считает свои — на том же токене. 0 = CPU только помогает, когда банк VRAM уже полон.">
         </div>
         <div class="field">
           <span class="field-label">Арена DDR4 <output id="valRam">9728 МБ</output></span>
@@ -1410,6 +1416,8 @@
     document.getElementById('valThreads').textContent = document.getElementById('inpThreads').value;
     document.getElementById('valSpec').textContent =
       document.getElementById('inpSpec').value === '0' ? 'выкл.' : document.getElementById('inpSpec').value;
+    document.getElementById('valSeam').textContent =
+      document.getElementById('inpSeam').value === '0' ? 'выкл.' : document.getElementById('inpSeam').value + '%';
     evaluatePreLoadRisk();
   }
 
@@ -1430,6 +1438,7 @@
       n_gpu_layers: parseInt(document.getElementById('inpNgl').value, 10),
       vram_cache_mb: parseInt(document.getElementById('inpVram').value, 10),
       cpu_share: parseInt(document.getElementById('inpCpuShare').value, 10) / 100.0,
+      parallel_seam_share: parseInt(document.getElementById('inpSeam').value, 10) / 100.0,
       ram_cache_mb: parseInt(document.getElementById('inpRam').value, 10),
       n_threads: parseInt(document.getElementById('inpThreads').value, 10) || 8,
       spec_tokens: parseInt(document.getElementById('inpSpec').value, 10) || 0,
@@ -1901,6 +1910,7 @@
           max_candidates: parseInt(document.getElementById('inpBenchMax').value, 10),
           sweep_threads: document.getElementById('optThreads').checked,
           sweep_cpu_share: document.getElementById('optCpuShare').checked,
+          sweep_seam: document.getElementById('optSeam').checked,
           sweep_vram_bank: document.getElementById('optVram').checked,
           sweep_ubatch: document.getElementById('optUbatch').checked,
           fast: document.getElementById('optFast').checked

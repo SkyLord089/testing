@@ -2,7 +2,7 @@
 
 ## Что изменилось
 
-`DualMoE.exe` больше не открывает браузер. Запуск двойным кликом показывает **собственное окно приложения** (Edge WebView2 внутри Win32-окна): своя иконка в панели задач, заголовок «DualMoE v0.6.0», нет вкладок и адресной строки. Закрытие окна полностью останавливает движок.
+`DualMoE.exe` больше не открывает браузер. Запуск двойным кликом показывает **собственное окно приложения** (Edge WebView2 внутри Win32-окна): своя иконка в панели задач, заголовок «DualMoE v0.6.1», нет вкладок и адресной строки. Закрытие окна полностью останавливает движок.
 
 ## Архитектура (что где лежит)
 
@@ -11,7 +11,7 @@
 | `dualmoe/src/app_http.h` / `app_http.cpp` | Ядро приложения: `AppOptions`, парсер командной строки, `AppServer` (движок + HTTP/OpenAI сервер + все маршруты). Раньше здесь был `main()`. |
 | `dualmoe/src/main_desktop.cpp` | Единая точка входа: GUI-ветка (`wWinMain`, окно WebView2) и консольная ветка (браузер). |
 | `dualmoe/src/win_dialogs.{h,cpp}` | Нативный системный диалог выбора `.gguf` (`IFileOpenDialog`), изолирован от HTTP-слоя. |
-| `dualmoe/assets/dualmoe.rc`, `dualmoe.ico` | Иконка приложения + `VS_VERSION_INFO` (`0.6.0.0`). |
+| `dualmoe/assets/dualmoe.rc`, `dualmoe.ico` | Иконка приложения + `VS_VERSION_INFO` (`0.6.1.0`). |
 | `dualmoe/scripts/make_icon.py` | Пересборка `.ico` (16…256 px) из `assets/icon_source.png` (Pillow). |
 | `dualmoe/cmake/x64-windows-msvc.cmake` | Toolchain для одиночного EXE: MSVC + статический CRT (`/MT`), AVX2/FMA/F16C. |
 
@@ -38,9 +38,9 @@ cmake --build build-win --config Release --target dualmoe-server # консол�
 
 ## Проверки, которые прошли
 
-- Локально (Linux): `dualmoe-tests` — все 9 гейтов (`ALL DUALMOE v0.6.0 GATES PASSED!`); `dualmoe-server` отдаёт UI 200, `/api/app/info` → `version 0.6.0`.
+- Локально (Linux): `dualmoe-tests` — все 10 гейтов (`ALL DUALMOE v0.6.1 GATES PASSED!`); `dualmoe-server` отдаёт UI 200, `/api/app/info` → `version 0.6.1`.
 - Windows-ветки (`win_dialogs.cpp`, `main_desktop.cpp` с `DUALMOE_DESKTOP=1`) проверены синтаксически на моках Win32-заголовков.
-- GitHub Actions `verify-gates` + `windows-exe`: MSVC x64 Vulkan сборка, PE-проверка «subsystem = 2 (GUI)», релиз `dualmoe-v0.6.0` с одним файлом `DualMoE.exe`.
+- GitHub Actions `verify-gates` + `windows-exe`: MSVC x64 Vulkan сборка, PE-проверка «subsystem = 2 (GUI)», релиз `dualmoe-v0.6.1` с одним файлом `DualMoE.exe`.
 
 ## Известные ограничения
 
