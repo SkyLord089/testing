@@ -114,7 +114,7 @@ int run_desktop(int argc, char ** argv) {
     std::unique_ptr<webview::webview> win;
     try {
         win = std::make_unique<webview::webview>(/*debug=*/false, nullptr);
-        win->set_title("DualMoE v0.5.2 — Локальная MoE-студия (VRAM ⊕ RAM)");
+        win->set_title("DualMoE v0.6.0 — Локальная MoE-студия (VRAM ⊕ RAM)");
         win->set_size(1440, 940, WEBVIEW_HINT_NONE);
     } catch (const webview::exception & e) {
         // WebView2 runtime missing (very old Windows 10 without Evergreen bootstrapper).
@@ -142,7 +142,7 @@ int run_desktop(int argc, char ** argv) {
     }
 
     std::cout << "\n==================================================================\n"
-              << "  DualMoE v0.5.2 — нативное окно (Edge WebView2) + Benchmark\n"
+              << "  DualMoE v0.6.0 — нативное окно (Edge WebView2) + Benchmark\n"
               << "  OpenAI / LearnHarness Base URL: " << app.openai_base_url() << "\n"
               << "  Закройте окно приложения, чтобы полностью остановить движок.\n"
               << "==================================================================\n";
@@ -168,7 +168,7 @@ int run_desktop(int argc, char ** argv) {
 #else
     // Console server build: identical behaviour to previous releases.
     std::cout << "\n==================================================================\n"
-              << "  DualMoE v0.5.2 — консольный сервер + Web UI\n"
+              << "  DualMoE v0.6.0 — консольный сервер + Web UI\n"
               << "  Интерфейс в браузере:           " << app.local_url() << "\n"
               << "  OpenAI / LearnHarness Base URL: " << app.openai_base_url() << "\n"
               << "==================================================================\n";
@@ -231,7 +231,7 @@ int main(int argc, char ** argv) {
         std::cerr << "[DualMoE] " << err << "\n";
         return 1;
     }
-    std::cout << "\n  DualMoE v0.5.2 — сервер: " << app.local_url()
+    std::cout << "\n  DualMoE v0.6.0 — сервер: " << app.local_url()
               << "\n  OpenAI Base URL: " << app.openai_base_url() << "\n";
     if (opt.open_browser) {
         const std::string cmd = "xdg-open '" + app.local_url() + "' >/dev/null 2>&1 &";

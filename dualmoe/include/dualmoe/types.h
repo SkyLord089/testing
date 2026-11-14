@@ -53,6 +53,10 @@ struct EngineConfig {
     size_t   static_bank_mb       = 0;      // 0 = derived: vram_cache_mb * static_bank_share
     bool     warm_state           = true;   // persist the hot expert set next to the model between runs
     int32_t  warm_state_max_kb    = 256;    // cap of the warm-state file
+    // Speculative lookahead ("Разгон"): draft N tokens from the token history and verify the batch in
+    // ONE graph, so several tokens cost one expert round instead of N. 0 disables it.
+    int32_t  spec_tokens          = 6;      // drafted candidates per round (2..8; the guard backs off by itself)
+    bool     spec_disk_cache      = true;   // persist the lookahead table next to the model
 
     // Context & batch sizing (tuned for RX 580 8 GB VRAM + 16 GB RAM + LearnHarness)
     uint32_t n_ctx                = 16384;
@@ -182,6 +186,12 @@ struct TelemetrySnapshot {
     double      prefill_tps             = 0.0;
     double      decode_tps              = 0.0;
     double      ttft_ms                 = 0.0;
+    // Speculative lookahead ("Разгон"): drafted/accepted tokens and the effective speed-up
+    // (1.0 = plain decode, 2.0 = two tokens per graph on average).
+    int32_t     spec_tokens             = 0;
+    uint64_t    spec_drafted            = 0;
+    uint64_t    spec_accepted           = 0;
+    double      spec_efficiency         = 1.0;
     uint64_t    prompt_tokens           = 0;
     uint64_t    generated_tokens        = 0;
     uint32_t    kv_used_tokens          = 0;

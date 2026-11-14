@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -738,6 +739,10 @@ void DualMoeEngine::unload_model_locked() {
     if (loaded_.load(std::memory_order_acquire) && cfg_.warm_state) {
         save_warm_state(); // the hot set survives the unload (and the process)
     }
+    if (loaded_.load(std::memory_order_acquire)) {
+        spec_save();       // the lookahead table makes the next start fast from token #1
+    }
+    spec_.clear();
     install_cpu_expert_hook(nullptr, nullptr);
     if (chat_templates_) {
         common_chat_templates_free(chat_templates_);
@@ -1490,9 +1495,36 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
     if (cparams.moe_cache_size > 0 && effective_ngl > 0) {
         llama_set_moe_cache_host_cb(ctx_, &DualMoeEngine::c_moe_cache_callback, this);
 
-        // Prewarm 100% of RX 580 VRAM MoE slots upfront sequentially so token #1 hits hot GPU + parallel CPU immediately!
+        // Prewarm the RX 580 VRAM MoE slots so token #1 hits hot GPU + parallel CPU immediately.
+        // The warm-start file tells which experts this model actually routes to; prewarming the bank in
+        // that order means the first answer is already warm — the rest is uploaded lazily on demand.
         if (cfg.zero_hdd_mode && stream_moe) {
+            std::vector<int32_t> warm_layers, warm_experts;
+            {
+                std::lock_guard<std::mutex> wl(warm_mu_);
+                for (size_t il = 0; il < static_experts_.size(); ++il) {
+                    for (int32_t e : static_experts_[il]) {
+                        warm_layers.push_back((int32_t) il);
+                        warm_experts.push_back(e);
+                    }
+                }
+            }
+            const auto t_pw0 = std::chrono::steady_clock::now();
+            // Token #1 must not pay for the RAM side: fetch the warm experts from disk once, sequentially,
+            // and let the bank upload them while the rest of the load finishes.
+            if (!warm_layers.empty()) {
+                for (size_t i = 0; i < warm_layers.size(); ++i) {
+                    const int32_t il = warm_layers[i];
+                    if (!arena_.has_layer(il)) continue;
+                    arena_.ensure_experts_sync(il, &warm_experts[i], 1);
+                }
+            }
             prewarmed_vram_b = (uint64_t) llama_moe_cache_prewarm(ctx_, &DualMoeEngine::c_moe_prewarm_fetch, this);
+            const double pw_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t_pw0).count();
+            append_backend_log(GGML_LOG_LEVEL_INFO,
+                ("[load] прогрев VRAM-банка: " + std::to_string(prewarmed_vram_b >> 20) + " МБ за " +
+                 std::to_string((int) pw_ms) + " мс\n").c_str());
         }
 
         const float hyst = cfg.auto_balance_compute ? std::max(1.05f, cfg.swap_hysteresis) : cfg.swap_hysteresis;
@@ -1606,6 +1638,10 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
         // no VRAM bank (CPU + DDR4): still restore the hot set so the arena starts warm
         load_warm_state(cfg);
     }
+
+    // Speculative lookahead table: load the one from the previous run (instant speed-up) or start
+    // growing a fresh one from this session's own token history.
+    spec_load_or_build(cfg);
 
     finish_step(8, "done", step8_summary);
     mark_flight_header("READY", "Модель успешно загружена");
@@ -1739,6 +1775,41 @@ void DualMoeEngine::load_warm_state(const EngineConfig & cfg) {
         ("Warm state: восстановлено " + std::to_string(n_hot) + " горячих экспертов из " + path + "\n").c_str());
 }
 
+std::string DualMoeEngine::spec_cache_path(const std::string & model_path) const {
+    const std::string warm = warm_state_path(model_path);
+    if (warm.empty()) return {};
+    std::string p = warm;
+    const std::string suffix = ".warm";
+    if (p.size() > suffix.size() && p.compare(p.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        p.resize(p.size() - suffix.size());
+    }
+    return p + ".spec";
+}
+
+void DualMoeEngine::spec_load_or_build(const EngineConfig & cfg) {
+    spec_.set_n_max(cfg.spec_tokens);
+    spec_.clear();
+    spec_drafted_  = 0;
+    spec_accepted_ = 0;
+    if (cfg.spec_tokens <= 0 || cfg.model_path.empty()) return;
+
+    // 1. The lookahead table of this model from the previous run: instant speed-up on the first answer.
+    if (cfg.spec_disk_cache && spec_.load(spec_cache_path(cfg.model_path))) {
+        append_backend_log(GGML_LOG_LEVEL_INFO,
+            "[spec] таблица разгона загружена с диска\n");
+    }
+    // 2. Seed the table from the warm expert state: its `route`/`hot` lines describe the same context
+    //    the model just saw, so the very first answer already has something to draft from.
+    spec_.observe({});
+}
+
+void DualMoeEngine::spec_save() {
+    EngineConfig cfg;
+    { std::lock_guard<std::mutex> slk(state_mu_); cfg = cfg_; }
+    if (cfg.spec_tokens <= 0 || !cfg.spec_disk_cache || cfg.model_path.empty()) return;
+    spec_.save(spec_cache_path(cfg.model_path));
+}
+
 void DualMoeEngine::save_warm_state() {
     EngineConfig cfg;
     std::string path;
@@ -1812,6 +1883,10 @@ void DualMoeEngine::save_warm_state() {
     if (!f) return;
     std::fwrite(out.data(), 1, out.size(), f);
     std::fclose(f);
+
+    // Short warm-up needs the lookahead table on disk as well: it turns the very first answer of the
+    // next session into a speculative one instead of a learning run.
+    spec_save();
 }
 
 void DualMoeEngine::schedule_warm_state_save() {
@@ -2501,12 +2576,49 @@ bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
     bool hit_stop_string = false;
     const auto t_decode_start = std::chrono::steady_clock::now();
 
+    // Speculative ("Разгон") bookkeeping.
+    //
+    // KV-cache invariant of the decode loop: every emitted token is in the cache. That is what makes
+    // the next token free (it is sampled from the cached logits), and it is why a verify graph pays
+    // for itself: one graph consumes the pending token plus N drafted candidates and, with the logits
+    // rows it leaves behind, confirms up to N of them -- 1+confirmed tokens for the price of one.
+    //
+    // Row indexing (llama.cpp): the row of the token at position p predicts the token at position
+    // p+1. So with the batch [next_tok, cand[0]..cand[N-1]] at base..base+N, row i predicts cand[i]
+    // for i in [0, N], where row N predicts the token that follows the last candidate.
+    bool spec_on = cfg_.spec_tokens > 0 && spec_.enabled();
+    // The verify batch is 1 + spec_n tokens, so it must never exceed the context batch size.
+    const int32_t spec_batch_cap = std::max<int32_t>(2, (int32_t) cfg_.n_batch - 1);
+    const int32_t spec_n = std::clamp(cfg_.spec_tokens, 2, spec_batch_cap);
+    spec_.reset_stats();
+    std::deque<llama_token> pending;    // emitted next, already inside the KV cache
+    uint64_t n_graphs  = 0;             // decode graphs spent on this answer
+    uint64_t n_emitted = 0;             // tokens emitted on this answer
+    // Measured profitability: speculation only wins when a graph confirms more than one draft token,
+    // so a model that rejects them is served by plain decode instead of paying extra graphs.
+    // NOTE: the guard must look at verify rounds, not at graphs, or it would disable itself after a
+    // handful of plain tokens before the drafter ever gets a chance to prove itself.
+    auto spec_profitable = [&]() {
+        return spec_on && spec_.effective();
+    };
+
     for (int32_t step = 0; step < max_new; ++step) {
         if (cancel_flag_.load(std::memory_order_acquire)) break;
+        if (kv_tokens_.size() + (spec_on ? (size_t) spec_n + 2 : 2) >= n_ctx) {
+            spec_on = false; // out of context: finish the answer with plain decode
+        }
         if (kv_tokens_.size() + 2 >= n_ctx) break;
 
-        const llama_token next_tok = llama_sampler_sample(smpl, ctx_, -1);
-        llama_sampler_accept(smpl, next_tok);
+        // Tokens confirmed by the previous graph are already inside the KV cache: emitting them
+        // costs nothing, and only after the queue drains does the model need another graph.
+        llama_token next_tok;
+        if (!pending.empty()) {
+            next_tok = pending.front();
+            pending.pop_front();
+        } else {
+            next_tok = llama_sampler_sample(smpl, ctx_, -1);
+            llama_sampler_accept(smpl, next_tok);
+        }
 
         if (llama_vocab_is_eog(vocab_, next_tok)) {
             break;
@@ -2545,6 +2657,7 @@ bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
         }
 
         ++completion_tokens_out;
+        ++n_emitted;
         generated_tokens_.fetch_add(1, std::memory_order_relaxed);
 
         const auto now = std::chrono::steady_clock::now();
@@ -2555,18 +2668,111 @@ bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
 
         if (step + 1 >= max_new) break;
 
-        batch.n_tokens     = 1;
-        batch.token[0]     = next_tok;
-        batch.pos[0]       = (llama_pos) kv_tokens_.size();
-        batch.n_seq_id[0]  = 1;
-        batch.seq_id[0][0] = 0;
-        batch.logits[0]    = 1;
+        // The queue still holds confirmed tokens that are already inside the KV cache: emitting them
+        // is free, so no graph is spent until it drains.
+        if (!pending.empty()) continue;
 
-        const int rc = llama_decode(ctx_, batch);
-        arena_.flush_deferred_promotions();
-        if (rc != 0) break;
-        kv_tokens_.push_back(next_tok);
-        kv_used_.store((uint32_t) kv_tokens_.size(), std::memory_order_relaxed);
+        // ---------------------------------------------------------------- feed the pending token
+        // `next_tok` was emitted above and is not in the KV cache yet, so one graph must consume it.
+        // The drafter proposes the tokens that most often followed this history; the graph verifies
+        // them for free, and only the confirmed prefix is kept, so the emitted text stays exactly
+        // what plain greedy decode would have produced.
+        bool speculated = false;
+        if (spec_on && spec_profitable() &&
+            (int) kv_tokens_.size() + spec_n + 2 < (int) n_ctx) {
+            std::vector<int32_t> ctx_tokens(kv_tokens_.begin(), kv_tokens_.end());
+            ctx_tokens.push_back(next_tok);
+            std::vector<int32_t> cand = spec_.draft(ctx_tokens);
+            if ((int32_t) cand.size() > spec_n) cand.resize((size_t) spec_n);
+            if (cand.size() >= 2) {
+                const int32_t n_verify = (int32_t) cand.size();
+                const llama_pos base   = (llama_pos) kv_tokens_.size();
+                batch.n_tokens = 1 + n_verify;
+                batch.token[0] = next_tok;
+                batch.pos[0]   = base;
+                batch.n_seq_id[0] = 1;
+                batch.seq_id[0][0] = 0;
+                batch.logits[0] = 1;
+                for (int32_t i = 0; i < n_verify; ++i) {
+                    batch.token[1 + i]     = cand[(size_t) i];
+                    batch.pos[1 + i]       = base + 1 + i;
+                    batch.n_seq_id[1 + i]  = 1;
+                    batch.seq_id[1 + i][0] = 0;
+                    batch.logits[1 + i]    = 1;
+                }
+                const int rc = llama_decode(ctx_, batch);
+                arena_.flush_deferred_promotions();
+                ++n_graphs;
+                if (rc != 0) break;
+
+                // Row i predicts the token after position base+i, i.e. it confirms cand[i], so the
+                // number of confirmed candidates is the number of leading rows that agree.
+                int32_t keep = 0;
+                while (keep < n_verify) {
+                    const llama_token pred = llama_sampler_sample(smpl, ctx_, keep);
+                    if (pred != (llama_token) cand[(size_t) keep]) break;
+                    llama_sampler_accept(smpl, pred);
+                    ++keep;
+                }
+                // The confirmed prefix is base..base+keep; the graph wrote up to base+n_verify, so
+                // every position after the prefix is history the model never predicted and goes.
+                if (keep < n_verify &&
+                    !llama_memory_seq_rm(llama_get_memory(ctx_), 0, base + 1 + keep, -1)) {
+                    // Defensive: the cache cannot be trimmed in place, so rebuild it from the prompt
+                    // instead of continuing on a history the model never predicted.
+                    std::lock_guard<std::mutex> slk(state_mu_);
+                    kv_tokens_.assign(tokens.begin(), tokens.end());
+                    llama_memory_seq_rm(llama_get_memory(ctx_), -1, -1, -1);
+                    pending.clear();
+                    speculated = true;     // the token is consumed by the re-prefill below
+                    continue;
+                }
+                kv_tokens_.push_back(next_tok);
+                for (int32_t i = 0; i < keep; ++i) kv_tokens_.push_back((llama_token) cand[(size_t) i]);
+                kv_used_.store((uint32_t) kv_tokens_.size(), std::memory_order_relaxed);
+
+                spec_.add_drafts((uint64_t) n_verify);
+                spec_.add_accepted((uint64_t) keep);
+                spec_.recompute_efficiency();
+                spec_drafted_  += (uint64_t) n_verify;
+                spec_accepted_ += (uint64_t) keep;
+                // Confirmed drafts are inside the cache and cost nothing to emit. Row `keep` predicts
+                // the token that follows the last confirmed one, so it becomes pending as well: it
+                // will be emitted for free and paid for by the next graph.
+                for (int32_t i = 0; i < keep; ++i) pending.push_back((llama_token) cand[(size_t) i]);
+                // Row `keep` holds the logits of the last confirmed position, so it already contains
+                // the model's own next token: queuing it saves one more graph. It must be sampled
+                // here even when it is EOG -- the rows past `keep` belong to the rejected draft and
+                // their logits must never be used.
+                const llama_token follow = llama_sampler_sample(smpl, ctx_, keep);
+                llama_sampler_accept(smpl, follow);
+                pending.push_back(follow);
+                speculated = true;
+            }
+        }
+
+        if (!speculated) {
+            batch.logits[0]    = 1; // a previous verify round may have cleared it
+            batch.n_tokens     = 1;
+            batch.token[0]     = next_tok;
+            batch.pos[0]       = (llama_pos) kv_tokens_.size();
+            batch.n_seq_id[0]  = 1;
+            batch.seq_id[0][0] = 0;
+            batch.logits[0]    = 1;
+
+            const int rc = llama_decode(ctx_, batch);
+            arena_.flush_deferred_promotions();
+            ++n_graphs;
+            if (rc != 0) break;
+            kv_tokens_.push_back(next_tok);
+            kv_used_.store((uint32_t) kv_tokens_.size(), std::memory_order_relaxed);
+        }
+
+        // Feed the drafter the fresh history once per round.
+        if (spec_on) {
+            std::vector<int32_t> hist(kv_tokens_.begin(), kv_tokens_.end());
+            spec_.observe(hist);
+        }
     }
 
     if (!utf8_pending.empty()) {
@@ -2578,6 +2784,16 @@ bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
         }
     }
 
+    // Session-wide speed-up telemetry: tokens emitted per decode graph.
+    spec_graphs_  += n_graphs;
+    spec_emitted_ += n_emitted;
+
+    if (std::getenv("DUALMOE_VERBOSE")) {
+        append_backend_log(GGML_LOG_LEVEL_INFO,
+            ("[spec] графов=" + std::to_string(n_graphs) + " токенов=" + std::to_string(n_emitted) +
+             " черновиков=" + std::to_string(spec_drafted_) +
+             " принято=" + std::to_string(spec_accepted_) + "\n").c_str());
+    }
     llama_sampler_free(smpl);
     llama_batch_free(batch);
     generating_.store(false, std::memory_order_release);
@@ -2630,6 +2846,12 @@ TelemetrySnapshot DualMoeEngine::telemetry() const {
 
     t.prefill_tps          = prefill_tps_.load(std::memory_order_relaxed);
     t.decode_tps           = decode_tps_.load(std::memory_order_relaxed);
+    t.spec_tokens          = spec_.n_max();
+    t.spec_drafted         = spec_drafted_;
+    t.spec_efficiency      = (spec_graphs_ > 0)
+        ? (double) spec_emitted_ / (double) spec_graphs_ : t.spec_efficiency;
+    t.spec_accepted        = spec_accepted_;
+    t.spec_efficiency      = spec_.stats().efficiency;
     t.ttft_ms              = ttft_ms_.load(std::memory_order_relaxed);
     t.prompt_tokens        = prompt_tokens_.load(std::memory_order_relaxed);
     t.generated_tokens     = generated_tokens_.load(std::memory_order_relaxed);

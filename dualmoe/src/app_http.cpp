@@ -90,6 +90,10 @@ json telemetry_to_json(const dualmoe::TelemetrySnapshot & t) {
         {"prefill_tps", t.prefill_tps},
         {"decode_tps", t.decode_tps},
         {"ttft_ms", t.ttft_ms},
+        {"spec_tokens", t.spec_tokens},
+        {"spec_drafted", t.spec_drafted},
+        {"spec_accepted", t.spec_accepted},
+        {"spec_efficiency", t.spec_efficiency},
         {"prompt_tokens", t.prompt_tokens},
         {"generated_tokens", t.generated_tokens},
         {"kv_used_tokens", t.kv_used_tokens},
@@ -398,10 +402,10 @@ int parse_app_options(int argc, char ** argv, AppOptions & opt, bool desktop_def
         else if (arg == "--thinking") opt.boot_cfg.enable_thinking = true;
         else if (arg == "--no-thinking") opt.boot_cfg.enable_thinking = false;
         else if (arg == "--version") {
-            std::cout << "DualMoE v0.5.2\n";
+            std::cout << "DualMoE v0.6.0\n";
             return 1;
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "DualMoE v0.5.2 — нативное приложение (окно Windows, без браузера)\n"
+            std::cout << "DualMoE v0.6.0 — нативное приложение (окно Windows, без браузера)\n"
                       << "  --model <file.gguf>       Auto-load GGUF model at startup\n"
                       << "  --models-dir <folder>     Default folder for GGUF UI scanner\n"
                       << "  --host <addr>             Bind address (desktop default 127.0.0.1)\n"
@@ -477,7 +481,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
         const auto cfg = engine.current_config();
         json out = {
             {"ok", true},
-            {"version", "0.5.2"},
+            {"version", "0.6.0"},
             {"default_scan_dir", opt.scan_dir},
             {"roots", list_roots_utf8()},
             {"devices", devs},
@@ -539,7 +543,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             {"ok", true},
             {"mode", opt.desktop_window ? "desktop" : "console"},
             {"native_dialogs", dualmoe::native_file_dialog_available()},
-            {"version", "0.5.2"},
+            {"version", "0.6.0"},
             {"port", bound_port.load(std::memory_order_acquire)},
             {"openai_base_url", openai_base_url_for_json()},
             {"scan_dir", opt.scan_dir},
@@ -666,6 +670,8 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             cfg.static_bank_share    = std::clamp(body.value("static_bank_share", cfg.static_bank_share), 0.0f, 0.8f);
             cfg.static_bank_mb       = body.value("static_bank_mb", cfg.static_bank_mb);
             cfg.warm_state           = body.value("warm_state", cfg.warm_state);
+            cfg.spec_tokens          = std::clamp(body.value("spec_tokens", cfg.spec_tokens), 0, 8);
+            cfg.spec_disk_cache      = body.value("spec_disk_cache", cfg.spec_disk_cache);
 
             const bool async_mode = body.value("async", false);
             std::string err;

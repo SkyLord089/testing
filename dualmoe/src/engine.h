@@ -3,6 +3,7 @@
 #include "dualmoe/types.h"
 #include "gguf_inspect.h"
 #include "virtual_arena.h"
+#include "spec.h"
 
 #include "llama.h"
 
@@ -49,6 +50,14 @@ public:
     void set_thinking_enabled(bool enabled);
 
     void request_cancel();
+
+    // Speculative lookahead ("Разгон"): drafts per round, 0 disables. Takes effect immediately.
+    void set_spec_tokens(int32_t n) { spec_.set_n_max(n); }
+    int32_t spec_tokens() const { return spec_.n_max(); }
+    uint64_t spec_drafted() const { return spec_drafted_; }
+    uint64_t spec_graphs() const { return spec_graphs_; }
+    uint64_t spec_emitted() const { return spec_emitted_; }
+    uint64_t spec_accepted() const { return spec_accepted_; }
 
     // Re-tune the knobs that do not need a reload (CPU threads, CPU ∥ GPU share, class split) on the
     // already loaded context. Used by the benchmark: 1 reload per VRAM-bank point instead of per knob.
@@ -144,6 +153,17 @@ private:
 
     // Hot expert class bookkeeping ({"static" subset pinned in the VRAM bank} + route of the last
     // prompt, used to prefetch the experts a repeated prefix will hit again).
+    // Speculative lookahead: drafts several tokens from the token history and verifies the batch
+    // in one graph, which amortises the per-token expert round over 2..N tokens.
+    SpecDrafter spec_;
+    std::string spec_cache_path(const std::string & model_path) const;
+    void        spec_load_or_build(const EngineConfig & cfg);
+    void        spec_save();
+    uint64_t    spec_drafted_ = 0;
+    uint64_t    spec_graphs_  = 0;   // graphs vs tokens emitted: the honest speed-up factor
+    uint64_t    spec_emitted_ = 0;
+    uint64_t    spec_accepted_ = 0;
+
     std::vector<std::vector<int32_t>> static_experts_;      // per layer, the pinned experts
     std::vector<std::vector<int32_t>> prompt_route_;        // per layer, route of the last full prompt
     bool        static_class_active_ = false;

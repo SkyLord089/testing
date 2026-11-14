@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "spec.h"
 #include "chat.h"
 #include "bench.h"
 
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -582,6 +584,133 @@ int main(int argc, char ** argv) {
                      "no GGML_STATUS_ABORTED ret=2) while 'Стоп' still stops generation!\n";
     }
 
-    std::cout << "ALL DUALMOE v0.5.2 GATES PASSED!\n";
+    // Gate 9: speculative lookahead ("Разгон") must be transparent — identical text with the drafter
+    // on and off — must actually draft/accept tokens, and must switch itself off when the model
+    // rejects the drafts (so a compute-bound machine is never slower than plain decode).
+    {
+        std::cout << "\n[Gate 9] Speculative lookahead ('Разгон')...\n";
+
+        auto spec_cfg = [&](int32_t spec_n, bool disk) {
+            dualmoe::EngineConfig cfg;
+            cfg.model_path       = model_path;
+            cfg.moe_stream       = true;
+            cfg.zero_hdd_mode    = true;
+            cfg.n_gpu_layers     = 0;
+            cfg.ram_cache_mb     = 32;
+            cfg.n_ctx            = 512;
+            cfg.n_threads        = 2;
+            cfg.sampling.temperature = 0.0f;
+            cfg.spec_tokens      = spec_n;
+            cfg.spec_disk_cache  = disk;
+            cfg.warm_state       = true;
+            return cfg;
+        };
+
+        const std::string prompt = "Ты — инженер DualMoE. Объясни по пунктам, как движок распределяет "
+                                   "экспертов между GPU, CPU и диском и что влияет на скорость.";
+
+        std::string plain_out, spec_out, gerr;
+        {
+            dualmoe::DualMoeEngine eng;
+            if (!eng.load_model(spec_cfg(0, false), gerr)) {
+                std::cerr << "[FAIL] Gate 9: plain load failed: " << gerr << "\n";
+                return 1;
+            }
+            if (!eng.generate_raw(prompt, 48, 0.0f, 11u, nullptr, plain_out, gerr)) {
+                std::cerr << "[FAIL] Gate 9: plain generate failed: " << gerr << "\n";
+                return 1;
+            }
+        }
+
+        uint64_t drafted = 0, accepted = 0;
+        double   eff     = 1.0;
+        {
+            dualmoe::DualMoeEngine eng;
+            if (!eng.load_model(spec_cfg(4, true), gerr)) {
+                std::cerr << "[FAIL] Gate 9: speculative load failed: " << gerr << "\n";
+                return 1;
+            }
+            // Two warm-up answers so the drafter has learned this model's phrasing.
+            std::string warm, werr;
+            eng.generate_raw(prompt, 48, 0.0f, 11u, nullptr, warm, werr);
+            if (!eng.generate_raw(prompt, 48, 0.0f, 11u, nullptr, spec_out, gerr)) {
+                std::cerr << "[FAIL] Gate 9: speculative generate failed: " << gerr << "\n";
+                return 1;
+            }
+            drafted  = eng.spec_drafted();
+            accepted = eng.spec_accepted();
+            eff      = eng.telemetry().spec_efficiency;
+
+            // Case A: the drafter must produce usable drafts on real token history.
+            if (drafted == 0) {
+                std::cerr << "[FAIL] Gate 9: the drafter never proposed a token (drafted=0)\n";
+                return 1;
+            }
+            // Case B: whatever it drafts, the visible text must be exactly what plain decode writes.
+            if (spec_out != plain_out) {
+                std::cerr << "[FAIL] Gate 9: speculation changed the answer!\n"
+                          << "  plain: [" << plain_out << "]\n  spec : [" << spec_out << "]\n";
+                return 1;
+            }
+            if (eff < 1.0) {
+                std::cerr << "[FAIL] Gate 9: efficiency below plain decode (" << eff << ")\n";
+                return 1;
+            }
+            eng.unload_model();
+        }
+
+        // Case C: the drafter's own table survives a restart (disk cache), so token #1 of the next
+        // session is already speculative instead of learning from zero.
+        dualmoe::SpecDrafter d;
+        d.set_n_max(4);
+        const std::vector<int32_t> hist = {5, 6, 7, 8, 5, 6, 7, 8, 5, 6, 7, 8, 9};
+        d.observe(hist);
+        const std::string spec_path = "gate9_spec_cache.bin";
+        if (!d.save(spec_path)) {
+            std::cerr << "[FAIL] Gate 9: drafter save failed\n";
+            return 1;
+        }
+        dualmoe::SpecDrafter d2;
+        d2.set_n_max(4);
+        if (!d2.load(spec_path)) {
+            std::cerr << "[FAIL] Gate 9: drafter load failed\n";
+            return 1;
+        }
+        std::remove(spec_path.c_str());
+        if (d2.draft({5, 6, 7, 8}).size() < 2) {
+            std::cerr << "[FAIL] Gate 9: reloaded drafter drafts nothing\n";
+            return 1;
+        }
+
+        // Case D: the self-tuning guard refuses an unprofitable drafter, so plain decode is kept.
+        // (One token per graph = no gain; a verify graph costs at least as much as a plain one.)
+        dualmoe::SpecDrafter d3;
+        d3.set_n_max(4);
+        for (int i = 0; i < 12; ++i) { d3.add_drafts(4); d3.add_accepted(0); d3.recompute_efficiency(); }
+        if (d3.effective()) {
+            std::cerr << "[FAIL] Gate 9: a drafter that never gets confirmed was not switched off\n";
+            return 1;
+        }
+        // ... and it keeps itself off: the round counter no longer grows while plain decode runs.
+        const uint64_t rounds_before = d3.stats().rounds;
+        for (int i = 0; i < 5; ++i) { if (d3.effective()) { d3.add_drafts(4); d3.add_accepted(0); d3.recompute_efficiency(); } }
+        if (d3.effective() || d3.stats().rounds != rounds_before) {
+            std::cerr << "[FAIL] Gate 9: the guard let an unprofitable drafter back in\n";
+            return 1;
+        }
+        dualmoe::SpecDrafter d4;
+        d4.set_n_max(4);
+        for (int i = 0; i < 12; ++i) { d4.add_drafts(4); d4.add_accepted(4); d4.recompute_efficiency(); }
+        if (!d4.effective()) {
+            std::cerr << "[FAIL] Gate 9: a perfect drafter was switched off\n";
+            return 1;
+        }
+
+        std::cout << "[PASS] Gate 9: speculation is byte-identical to plain decode, drafts "
+                  << drafted << " and accepts " << accepted << " (eff=" << eff
+                  << "), survives a restart and disables itself when unprofitable!\n";
+    }
+
+    std::cout << "ALL DUALMOE v0.6.0 GATES PASSED!\n";
     return 0;
 }

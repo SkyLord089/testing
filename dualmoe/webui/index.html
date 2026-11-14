@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>DualMoE v0.5.2 — Локальная MoE-студия (VRAM ⊕ RAM)</title>
+<title>DualMoE v0.6.0 — Локальная MoE-студия (VRAM ⊕ RAM)</title>
 <style>
   :root {
     --bg:        #0b0b0c;
@@ -790,7 +790,7 @@
     <div class="brand">
       <div class="brand-mark">D</div>
       <div class="brand-meta">
-        <div class="brand-name mono">DUALMOE <em>v0.5.2</em></div>
+        <div class="brand-name mono">DUALMOE <em>v0.6.0</em></div>
         <div class="bot-desc">VRAM ⊕ RAM · GPU ∥ CPU</div>
       </div>
     </div>
@@ -1068,6 +1068,10 @@
           <span class="field-label">Потоки CPU <output id="valThreads">8</output></span>
           <input type="range" id="inpThreads" min="1" max="16" value="8" oninput="syncSliders()">
         </div>
+        <div class="field">
+          <span class="field-label">Разгон (черновиков на граф) <output id="valSpec">6</output></span>
+          <input type="range" id="inpSpec" min="0" max="8" value="6" oninput="syncSliders()">
+        </div>
       </div>
     </section>
 
@@ -1080,6 +1084,8 @@
         <div class="kv-row"><span>Скорость</span><strong id="telTps">0 tok/s</strong></div>
         <div class="kv-row"><span>Prefill</span><strong id="telPrefill">0 tok/s</strong></div>
         <div class="kv-row"><span>TTFT</span><strong id="telTtft">0 мс</strong></div>
+        <div class="kv-row"><span>Разгон (токенов на граф)</span><strong id="telSpec">—</strong></div>
+        <div class="kv-row"><span>Черновики / принято</span><strong id="telSpecAcc">—</strong></div>
         <div class="kv-row"><span>VRAM-попадания</span><strong id="telVramHits">0%</strong></div>
         <div class="meter"><i id="telVramBar" style="width:0%"></i></div>
         <div class="kv-row"><span>Банк VRAM</span><strong id="telVramBank">0 МБ</strong></div>
@@ -1400,6 +1406,8 @@
     document.getElementById('valCpuShare').textContent = document.getElementById('inpCpuShare').value + '%';
     document.getElementById('valRam').textContent = document.getElementById('inpRam').value + ' МБ';
     document.getElementById('valThreads').textContent = document.getElementById('inpThreads').value;
+    document.getElementById('valSpec').textContent =
+      document.getElementById('inpSpec').value === '0' ? 'выкл.' : document.getElementById('inpSpec').value;
     evaluatePreLoadRisk();
   }
 
@@ -1422,6 +1430,8 @@
       cpu_share: parseInt(document.getElementById('inpCpuShare').value, 10) / 100.0,
       ram_cache_mb: parseInt(document.getElementById('inpRam').value, 10),
       n_threads: parseInt(document.getElementById('inpThreads').value, 10) || 8,
+      spec_tokens: parseInt(document.getElementById('inpSpec').value, 10) || 0,
+      spec_disk_cache: true,
       enable_thinking: state.enableThinking,
       zero_hdd_mode: true,
       auto_balance_compute: true
@@ -1673,6 +1683,14 @@
     document.getElementById('telTps').textContent = (t.decode_tps || 0).toFixed(1) + ' tok/s';
     document.getElementById('telPrefill').textContent = (t.prefill_tps || 0).toFixed(0) + ' tok/s';
     document.getElementById('telTtft').textContent = (t.ttft_ms || 0).toFixed(0) + ' мс';
+    // «Разгон» = speculative lookahead: how many tokens one decode graph produced (1.0 = off/neutral).
+    const eff = t.spec_efficiency || 0;
+    const specEl = document.getElementById('telSpec');
+    specEl.textContent = t.spec_tokens > 0 && eff > 0 ? '×' + eff.toFixed(2) : 'выкл.';
+    specEl.style.color = eff >= 1.15 ? 'var(--ok)' : (eff > 0 && eff < 1.05 && t.spec_tokens > 0 ? 'var(--cream)' : '');
+    document.getElementById('telSpecAcc').textContent = t.spec_drafted > 0
+      ? `${t.spec_drafted} / ${t.spec_accepted} (${Math.round(t.spec_accepted * 100 / t.spec_drafted)}%)`
+      : '—';
     const hit = t.gpu_expert_hits || 0;
     const total = hit + (t.cpu_parallel_experts || 0) + (t.ram_cache_hits || 0);
     const pct = total > 0 ? Math.round(hit * 100 / total) : 0;
