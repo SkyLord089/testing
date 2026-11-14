@@ -1438,10 +1438,10 @@
       n_gpu_layers: parseInt(document.getElementById('inpNgl').value, 10),
       vram_cache_mb: parseInt(document.getElementById('inpVram').value, 10),
       cpu_share: parseInt(document.getElementById('inpCpuShare').value, 10) / 100.0,
-      parallel_seam_share: parseInt(document.getElementById('inpSeam').value, 10) / 100.0,
       ram_cache_mb: parseInt(document.getElementById('inpRam').value, 10),
       n_threads: parseInt(document.getElementById('inpThreads').value, 10) || 8,
       spec_tokens: parseInt(document.getElementById('inpSpec').value, 10) || 0,
+      parallel_seam_share: parseInt(document.getElementById('inpSeam').value, 10) / 100.0,
       spec_disk_cache: true,
       enable_thinking: state.enableThinking,
       zero_hdd_mode: true,
@@ -1703,7 +1703,10 @@
     // versus layers where the CPU split ran only after the GPU one (serialised).
     const dual = t.par_layers_dual || 0, serial = t.par_layers_serial || 0;
     const seamEl = document.getElementById('telSeam');
-    seamEl.textContent = (dual + serial) > 0 ? `${dual} / ${serial}` : '—';
+    const seam_on = (t.active_seam_share || 0) > 0.02;
+    seamEl.textContent = (dual + serial) > 0
+      ? `${dual} / ${serial}` + (seam_on ? ` · шов ${Math.round(t.active_seam_share * 100)}%` : '')
+      : (seam_on ? `— · шов ${Math.round(t.active_seam_share * 100)}%` : '—');
     seamEl.style.color = dual > 0 ? 'var(--ok)' : (serial > 0 ? '#e8a33d' : '');
     document.getElementById('telSeamPct').textContent = (t.par_overlap_pct > 0)
       ? `${Math.round(t.par_overlap_pct)}% · GPU ${(t.par_gpu_ms || 0).toFixed(1)} мс / CPU ${(t.par_cpu_ms || 0).toFixed(1)} мс`
@@ -1947,6 +1950,8 @@
         if (cfg.n_threads) document.getElementById('inpThreads').value = cfg.n_threads;
         if (cfg.vram_cache_mb !== undefined) document.getElementById('inpVram').value = cfg.vram_cache_mb;
         if (cfg.cpu_share) document.getElementById('inpCpuShare').value = Math.round(cfg.cpu_share * 100);
+        if (cfg.parallel_seam_share !== undefined)
+          document.getElementById('inpSeam').value = Math.round(cfg.parallel_seam_share * 100);
         if (cfg.ram_cache_mb) document.getElementById('inpRam').value = cfg.ram_cache_mb;
         syncSliders();
       }
