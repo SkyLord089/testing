@@ -1,4 +1,6 @@
 #include "app_http.h"
+
+#include "autobudget.h"
 #include "win_dialogs.h"
 #include "bench.h"
 
@@ -101,6 +103,16 @@ json telemetry_to_json(const dualmoe::TelemetrySnapshot & t) {
         {"par_overlap_pct", t.par_overlap_pct},
         {"par_gpu_nodes", t.par_gpu_nodes},
         {"par_cpu_nodes", t.par_cpu_nodes},
+        {"auto_budget_active", t.auto_budget_active},
+        {"vram_reserve_mb", t.vram_reserve_mb},
+        {"ram_reserve_mb", t.ram_reserve_mb},
+        {"expert_total_mb", t.expert_total_mb},
+        {"expert_in_vram_mb", t.expert_in_vram_mb},
+        {"expert_in_ram_mb", t.expert_in_ram_mb},
+        {"expert_on_disk_mb", t.expert_on_disk_mb},
+        {"expert_slots", t.expert_slots},
+        {"expert_slots_vram", t.expert_slots_vram},
+        {"expert_slots_ram", t.expert_slots_ram},
         {"prompt_tokens", t.prompt_tokens},
         {"generated_tokens", t.generated_tokens},
         {"kv_used_tokens", t.kv_used_tokens},
@@ -281,6 +293,9 @@ json bench_candidate_to_json(const dualmoe::BenchCandidate & c) {
             {"n_threads_batch", c.cfg.n_threads_batch},
             {"cpu_share", c.cfg.cpu_share},
             {"parallel_seam_share", c.cfg.parallel_seam_share},
+            {"auto_budget", c.cfg.auto_budget},
+            {"vram_reserve_mb", c.cfg.vram_reserve_mb},
+            {"ram_reserve_mb", c.cfg.ram_reserve_mb},
             {"vram_cache_mb", c.cfg.vram_cache_mb},
             {"ram_cache_mb", c.cfg.ram_cache_mb},
             {"n_ubatch", c.cfg.n_ubatch},
@@ -411,10 +426,10 @@ int parse_app_options(int argc, char ** argv, AppOptions & opt, bool desktop_def
         else if (arg == "--thinking") opt.boot_cfg.enable_thinking = true;
         else if (arg == "--no-thinking") opt.boot_cfg.enable_thinking = false;
         else if (arg == "--version") {
-            std::cout << "DualMoE v0.6.1\n";
+            std::cout << "DualMoE v0.6.2\n";
             return 1;
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "DualMoE v0.6.1 — нативное приложение (окно Windows, без браузера)\n"
+            std::cout << "DualMoE v0.6.2 — нативное приложение (окно Windows, без браузера)\n"
                       << "  --model <file.gguf>       Auto-load GGUF model at startup\n"
                       << "  --models-dir <folder>     Default folder for GGUF UI scanner\n"
                       << "  --host <addr>             Bind address (desktop default 127.0.0.1)\n"
@@ -490,7 +505,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
         const auto cfg = engine.current_config();
         json out = {
             {"ok", true},
-            {"version", "0.6.1"},
+            {"version", "0.6.2"},
             {"default_scan_dir", opt.scan_dir},
             {"roots", list_roots_utf8()},
             {"devices", devs},
@@ -500,6 +515,9 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
                 {"vram_cache_mb", cfg.vram_cache_mb},
                 {"cpu_share", cfg.cpu_share},
                 {"parallel_seam_share", cfg.parallel_seam_share},
+                {"auto_budget", cfg.auto_budget},
+                {"vram_reserve_mb", cfg.vram_reserve_mb},
+                {"ram_reserve_mb", cfg.ram_reserve_mb},
                 {"ram_cache_mb", cfg.ram_cache_mb},
                 {"zero_hdd_mode", cfg.zero_hdd_mode},
                 {"auto_balance_compute", cfg.auto_balance_compute},
@@ -553,7 +571,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             {"ok", true},
             {"mode", opt.desktop_window ? "desktop" : "console"},
             {"native_dialogs", dualmoe::native_file_dialog_available()},
-            {"version", "0.6.1"},
+            {"version", "0.6.2"},
             {"port", bound_port.load(std::memory_order_acquire)},
             {"openai_base_url", openai_base_url_for_json()},
             {"scan_dir", opt.scan_dir},
@@ -622,6 +640,77 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
                 {"cpu_parallel", t.cpu_parallel_experts},
                 {"ssd_reads", t.ssd_expert_reads},
             }},
+        }.dump(), "application/json; charset=utf-8");
+    });
+
+    // /api/budget?model_path=...&vram_reserve_mb=-1&ram_reserve_mb=-1&n_gpu_layers=99&n_ctx=16384
+    // Instant preview of the auto budget — no model load, no VRAM touched. The UI calls it while the
+    // user drags the "keep for the system" sliders, so the split "VRAM / DDR2 / HDD" is visible before
+    // the load instead of after it.
+    svr.Get("/api/budget", [&](const httplib::Request & req, httplib::Response & res) {
+        add_cors(res);
+        dualmoe::EngineConfig cfg = engine.current_config();
+        if (req.has_param("model_path"))   cfg.model_path   = req.get_param_value("model_path");
+        if (cfg.model_path.empty()) cfg.model_path = opt.boot_cfg.model_path;
+        if (req.has_param("n_gpu_layers")) cfg.n_gpu_layers = std::atoi(req.get_param_value("n_gpu_layers").c_str());
+        if (req.has_param("n_ctx"))        cfg.n_ctx        = (uint32_t) std::max(512, std::atoi(req.get_param_value("n_ctx").c_str()));
+        if (req.has_param("kv_type_k"))    cfg.kv_type_k    = req.get_param_value("kv_type_k");
+        if (req.has_param("kv_type_v"))    cfg.kv_type_v    = req.get_param_value("kv_type_v");
+        if (req.has_param("vram_reserve_mb")) cfg.vram_reserve_mb = std::atoll(req.get_param_value("vram_reserve_mb").c_str());
+        if (req.has_param("ram_reserve_mb"))  cfg.ram_reserve_mb  = std::atoll(req.get_param_value("ram_reserve_mb").c_str());
+
+        if (cfg.model_path.empty()) {
+            res.status = 400;
+            res.set_content(json{{"ok", false}, {"error", "Не выбрана модель: укажите model_path или загрузите .gguf"}}.dump(),
+                            "application/json; charset=utf-8");
+            return;
+        }
+        const dualmoe::GgufLayout lay = dualmoe::inspect_gguf_layout(cfg.model_path);
+        if (!lay.summary.ok) {
+            res.status = 400;
+            res.set_content(json{{"ok", false}, {"error", lay.summary.error}}.dump(), "application/json; charset=utf-8");
+            return;
+        }
+        const dualmoe::SystemMemoryInfo mem = engine.query_system_memory();
+        const bool has_gpu = !mem.gpu_name.empty();
+        const int32_t ngl = has_gpu ? std::clamp<int32_t>(cfg.n_gpu_layers, 0, std::max(1, lay.summary.n_layer)) : 0;
+        const uint64_t kv_mb = dualmoe::estimate_kv_mb(lay.summary, cfg, ngl);
+        const uint64_t dense_gpu_mb = (ngl > 0 && lay.summary.n_layer > 0)
+            ? (lay.summary.dense_bytes >> 20) * (uint64_t) std::min<int32_t>(ngl, lay.summary.n_layer) / (uint64_t) lay.summary.n_layer
+            : 0;
+        const dualmoe::AutoBudgetPlan plan =
+            dualmoe::plan_auto_budget(lay.summary, mem, cfg, ngl, kv_mb, dense_gpu_mb);
+
+        json reasons = json::array();
+        for (const auto & r : plan.reasons) reasons.push_back(r);
+        res.set_content(json{
+            {"ok", plan.ok},
+            {"error", plan.error},
+            {"model", lay.summary.filename},
+            {"has_gpu", has_gpu},
+            {"effective_ngl", ngl},
+            {"plan", {
+                {"vram_free_mb", plan.vram_free_mb},
+                {"vram_reserve_mb", plan.vram_reserve_mb},
+                {"kv_mb", plan.kv_mb},
+                {"dense_gpu_mb", plan.dense_gpu_mb},
+                {"vram_bank_mb", plan.vram_bank_mb},
+                {"ram_free_mb", plan.ram_free_mb},
+                {"ram_reserve_mb", plan.ram_reserve_mb},
+                {"dense_host_mb", plan.dense_host_mb},
+                {"ram_arena_mb", plan.ram_arena_mb},
+                {"expert_total_mb", plan.expert_total_mb},
+                {"expert_in_vram_mb", plan.expert_in_vram_mb},
+                {"expert_in_ram_mb", plan.expert_in_ram_mb},
+                {"expert_on_disk_mb", plan.expert_on_disk_mb},
+                {"per_expert_mb", plan.per_expert_mb},
+                {"total_experts", plan.total_experts},
+                {"vram_experts", plan.vram_experts},
+                {"ram_experts", plan.ram_experts},
+                {"silicon_pct", plan.silicon_pct},
+                {"zero_hdd", plan.zero_hdd},
+            }},
+            {"reasons", reasons},
         }.dump(), "application/json; charset=utf-8");
     });
 
@@ -747,6 +836,9 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             cfg.spec_tokens          = std::clamp(body.value("spec_tokens", cfg.spec_tokens), 0, 8);
             cfg.spec_disk_cache      = body.value("spec_disk_cache", cfg.spec_disk_cache);
             cfg.parallel_seam_share  = std::clamp(body.value("parallel_seam_share", cfg.parallel_seam_share), 0.0f, 0.9f);
+            cfg.auto_budget          = body.value("auto_budget", cfg.auto_budget);
+            cfg.vram_reserve_mb      = body.value("vram_reserve_mb", cfg.vram_reserve_mb);
+            cfg.ram_reserve_mb       = body.value("ram_reserve_mb", cfg.ram_reserve_mb);
 
             const bool async_mode = body.value("async", false);
             std::string err;

@@ -1053,7 +1053,26 @@
           <span class="field-label">GPU-слои (ngl) <output id="valNgl">99</output></span>
           <input type="range" id="inpNgl" min="0" max="99" value="99" oninput="syncSliders()">
         </div>
-        <div class="field">
+        <div class="field" style="gap:6px">
+          <label style="display:flex;align-items:center;gap:7px;cursor:pointer">
+            <input type="checkbox" id="inpAutoBudget" checked onchange="syncSliders()">
+            <span class="field-label" style="margin:0">Занимать память автоматически (сначала VRAM, потом ОЗУ, потом диск)</span>
+          </label>
+          <div id="autoBudgetBox" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="field">
+              <span class="field-label">Оставить системе VRAM <output id="valVramReserve">авто</output></span>
+              <input type="range" id="inpVramReserve" min="-1" max="3072" step="64" value="-1" oninput="syncSliders()"
+                     title="Сколько видеопамяти не отдавать под экспертов (браузер, драйвер, второй монитор). −1 = авто (5% + 256 МБ).">
+            </div>
+            <div class="field">
+              <span class="field-label">Оставить системе ОЗУ <output id="valRamReserve">авто</output></span>
+              <input type="range" id="inpRamReserve" min="-1" max="12288" step="256" value="-1" oninput="syncSliders()"
+                     title="Сколько оперативной памяти не отдавать под экспертов (Windows, браузер, другие программы). −1 = авто (10% + 1 ГБ).">
+            </div>
+          </div>
+          <div class="mono" id="budgetPreview" style="font-size:11px;color:var(--muted,#8a8f98);white-space:pre-line"></div>
+        </div>
+        <div class="field" id="manualBudgetBox" style="display:none">
           <span class="field-label">Банк экспертов в VRAM <output id="valVram">4600 МБ</output></span>
           <input type="range" id="inpVram" min="0" max="7000" step="128" value="4600" oninput="syncSliders()">
         </div>
@@ -1097,6 +1116,8 @@
         <div class="kv-row"><span>VRAM-попадания</span><strong id="telVramHits">0%</strong></div>
         <div class="meter"><i id="telVramBar" style="width:0%"></i></div>
         <div class="kv-row"><span>Банк VRAM</span><strong id="telVramBank">0 МБ</strong></div>
+        <div class="kv-row"><span>Эксперты: VRAM / ОЗУ / диск</span><strong id="telExpertSplit">—</strong></div>
+        <div class="kv-row"><span>Свободный резерв: VRAM / ОЗУ</span><strong id="telReserves">—</strong></div>
         <div class="kv-row"><span>Арена DDR4</span><strong id="telRamArena">0 / 0 МБ</strong></div>
         <div class="kv-row"><span>Обмены RAM ⇄ VRAM</span><strong id="telSwaps">0 / 0</strong></div>
         <div class="kv-row"><span>Чтения HDD</span><strong id="telHdd">0</strong></div>
@@ -1364,6 +1385,7 @@
     document.getElementById('modelPathInput').value = m.path;
     renderModelList();
     evaluatePreLoadRisk();
+    scheduleBudgetPreview();
   }
 
   function renderModelList() {
@@ -1384,6 +1406,7 @@
     state.selectedModel = state.models.find(m => m.path === p) || null;
     renderModelList();
     evaluatePreLoadRisk();
+    scheduleBudgetPreview();
   }
 
   function evaluatePreLoadRisk() {
@@ -1411,6 +1434,14 @@
   function syncSliders() {
     document.getElementById('valNgl').textContent = document.getElementById('inpNgl').value;
     document.getElementById('valVram').textContent = document.getElementById('inpVram').value + ' МБ';
+    const autoB = document.getElementById('inpAutoBudget').checked;
+    document.getElementById('autoBudgetBox').style.display = autoB ? 'grid' : 'none';
+    document.getElementById('manualBudgetBox').style.display = autoB ? 'none' : '';
+    const vr = document.getElementById('inpVramReserve');
+    const rr = document.getElementById('inpRamReserve');
+    document.getElementById('valVramReserve').textContent = vr.value === '-1' ? 'авто' : vr.value + ' МБ';
+    document.getElementById('valRamReserve').textContent  = rr.value === '-1' ? 'авто' : rr.value + ' МБ';
+    if (autoB) scheduleBudgetPreview();
     document.getElementById('valCpuShare').textContent = document.getElementById('inpCpuShare').value + '%';
     document.getElementById('valRam').textContent = document.getElementById('inpRam').value + ' МБ';
     document.getElementById('valThreads').textContent = document.getElementById('inpThreads').value;
@@ -1419,6 +1450,45 @@
     document.getElementById('valSeam').textContent =
       document.getElementById('inpSeam').value === '0' ? 'выкл.' : document.getElementById('inpSeam').value + '%';
     evaluatePreLoadRisk();
+  }
+
+  // ---------------- auto budget preview ----------------
+  // Ask the server what the split would be (VRAM / DDR4 / disk) for the current sliders, before the
+  // model is loaded. Debounced: the user is dragging a slider.
+  let budgetTimer = null, budgetSeq = 0;
+  function scheduleBudgetPreview() {
+    clearTimeout(budgetTimer);
+    budgetTimer = setTimeout(refreshBudgetPreview, 220);
+  }
+  async function refreshBudgetPreview() {
+    const el = document.getElementById('budgetPreview');
+    const path = (document.getElementById('modelPathInput') || {}).value || '';
+    if (!el) return;
+    if (!path) { el.textContent = 'Выберите модель — покажу, сколько экспертов уйдёт в VRAM, ОЗУ и на диск.'; return; }
+    const seq = ++budgetSeq;
+    el.textContent = 'Считаю раскладку…';
+    try {
+      const q = new URLSearchParams({
+        model_path: path.trim(),
+        n_gpu_layers: document.getElementById('inpNgl').value,
+        n_ctx: 16384,
+        vram_reserve_mb: document.getElementById('inpVramReserve').value,
+        ram_reserve_mb: document.getElementById('inpRamReserve').value
+      });
+      const r = await fetch('/api/budget?' + q.toString());
+      const d = await r.json();
+      if (seq !== budgetSeq) return;
+      if (!d.ok) { el.textContent = d.error || 'Не удалось рассчитать'; return; }
+      const p = d.plan;
+      const gb = (mb) => (mb >= 1024 ? (mb / 1024).toFixed(1) + ' ГБ' : mb + ' МБ');
+      el.textContent =
+        `VRAM-банк ${gb(p.vram_bank_mb)} (${p.vram_experts} экспертов) · ОЗУ ${gb(p.ram_arena_mb)} (${p.ram_experts}) · диск ${gb(p.expert_on_disk_mb)}\n` +
+        `Резерв системе: VRAM ${gb(p.vram_reserve_mb)}, ОЗУ ${gb(p.ram_reserve_mb)} · в памяти ${Math.round(p.silicon_pct)}% модели` +
+        (p.zero_hdd ? ' · 0 чтений HDD' : '');
+      el.style.color = p.zero_hdd ? 'var(--ok)' : '';
+    } catch (e) {
+      if (seq === budgetSeq) el.textContent = 'Не удалось связаться с движком';
+    }
   }
 
   // ---------------- load / unload ----------------
@@ -1437,6 +1507,9 @@
       model_path: path,
       n_gpu_layers: parseInt(document.getElementById('inpNgl').value, 10),
       vram_cache_mb: parseInt(document.getElementById('inpVram').value, 10),
+      auto_budget: document.getElementById('inpAutoBudget').checked,
+      vram_reserve_mb: parseInt(document.getElementById('inpVramReserve').value, 10),
+      ram_reserve_mb: parseInt(document.getElementById('inpRamReserve').value, 10),
       cpu_share: parseInt(document.getElementById('inpCpuShare').value, 10) / 100.0,
       ram_cache_mb: parseInt(document.getElementById('inpRam').value, 10),
       n_threads: parseInt(document.getElementById('inpThreads').value, 10) || 8,
@@ -1691,6 +1764,19 @@
     else if (t.model_loaded) { dot.classList.add('on'); txt.textContent = 'модель готова'; }
     else txt.textContent = 'Ожидание модели';
 
+    // Auto budget: how many experts really sit in VRAM / DDR4 / on the disk right now.
+    if (t.model_loaded && (t.expert_total_mb || 0) > 0) {
+      document.getElementById('telExpertSplit').textContent =
+        `${(t.expert_in_vram_mb || 0)} / ${(t.expert_in_ram_mb || 0)} / ${(t.expert_on_disk_mb || 0)} МБ`;
+      document.getElementById('telExpertSplit').style.color =
+        (t.expert_on_disk_mb || 0) === 0 ? 'var(--ok)' : '';
+      document.getElementById('telReserves').textContent =
+        `${t.vram_reserve_mb || 0} / ${t.ram_reserve_mb || 0} МБ` +
+        (t.auto_budget_active ? ' авто' : '');
+    } else {
+      document.getElementById('telExpertSplit').textContent = '—';
+      document.getElementById('telReserves').textContent = '—';
+    }
     document.getElementById('telTps').textContent = (t.decode_tps || 0).toFixed(1) + ' tok/s';
     document.getElementById('telPrefill').textContent = (t.prefill_tps || 0).toFixed(0) + ' tok/s';
     document.getElementById('telTtft').textContent = (t.ttft_ms || 0).toFixed(0) + ' мс';

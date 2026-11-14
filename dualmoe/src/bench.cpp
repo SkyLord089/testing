@@ -1,6 +1,7 @@
 #include "bench.h"
 
 #include "gguf_inspect.h"
+#include "autobudget.h"
 
 #include <algorithm>
 #include <chrono>
@@ -48,35 +49,6 @@ std::string fmt(const char * f, ...) {
     std::vsnprintf(buf, sizeof(buf), f, ap);
     va_end(ap);
     return std::string(buf);
-}
-
-// KV-cache footprint for the GPU-resident part of the model (SWA + shared-KV
-// aware) — mirrors the loader's estimator so the plan is consistent with it.
-uint64_t estimate_kv_mb(const ModelSummary & m, const EngineConfig & cfg, int32_t ngl) {
-    const int32_t total_L  = std::max<int32_t>(1, m.n_layer);
-    const int32_t own_kv_L = std::max<int32_t>(1, total_L - std::max<int32_t>(0, m.n_kv_shared_layers));
-    if (ngl <= 0) return 0;
-    const int32_t first_gpu  = ngl >= total_L ? 0 : std::max<int32_t>(0, total_L - ngl);
-    const int32_t gpu_own_kv = std::max<int32_t>(0, own_kv_L - first_gpu);
-    if (gpu_own_kv <= 0) return 0;
-
-    const uint64_t kv_elem_b = (cfg.kv_type_k == "f16" ? 2ull : 1ull) + (cfg.kv_type_v == "f16" ? 2ull : 1ull);
-    const uint32_t ctx = cfg.n_ctx > 0 ? cfg.n_ctx : 8192;
-
-    uint64_t bytes = 0;
-    if (m.kv_dim_full > 0) {
-        const int32_t swa_L = (m.n_swa > 0)
-            ? std::min<int32_t>(gpu_own_kv, (int32_t) ((int64_t) m.n_swa_layers * gpu_own_kv / own_kv_L))
-            : 0;
-        const int32_t full_L = std::max<int32_t>(0, gpu_own_kv - swa_L);
-        const uint64_t swa_ctx = std::min<uint64_t>(ctx, (uint64_t) m.n_swa + 128ull);
-        bytes += (uint64_t) full_L * ctx * (uint64_t) m.kv_dim_full * kv_elem_b;
-        bytes += (uint64_t) swa_L * swa_ctx * (uint64_t) std::max<int32_t>(1, m.kv_dim_swa) * kv_elem_b;
-    } else {
-        const uint64_t kv_dim_est = std::max<uint64_t>(256, (uint64_t) std::max<int32_t>(512, m.n_embd) / 3);
-        bytes = (uint64_t) gpu_own_kv * ctx * kv_dim_est * kv_elem_b;
-    }
-    return (bytes + (1ull << 20) - 1) >> 20;
 }
 
 // Rough per-layer weight traffic for the benchmark prompt: the projected decode
@@ -190,39 +162,22 @@ BenchRecommendation BenchmarkRunner::plan_config(const BenchOptions & opt, std::
     const uint64_t kv_mb = estimate_kv_mb(m, cfg, ngl);
     rec.predicted_kv_mb = (double) kv_mb;
 
-    // Hot expert bank: whatever VRAM is left after KV + compute headroom.
-    const uint64_t vram_free = mem.vram_free_mb > 0 ? mem.vram_free_mb : 4600;
+    // Existing experts -> VRAM bank (first), then DDR4 (second), then disk. The plan uses the very same
+    // AutoBudget the loader uses, so "what the benchmark promises" == "what the load will do".
+    const uint64_t dense_gpu_mb = (ngl > 0 && m.n_layer > 0)
+        ? (m.dense_bytes >> 20) * (uint64_t) std::min<int32_t>(ngl, m.n_layer) / (uint64_t) m.n_layer : 0;
+    const AutoBudgetPlan budget = plan_auto_budget(m, mem, cfg, ngl, kv_mb, dense_gpu_mb);
     uint64_t bank_mb = 0;
-    if (m.is_moe && ngl > 0) {
-        if (vram_free > kv_mb + kComputeHeadroomMb) {
-            bank_mb = vram_free - kv_mb - kComputeHeadroomMb;
-        }
-        // Never claim more than the model's routed experts actually weigh.
-        const uint64_t expert_mb = m.expert_bytes >> 20;
-        if (expert_mb > 0) bank_mb = std::min<uint64_t>(bank_mb, expert_mb);
-        // Round down to whole expert slots for a clean ClassLRU bank.
-        if (m.cycle_floor_mb > 0) bank_mb = (bank_mb / m.cycle_floor_mb) * m.cycle_floor_mb;
-        if (bank_mb < 256) bank_mb = 0;
+    uint64_t ram_mb  = 0;
+    if (budget.ok) {
+        bank_mb = std::max<uint64_t>(budget.vram_bank_mb, budget.vram_bank_mb ? 1 : 0);
+        ram_mb  = budget.ram_arena_mb;
+        for (const std::string & r : budget.reasons) rec.reasons.push_back("Бюджет: " + r);
     }
     cfg.vram_cache_mb = (size_t) bank_mb;
     rec.predicted_vram_mb = bank_mb + kv_mb + kComputeHeadroomMb;
-    rec.reasons.push_back(bank_mb > 0
-        ? fmt("Горячий банк экспертов в VRAM = %llu МБ (свободно %llu МБ − KV %.0f МБ − резерв %llu МБ)",
-              (unsigned long long) bank_mb, (unsigned long long) vram_free, (double) kv_mb,
-              (unsigned long long) kComputeHeadroomMb)
-        : std::string("VRAM недостаточно под банк экспертов: эксперты пойдут через DDR4 + CPU (KV остаётся на GPU)"));
-
-    // DDR4 arena: keep commit headroom so Windows never swaps to the HDD.
-    const uint64_t mem_avail = mem.commit_avail_mb > 0 ? mem.commit_avail_mb
-                            : (mem.ram_avail_mb > 0 ? mem.ram_avail_mb : 9728);
-    uint64_t ram_mb = (uint64_t) std::max<double>(0.0, (double) mem_avail * 0.80 - 1024.0);
-    // Cap by what actually has to live in RAM: experts + dense weights.
-    const uint64_t need_ram_mb = (m.expert_bytes + m.dense_bytes) >> 20;
-    if (need_ram_mb > 0) ram_mb = std::min<uint64_t>(ram_mb, need_ram_mb);
-    ram_mb = (ram_mb / 128) * 128;
     cfg.ram_cache_mb = (size_t) ram_mb;
     rec.predicted_ram_mb = ram_mb;
-    rec.reasons.push_back(fmt("Арена DDR4 = %llu МБ (80%% свободного commit − 1 ГБ резерва)", (unsigned long long) ram_mb));
 
     // Microbatch: the MoE cache only handles 32 rows, more is wasted work.
     cfg.n_ubatch  = (m.is_moe || cfg.moe_stream) ? 32u : 64u;

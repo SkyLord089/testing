@@ -867,6 +867,15 @@ void VirtualExpertArena::on_experts_promoted_to_vram(int32_t il,
     }
 }
 
+uint64_t VirtualExpertArena::resident_expert_slots() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    uint64_t n = 0;
+    for (const CacheSlotMeta & m : slot_meta_) {
+        if (m.resident) ++n;
+    }
+    return n;
+}
+
 uint64_t VirtualExpertArena::silicon_resident_bytes(uint64_t vram_bytes) const {
     const uint64_t ram = committed_bytes_.load(std::memory_order_relaxed);
     if (disjoint_vram_mode_) {

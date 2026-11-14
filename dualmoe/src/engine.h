@@ -218,6 +218,10 @@ private:
     bool     disjoint_swap_active_  = false;
     bool     auto_balance_active_   = false;
     int32_t  active_gpu_layers_     = 0;
+    uint64_t vram_reserve_mb_ = 0;   // VRAM kept free for the system (auto budget)
+    uint64_t ram_reserve_mb_  = 0;   // DDR4 kept free for the system (auto budget)
+    bool     auto_budget_active_ = false;
+
     std::atomic<float> active_cpu_share_{0.0f};
     std::atomic<float> active_seam_share_{0.0f}; // forced GPU || CPU seam, 0 = off
     float    ema_gpu_hit_ratio_     = 0.75f;

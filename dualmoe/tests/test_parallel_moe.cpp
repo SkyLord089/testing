@@ -2,6 +2,7 @@
 #include "spec.h"
 #include "chat.h"
 #include "bench.h"
+#include "autobudget.h"
 
 #include <chrono>
 #include <thread>
@@ -784,6 +785,105 @@ int main(int argc, char ** argv) {
                   << t.vram_cache_budget_mb << " MiB) — honest zeros when there is nothing to overlap!\n";
     }
 
-    std::cout << "ALL DUALMOE v0.6.1 GATES PASSED!\n";
+    // Gate 11: the auto budget fills VRAM first, then DDR2, and never steals the reserve the user
+    // asked to keep for the system. It must also be honest: whatever does not fit is reported as disk.
+    {
+        std::cout << "\n[Gate 11] Auto budget (VRAM -> DDR4 -> HDD)...\n";
+        dualmoe::GgufLayout lay = dualmoe::inspect_gguf_layout(model_path);
+        if (!lay.summary.ok || !lay.summary.is_moe) {
+            std::cerr << "[FAIL] Gate 11: model is not a readable MoE\n";
+            return 1;
+        }
+        dualmoe::EngineConfig cfg;
+        cfg.model_path  = model_path;
+        cfg.n_ctx       = 512;
+        cfg.kv_type_k   = "q8_0";
+        cfg.kv_type_v   = "f16";
+        cfg.n_gpu_layers = 4;
+
+        dualmoe::SystemMemoryInfo mem;
+        mem.ram_total_mb    = 16384;
+        mem.ram_avail_mb    = 12000;
+        mem.commit_total_mb = 16384;
+        mem.commit_avail_mb = 12000;
+        mem.vram_total_mb   = 8192;
+        mem.vram_free_mb    = 7800;
+        mem.gpu_name        = "Radeon RX 580";
+
+        const int32_t ngl = 4;
+        const uint64_t kv_mb = dualmoe::estimate_kv_mb(lay.summary, cfg, ngl);
+        const uint64_t dense_gpu_mb = (lay.summary.dense_bytes >> 20) * (uint64_t) ngl /
+                                      (uint64_t) std::max<int32_t>(1, lay.summary.n_layer);
+        // Case A: a huge model (bigger than VRAM + RAM) splits VRAM first, then RAM, then disk.
+        {
+            dualmoe::AutoBudgetPlan p = dualmoe::plan_auto_budget(lay.summary, mem, cfg, ngl, kv_mb, dense_gpu_mb);
+            if (!p.ok) {
+                std::cerr << "[FAIL] Gate 11: plan failed: " << p.error << "\n";
+                return 1;
+            }
+            if (p.expert_in_vram_mb == 0 && p.vram_free_mb > kv_mb + dense_gpu_mb + p.vram_reserve_mb) {
+                std::cerr << "[FAIL] Gate 11: VRAM was left unused while experts stayed on disk\n";
+                return 1;
+            }
+            // The bank may only exceed "free − KV − dense − reserve" when the model itself is smaller
+            // than that space (there is nothing left to put in VRAM).
+            const uint64_t avail_mb = p.vram_free_mb > kv_mb + dense_gpu_mb + p.vram_reserve_mb
+                                    ? p.vram_free_mb - kv_mb - dense_gpu_mb - p.vram_reserve_mb : 0;
+            if (p.expert_total_mb > avail_mb + p.per_expert_mb &&
+                p.vram_bank_mb > avail_mb + p.per_expert_mb) {
+                std::cerr << "[FAIL] Gate 11: the VRAM reserve was not honoured (bank=" << p.vram_bank_mb
+                          << " free=" << p.vram_free_mb << " avail=" << avail_mb << ")\n";
+                return 1;
+            }
+            if (p.expert_in_vram_mb + p.expert_in_ram_mb + p.expert_on_disk_mb > p.expert_total_mb + 1) {
+                std::cerr << "[FAIL] Gate 11: residency split exceeds the model size\n";
+                return 1;
+            }
+        }
+        // Case B: a user-mandated large reserve must shrink the bank, even on a huge GPU.
+        {
+            dualmoe::EngineConfig tight = cfg;
+            tight.vram_reserve_mb = 4096;
+            tight.ram_reserve_mb  = 2048;
+            dualmoe::AutoBudgetPlan p = dualmoe::plan_auto_budget(lay.summary, mem, tight, ngl, kv_mb, dense_gpu_mb);
+            if (p.vram_reserve_mb != 4096 || p.ram_reserve_mb != 2048) {
+                std::cerr << "[FAIL] Gate 11: explicit reserves were not used\n";
+                return 1;
+            }
+            if (p.vram_bank_mb + kv_mb + dense_gpu_mb + p.vram_reserve_mb > p.vram_free_mb + p.per_expert_mb) {
+                std::cerr << "[FAIL] Gate 11: reserve exceeded available VRAM\n";
+                return 1;
+            }
+        }
+        // Case C: automatic reserves scale with the machine instead of being a magic constant.
+        {
+            if (dualmoe::resolve_ram_reserve_mb(16384, -1) <= dualmoe::resolve_ram_reserve_mb(8192, -1) ||
+                dualmoe::resolve_vram_reserve_mb(8192, -1) <= dualmoe::resolve_vram_reserve_mb(4096, -1)) {
+                std::cerr << "[FAIL] Gate 11: automatic reserve does not scale with the machine\n";
+                return 1;
+            }
+            if (dualmoe::resolve_ram_reserve_mb(16384, 0) != 0 || dualmoe::resolve_vram_reserve_mb(8192, 0) != 0) {
+                std::cerr << "[FAIL] Gate 11: reserve 0 must mean 'use everything'\n";
+                return 1;
+            }
+        }
+        // Case D: with a model that fits, the whole expert set is in silicon (zero HDD).
+        {
+            dualmoe::SystemMemoryInfo big = mem;
+            big.vram_total_mb = 65536; big.vram_free_mb = 65536;
+            big.commit_total_mb = 262144; big.commit_avail_mb = 262144;
+            big.ram_total_mb = 262144; big.ram_avail_mb = 262144;
+            dualmoe::AutoBudgetPlan p = dualmoe::plan_auto_budget(lay.summary, big, cfg, ngl, kv_mb, dense_gpu_mb);
+            if (!p.zero_hdd || p.expert_on_disk_mb != 0) {
+                std::cerr << "[FAIL] Gate 11: a model that fits was still sent to disk (disk="
+                          << p.expert_on_disk_mb << " MB)\n";
+                return 1;
+            }
+        }
+        std::cout << "[PASS] Gate 11: VRAM is filled first, DDR4 next, disk last; reserves are honoured "
+                     "and a fully-fitting model ends up 100% in memory!\n";
+    }
+
+    std::cout << "ALL DUALMOE v0.6.2 GATES PASSED!\n";
     return 0;
 }

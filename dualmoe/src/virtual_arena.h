@@ -141,6 +141,24 @@ public:
     uint64_t vram_to_ram_swaps() const { return vram_to_ram_swaps_.load(std::memory_order_relaxed); }
     uint64_t commit_failures() const { return commit_failures_.load(std::memory_order_relaxed); }
     uint64_t total_expert_bytes() const { return total_expert_bytes_; }
+    // Experts of each layer (bytes per expert is uniform within a layer, not across layers).
+    uint64_t layer_bytes_per_expert(int32_t il) const {
+        if (il < 0 || (size_t) il >= layers_.size()) return 0;
+        return layers_[(size_t) il].bytes_per_expert;
+    }
+    // How many (layer, expert) slots count as one expert of the whole model, and how many of them are
+    // resident in DDR4 right now. Used for the residency report ("how much of the model is in RAM").
+    uint64_t total_expert_slots() const { return (uint64_t) layers_.size() * (uint64_t) n_expert_; }
+    uint64_t resident_expert_slots() const;
+    // Tightest per-layer bytes-per-expert, i.e. the smallest indivisible step of the two budgets.
+    uint64_t min_bytes_per_expert() const {
+        uint64_t best = 0;
+        for (const StreamedLayer & L : layers_) {
+            if (L.projs.empty() || L.bytes_per_expert == 0) continue;
+            if (best == 0 || L.bytes_per_expert < best) best = L.bytes_per_expert;
+        }
+        return best;
+    }
     uint64_t silicon_resident_bytes(uint64_t vram_bytes) const;
     double   ssd_bandwidth_mbs() const;
     double   preload_bandwidth_mbs() const { return preload_mbs_.load(std::memory_order_relaxed); }

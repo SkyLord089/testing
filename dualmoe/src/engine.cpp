@@ -1,5 +1,7 @@
 #include "engine.h"
 
+#include "autobudget.h"
+
 #include "chat.h"
 #include "common.h"
 #include "ggml-backend.h"
@@ -953,20 +955,23 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
     const uint64_t safe_phys_ram_mb = pre_mem.ram_avail_mb > 1600
         ? (pre_mem.ram_avail_mb - 1600)
         : (pre_mem.ram_avail_mb * 2 / 3);
-    if (stream_moe) {
+
+    // -------------------------------------------------------------------------
+    // AUTO BUDGET: fill VRAM first, then DDR4, and let the HDD keep only the leftovers.
+    //
+    // The user picks how much VRAM and how much DDR4 the system may keep for itself
+    // (vram_reserve_mb / ram_reserve_mb, -1 = automatic). Everything else goes to experts:
+    //   VRAM bank -> CPU arena -> disk.
+    // This replaces the old "trust the slider" behaviour, which left hundreds of MiB
+    // unclaimed on one machine and overflowed on the next.
+    // -------------------------------------------------------------------------
+    AutoBudgetPlan budget;
+    bool auto_budget = cfg.auto_budget && lay.summary.is_moe;
+    if (stream_moe && !auto_budget) {
+        // Manual mode: keep the historical clamps so a user who typed a number still gets it,
+        // but never above what the OS would have to page out.
         const uint64_t expert_total_mb = (lay.summary.expert_bytes >> 20) + 64;
         if (cfg.zero_hdd_mode && safe_phys_ram_mb > 0) {
-            // Auto-expand RAM budget if user had a low slider value while free physical RAM can hold the experts
-            if (cfg.ram_cache_mb < expert_total_mb && safe_phys_ram_mb > cfg.ram_cache_mb) {
-                cfg.ram_cache_mb = (size_t) std::min<uint64_t>(expert_total_mb, safe_phys_ram_mb);
-            }
-            if (cfg.ram_cache_mb > safe_phys_ram_mb && safe_phys_ram_mb >= 512) {
-                add_warning("Для исключения подкачки Windows на медленный HDD (pagefile.sys) буфер экспертов в ОЗУ ограничен безопасным объёмом физической DDR4: " +
-                            std::to_string(safe_phys_ram_mb) + " МБ (остальная часть пойдёт в VRAM RX 580).");
-                cfg.ram_cache_mb = (size_t) safe_phys_ram_mb;
-            }
-        }
-        if (pre_mem.commit_avail_mb > 0) {
             const uint64_t safety_commit_reserve_mb = 2048;
             if (pre_mem.commit_avail_mb <= safety_commit_reserve_mb + 384) {
                 if (cfg.ram_cache_mb > 384) {
@@ -991,6 +996,36 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
     int32_t effective_ngl = has_gpu_device ? std::max<int32_t>(0, cfg.n_gpu_layers) : 0;
     if (!has_gpu_device && cfg.n_gpu_layers > 0) {
         add_warning("Дискретный GPU Vulkan не обнаружен — активирован безопасный режим CPU + SSD (NGL = 0).");
+    }
+
+    // The auto budget needs the KV / dense footprints of the layers that go to the GPU. Those are
+    // computed exactly a few lines below (SWA + shared-KV aware); this quick pass is only used to size
+    // the expert bank, so the same estimator as the benchmark plan is used here for consistency.
+    uint64_t planned_bank_mb = 0;
+    uint64_t planned_ram_mb  = 0;
+    int32_t  last_planned_ngl = -1;
+    if (auto_budget) {
+        const uint64_t kv_est_mb = lay.summary.is_moe ? estimate_kv_mb(lay.summary, cfg, effective_ngl) : 0;
+        const uint64_t dense_gpu_mb = (effective_ngl > 0 && lay.summary.n_layer > 0)
+            ? (lay.summary.dense_bytes >> 20) * (uint64_t) std::min<int32_t>(effective_ngl, lay.summary.n_layer) / (uint64_t) lay.summary.n_layer
+            : 0;
+        budget = plan_auto_budget(lay.summary, pre_mem, cfg, effective_ngl, kv_est_mb, dense_gpu_mb);
+        if (!budget.ok) {
+            add_warning("Авто-бюджет не рассчитан (" + budget.error + ") — используются значения из настроек.");
+        } else {
+            last_planned_ngl  = effective_ngl;
+            planned_bank_mb   = budget.vram_bank_mb;
+            planned_ram_mb    = budget.ram_arena_mb;
+            cfg.vram_cache_mb = (size_t) std::max<uint64_t>(1, planned_bank_mb ? planned_bank_mb : 1);
+            // A 0 MiB arena would fall back to the 2 GiB default inside VirtualExpertArena and silently
+            // ignore the reserve the user picked, so keep at least one expert slot.
+            cfg.ram_cache_mb  = (size_t) std::max<uint64_t>(planned_ram_mb, std::max<uint64_t>(1, budget.per_expert_mb));
+            if (planned_ram_mb == 0) {
+                add_warning("Авто-бюджет: в ОЗУ после резерва места нет — эксперты будут читаться с диска "
+                            "(уменьшите «Оставить системе ОЗУ», чтобы забрать их в память).");
+            }
+            for (const std::string & r : budget.reasons) add_warning("Авто-бюджет: " + r);
+        }
     }
 
     // Pre-estimate dense VRAM footprint if GPU is present so we don't ask RX 580 for impossible dense allocations
@@ -1128,6 +1163,24 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
 
     vocab_ = llama_model_get_vocab(model_);
     const int32_t n_layer = llama_model_n_layer(model_);
+    // An OOM retry may have moved the model to FEWER GPU layers than the budget was computed for.
+    // Re-plan against the layers that really got offloaded, so the bank neither asks for VRAM the retry
+    // just freed nor leaves the newly free VRAM unused.
+    if (auto_budget && last_planned_ngl >= 0 && last_planned_ngl != effective_ngl) {
+        const uint64_t kv_est_mb = estimate_kv_mb(lay.summary, cfg, effective_ngl);
+        const uint64_t dense_gpu_mb = (effective_ngl > 0 && lay.summary.n_layer > 0)
+            ? (lay.summary.dense_bytes >> 20) * (uint64_t) std::min<int32_t>(effective_ngl, lay.summary.n_layer) / (uint64_t) lay.summary.n_layer
+            : 0;
+        const SystemMemoryInfo now_mem = query_system_memory();
+        budget = plan_auto_budget(lay.summary, now_mem, cfg, effective_ngl, kv_est_mb, dense_gpu_mb);
+        if (budget.ok) {
+            cfg.vram_cache_mb = (size_t) std::max<uint64_t>(1, budget.vram_bank_mb ? budget.vram_bank_mb : 1);
+            cfg.ram_cache_mb  = (size_t) std::max<uint64_t>(budget.ram_arena_mb, std::max<uint64_t>(1, budget.per_expert_mb));
+            add_warning("Авто-бюджет пересчитан под реально размещённые GPU-слои (" +
+                        std::to_string(effective_ngl) + "): банк VRAM " +
+                        std::to_string(budget.vram_bank_mb) + " МБ.");
+        }
+    }
     SystemMemoryInfo post_weight_mem = query_system_memory();
     {
         std::lock_guard<std::mutex> slk(state_mu_);
@@ -1620,6 +1673,12 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
         ema_gpu_hit_ratio_    = 0.75f;
         balance_events_       = 0;
         active_ubatch_        = cparams.n_ubatch;
+        vram_reserve_mb_      = budget.ok ? budget.vram_reserve_mb
+                                          : resolve_vram_reserve_mb(pre_mem.vram_total_mb,
+                                                                    (int64_t) cfg.vram_reserve_mb);
+        ram_reserve_mb_       = budget.ok ? budget.ram_reserve_mb
+                                          : resolve_ram_reserve_mb(pre_mem.ram_total_mb, (int64_t) cfg.ram_reserve_mb);
+        auto_budget_active_   = auto_budget;
 
         if (full_silicon_resident && parallel_gpu_cpu_) {
             status_text_ = std::string("Готов • Без HDD (100% в VRAM") +
@@ -2947,13 +3006,34 @@ TelemetrySnapshot DualMoeEngine::telemetry() const {
     t.dense_anon_mb         = anon_b > 0 ? ((anon_b + (1ull << 20) - 1) >> 20) : 0;
     t.mmap_released         = arena_.mmap_released();
 
-    if (t.model_loaded) {
-        if (is_moe_model && arena_.total_expert_bytes() > 0) {
-            const uint64_t sil_b = arena_.silicon_resident_bytes(prewarm_vram_b);
-            t.silicon_residency_pct = std::min(100.0, 100.0 * (double) sil_b / (double) arena_.total_expert_bytes());
-        } else {
-            t.silicon_residency_pct = t.zero_hdd_active ? 100.0 : 50.0;
+    // Auto budget: what the planner decided, then what is REALLY resident (measured on the arena).
+    {
+        std::lock_guard<std::mutex> slk(state_mu_);
+        t.vram_reserve_mb   = vram_reserve_mb_;
+        t.ram_reserve_mb    = ram_reserve_mb_;
+        t.auto_budget_active = auto_budget_active_;
+        t.expert_total_mb   = layout_.summary.expert_bytes >> 20;
+    }
+    if (is_moe_model && arena_.total_expert_bytes() > 0) {
+        const uint64_t total_b = arena_.total_expert_bytes();
+        const uint64_t vram_b  = std::min<uint64_t>(prewarm_vram_b, total_b);
+        uint64_t ram_b = arena_.committed_bytes();
+        if (t.disjoint_swap_active) ram_b = std::min<uint64_t>(ram_b, total_b > vram_b ? total_b - vram_b : 0);
+        const uint64_t disk_b = total_b > vram_b + ram_b ? total_b - vram_b - ram_b : 0;
+        t.expert_in_vram_mb = vram_b >> 20;
+        t.expert_in_ram_mb  = ram_b >> 20;
+        t.expert_on_disk_mb = disk_b >> 20;
+        t.expert_slots      = arena_.total_expert_slots();
+        const uint64_t per_exp = arena_.min_bytes_per_expert();
+        if (per_exp > 0) {
+            t.expert_slots_vram = t.expert_in_vram_mb / std::max<uint64_t>(1, (per_exp + (1ull << 20) - 1) >> 20);
         }
+        t.expert_slots_ram = arena_.resident_expert_slots();
+        const uint64_t sil_b = arena_.silicon_resident_bytes(prewarm_vram_b);
+        t.silicon_residency_pct = std::min(100.0, 100.0 * (double) sil_b / (double) total_b);
+        t.zero_hdd_active = disk_b <= (4ull << 20);
+    } else if (t.model_loaded) {
+        t.silicon_residency_pct = t.zero_hdd_active ? 100.0 : 50.0;
     }
     return t;
 }

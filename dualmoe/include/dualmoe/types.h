@@ -26,6 +26,13 @@ struct EngineConfig {
     // GPU + CPU parallel hybrid & Zero-HDD VRAM <-> RAM engine controls
     int32_t  n_gpu_layers         = 99;     // Safe for 2..99: cold experts auto-routed to RAM arena
     size_t   vram_cache_mb        = 4600;   // Hot expert ClassLRU bank in GPU VRAM (MiB) — auto-clamped to ~90% free VRAM
+    // Auto budget: fill VRAM and DDR4 with experts up to these reserves instead of trusting a fixed
+    // number. VRAM is filled first (fastest), then DDR4, then the HDD gets only the leftovers.
+    //   -1 = compute the reserve automatically (5%+256 MiB VRAM, 10%+1 GiB RAM), 0 = use everything.
+    int64_t  vram_reserve_mb      = -1;     // how much VRAM to keep free for the OS / browser / driver
+    int64_t  ram_reserve_mb       = -1;     // how much DDR4 to keep free for the system
+    bool     auto_budget          = true;   // derive vram_cache_mb / ram_cache_mb from free memory
+                                            // (false = use the numbers above verbatim)
     float    cpu_share            = 0.85f;  // Initial fraction of VRAM misses computed in parallel on CPU (0..1)
     // Forced GPU || CPU seam: hand this share of every layer's experts to the CPU even when the VRAM bank
     // still has free slots, so both engines compute the SAME token at the same time. 0 = off (the CPU only
@@ -237,6 +244,18 @@ struct TelemetrySnapshot {
     uint64_t    gpu_vram_total_mb       = 0;
     uint64_t    arena_commit_failures   = 0;
     double      silicon_residency_pct   = 0.0; // % of model held in VRAM + DDR4 RAM (100% = Zero HDD!)
+
+    // Auto budget: what the planner decided and what is really resident now (the app's own numbers).
+    uint64_t    vram_reserve_mb         = 0;
+    uint64_t    ram_reserve_mb          = 0;
+    uint64_t    expert_total_mb         = 0;  // all routed experts of the model
+    uint64_t    expert_in_vram_mb       = 0;  // experts sitting in the VRAM bank right now
+    uint64_t    expert_in_ram_mb        = 0;  // experts committed in the DDR4 arena right now
+    uint64_t    expert_on_disk_mb       = 0;  // experts that still have to come from the HDD
+    uint64_t    expert_slots            = 0;  // total (layer, expert) slots
+    uint64_t    expert_slots_vram       = 0;
+    uint64_t    expert_slots_ram        = 0;
+    bool        auto_budget_active      = false;
 
     bool        mmap_released           = false;
     bool        auto_split_active       = false;
