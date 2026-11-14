@@ -487,6 +487,101 @@ int main(int argc, char ** argv) {
                   << best.decode_tps << " tok/s, " << best.hdd_reads << " HDD reads)!\n";
     }
 
-    std::cout << "ALL DUALMOE v0.5.1 GATES PASSED!\n";
+    // Gate 8: a cancel raised while nothing is running must never poison the next load/graph.
+    // This is the "Пробный прогон захвата графа вернул код 2" / "failed to decode, ret = 2" bug:
+    // ggml checks the abort callback after every node, so a stale flag aborted the *next* graph —
+    // including the 1-token graph-capture probe, which then left the expert arena unbound.
+    {
+        auto arena_steps = [](dualmoe::DualMoeEngine & eng, std::string & s5, std::string & s6) {
+            const auto d = eng.diagnostics();
+            s5 = "<нет>";
+            s6 = "<нет>";
+            for (const auto & st : d.steps) {
+                if (st.index == 5) s5 = st.state;
+                if (st.index == 6) s6 = st.state;
+            }
+        };
+        auto fresh_cfg = [&]() {
+            dualmoe::EngineConfig c;
+            c.model_path   = model_path;
+            c.n_gpu_layers = 0;
+            c.n_ctx        = 512;
+            c.n_threads    = 2;
+            c.auto_balance_compute = false;
+            return c;
+        };
+
+        // Case A: cancel then load IMMEDIATELY (the flag is still "fresh" when the probe graph starts).
+        // Only a probe that owns its own cancel state can survive this.
+        {
+            dualmoe::DualMoeEngine eng;
+            eng.request_cancel();
+            std::string lerr;
+            if (!eng.load_model(fresh_cfg(), lerr)) {
+                std::cerr << "[FAIL] Gate 8: load right after a cancel failed: " << lerr << "\n";
+                return 1;
+            }
+            std::string s5, s6;
+            arena_steps(eng, s5, s6);
+            if (s5 != "done" || s6 != "done") {
+                std::cerr << "[FAIL] Gate 8: a fresh cancel poisoned the capture probe — expert arena "
+                             "not bound (step5='" << s5 << "', step6='" << s6 << "'). "
+                             "This is the ret=2 / GGML_STATUS_ABORTED load failure.\n";
+                return 1;
+            }
+            std::string reply, gerr;
+            if (!eng.generate_raw("Привет", 8, 0.0f, 1u, nullptr, reply, gerr) || reply.empty()) {
+                std::cerr << "[FAIL] Gate 8: generation right after a cancel failed: " << gerr << "\n";
+                return 1;
+            }
+            eng.unload_model();
+        }
+
+        // Case B: cancel, wait, then load — the flag must be disarmed by the abort callback itself.
+        {
+            dualmoe::DualMoeEngine eng;
+            eng.request_cancel();
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::string lerr;
+            if (!eng.load_model(fresh_cfg(), lerr)) {
+                std::cerr << "[FAIL] Gate 8: load after a delayed cancel failed: " << lerr << "\n";
+                return 1;
+            }
+            std::string s5, s6;
+            arena_steps(eng, s5, s6);
+            if (s5 != "done" || s6 != "done") {
+                std::cerr << "[FAIL] Gate 8: a stale cancel still poisoned the probe "
+                             "(step5='" << s5 << "', step6='" << s6 << "')\n";
+                return 1;
+            }
+
+            // Case C: a cancel raised DURING generation must still stop it ("Стоп" keeps working).
+            int32_t pieces = 0;
+            std::string r2, gerr2;
+            const bool ok2 = eng.generate_raw("Привет", 512, 0.0f, 1u,
+                [&](const std::string &) -> bool {
+                    if (++pieces >= 3) eng.request_cancel();
+                    return true;
+                }, r2, gerr2);
+            if (ok2 && r2.size() > 400) {
+                std::cerr << "[FAIL] Gate 8: cancel during generation was ignored ("
+                          << pieces << " pieces)\n";
+                return 1;
+            }
+
+            // Case D: the engine must stay usable after the interrupted turn.
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::string r3, gerr3;
+            if (!eng.generate_raw("Привет", 8, 0.0f, 1u, nullptr, r3, gerr3) || r3.empty()) {
+                std::cerr << "[FAIL] Gate 8: engine unusable after a cancelled turn: " << gerr3 << "\n";
+                return 1;
+            }
+            eng.unload_model();
+        }
+        std::cout << "[PASS] Gate 8: fresh & stale cancels are disarmed (graph capture survives, "
+                     "no GGML_STATUS_ABORTED ret=2) while 'Стоп' still stops generation!\n";
+    }
+
+    std::cout << "ALL DUALMOE v0.5.2 GATES PASSED!\n";
     return 0;
 }

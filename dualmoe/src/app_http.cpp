@@ -398,10 +398,10 @@ int parse_app_options(int argc, char ** argv, AppOptions & opt, bool desktop_def
         else if (arg == "--thinking") opt.boot_cfg.enable_thinking = true;
         else if (arg == "--no-thinking") opt.boot_cfg.enable_thinking = false;
         else if (arg == "--version") {
-            std::cout << "DualMoE v0.5.1\n";
+            std::cout << "DualMoE v0.5.2\n";
             return 1;
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "DualMoE v0.5.1 — нативное приложение (окно Windows, без браузера)\n"
+            std::cout << "DualMoE v0.5.2 — нативное приложение (окно Windows, без браузера)\n"
                       << "  --model <file.gguf>       Auto-load GGUF model at startup\n"
                       << "  --models-dir <folder>     Default folder for GGUF UI scanner\n"
                       << "  --host <addr>             Bind address (desktop default 127.0.0.1)\n"
@@ -477,7 +477,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
         const auto cfg = engine.current_config();
         json out = {
             {"ok", true},
-            {"version", "0.5.1"},
+            {"version", "0.5.2"},
             {"default_scan_dir", opt.scan_dir},
             {"roots", list_roots_utf8()},
             {"devices", devs},
@@ -539,7 +539,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             {"ok", true},
             {"mode", opt.desktop_window ? "desktop" : "console"},
             {"native_dialogs", dualmoe::native_file_dialog_available()},
-            {"version", "0.5.1"},
+            {"version", "0.5.2"},
             {"port", bound_port.load(std::memory_order_acquire)},
             {"openai_base_url", openai_base_url_for_json()},
             {"scan_dir", opt.scan_dir},

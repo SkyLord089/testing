@@ -112,7 +112,16 @@ void set_no_mmap_prefetch_env(bool disable_prefetch) {
 #endif
 }
 
+// Set right before a probe graph so a stale cancel flag can never abort the load itself.
+bool g_probe_cancel_clean = false;
+
 void ggml_abort_forensics_cb(const char * error_message) {
+    // ggml_abort() is also how the scheduler reports an aborted graph: when the abort came from our own
+    // cancel callback (GGML_STATUS_ABORTED, "Стоп"/cancelled benchmark), this is not a crash and must
+    // not be written to the crash report — otherwise the next start offers a bogus "crash" banner.
+    if (g_probe_cancel_clean) {
+        return;
+    }
 #if defined(_WIN32)
     FILE * fp = _wfopen(g_crash_wpath_buf, L"wb");
 #else
@@ -243,6 +252,11 @@ void global_llama_log_cb(enum ggml_log_level level, const char * text, void *) {
     if (std::getenv("DUALMOE_VERBOSE") || level == GGML_LOG_LEVEL_ERROR) {
         std::fputs(text, stderr);
     }
+}
+
+uint64_t now_ms() {
+    return (uint64_t) std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 std::string trim_line(std::string s) {
@@ -669,6 +683,11 @@ void DualMoeEngine::set_thinking_enabled(bool enabled) {
 
 void DualMoeEngine::request_cancel() {
     cancel_flag_.store(true, std::memory_order_release);
+    // The flag must not outlive the turn: ggml only checks the abort callback between graph nodes,
+    // so a flag raised by "Стоп", by a cancelled benchmark or by an unload of the previous model can
+    // still be set when the NEXT graph runs — that graph then dies with GGML_STATUS_ABORTED
+    // (`llama_decode: failed to decode, ret = 2`) even though nobody cancelled it.
+    abort_disarm_at_.store((uint64_t) now_ms(), std::memory_order_release);
 }
 
 bool DualMoeEngine::apply_live_config(const EngineConfig & cfg, std::string & err) {
@@ -1147,6 +1166,7 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
     // -------------------------------------------------------------------------
     // STEP 4, 5, 6: Stage-1 Graph Capture, VirtualExpertArena, Safe MMap Guard
     // -------------------------------------------------------------------------
+    bool capture_failed = false;
     if (stream_moe) {
         begin_step(4, "Пробный 1-токен прогон (ctx=64, batch=8) для точного обнаружения тензоров экспертов...");
         llama_context_params cap_cp = make_base_cparams(64);
@@ -1177,14 +1197,33 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
         llama_token warm_tok = llama_vocab_bos(vocab_);
         if (warm_tok < 0) warm_tok = 0;
         llama_batch warm = llama_batch_get_one(&warm_tok, 1);
+        // The probe runs with a fresh, private abort callback: a stale cancel from a previous turn or
+        // from a cancelled benchmark must never abort the graph capture of a new model.
+        cancel_flag_.store(false, std::memory_order_release);
+        abort_disarm_at_.store(0, std::memory_order_release);
+        g_probe_cancel_clean = true;
         const int rc = llama_decode(cap_ctx, warm);
+        g_probe_cancel_clean = false;
         capture_mode_ = false;
         llama_free(cap_ctx);
 
         if (rc != 0) {
-            llama_model_free(model_);
-            model_ = nullptr;
-            return fail_at(4, "Пробный прогон захвата графа вернул код " + std::to_string(rc));
+            // 2 / 1 = GGML_STATUS_ABORTED (a cancel raced the probe), -2 / -3 = allocation failure.
+            // Either way this only disables the *streaming* of MoE experts; the model itself is fine,
+            // so continue in a degraded but working mode instead of refusing to load.
+            std::string why = (rc == 2 || rc == 1)
+                ? "прогон был прерван (отмена пришла во время загрузки)"
+                : "не хватило памяти под пробный граф";
+            add_warning("Этап 1 (захват графа экспертов) пропущен: " + why + " (код " +
+                        std::to_string(rc) + "). Модель загружается без стриминга экспертов — "
+                        "попробуйте закрыть фон и повторить загрузку для полного режима.");
+            begin_step(4, "Захват графа экспертов пропущен — модель загрузится без стриминга");
+            finish_step(4, "warn", "Пробный прогон не удался (код " + std::to_string(rc) +
+                                   "), стриминг экспертов отключён");
+            // Without a captured graph the arena has no tensors to bind: fall through to the
+            // standard (non-streaming) path instead of aborting the load.
+            capture_failed = true;
+            cfg.moe_stream = false;
         }
 
         size_t total_captured_exps = 0;
@@ -1192,7 +1231,8 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
         finish_step(4, "done", "Обнаружено " + std::to_string(total_captured_exps) +
                                " 3D-проекций экспертов и " + std::to_string(captured_weights_.size()) + " весовых листьев");
 
-        // STEP 5: VirtualExpertArena
+        // STEP 5: VirtualExpertArena (skipped when the capture probe could not identify the experts)
+        if (!capture_failed) {
         const bool seq_hdd_mode = cfg.zero_hdd_mode || cfg.io_lanes <= 1;
         begin_step(5, "Инициализация арены VRAM ⇄ DDR4 (бюджет RAM " + std::to_string(cfg.ram_cache_mb) +
                       " МБ, режим " + std::string(seq_hdd_mode ? "линейный HDD без рывков" : "многопоточный SSD") + ")...");
@@ -1273,6 +1313,10 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
         }
 
         install_cpu_expert_hook(&VirtualExpertArena::c_expert_ready_hook, &arena_);
+        } else {
+            finish_step(5, "warn", "Виртуальная арена MoE пропущена: экспертные тензоры не обнаружены");
+            finish_step(6, "warn", "Плотные веса остаются на стандартном отображении памяти");
+        }
     } else {
         finish_step(4, "done", "Модель плотная — захват 3D-экспертов не требуется");
         finish_step(5, "done", "Виртуальная арена MoE пропущена (режим стандартных весов)");
@@ -1869,7 +1913,20 @@ void DualMoeEngine::c_moe_promoted_cb(int32_t il, const int32_t * promoted_exper
 
 bool DualMoeEngine::c_abort_callback(void * user_data) {
     if (!user_data) return false;
-    return static_cast<DualMoeEngine *>(user_data)->cancel_flag_.load(std::memory_order_acquire);
+    auto * eng = static_cast<DualMoeEngine *>(user_data);
+
+    // A cancel that was raised while no graph was running is stale: disarm it on the first check of
+    // the next graph instead of aborting it.
+    const uint64_t disarm_at = eng->abort_disarm_at_.load(std::memory_order_acquire);
+    if (disarm_at != 0 && !eng->generating_.load(std::memory_order_acquire)) {
+        const bool fresh = (uint64_t) now_ms() - disarm_at < 400;
+        if (!fresh) {
+            eng->cancel_flag_.store(false, std::memory_order_release);
+            eng->abort_disarm_at_.store(0, std::memory_order_release);
+            return false;
+        }
+    }
+    return eng->cancel_flag_.load(std::memory_order_acquire);
 }
 
 void DualMoeEngine::on_moe_cache_event(const struct llama_moe_cache_event * ev) {

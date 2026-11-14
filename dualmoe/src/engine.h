@@ -166,6 +166,7 @@ private:
     std::atomic<bool>     loading_{false};
     std::atomic<bool>     generating_{false};
     std::atomic<bool>     cancel_flag_{false};
+    std::atomic<uint64_t> abort_disarm_at_{0}; // steady-clock ms of the last cancel raised outside a graph
     std::atomic<int32_t>  load_progress_pct_{0};
     std::atomic<int32_t>  load_phase_index_{0};
 
