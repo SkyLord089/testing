@@ -429,6 +429,11 @@ int main(int argc, char ** argv) {
                       << " kv_v=" << pcfg.kv_type_v << ")\n";
             return 1;
         }
+        if (pcfg.static_bank_share <= 0.0f || pcfg.static_bank_share > 0.8f || !pcfg.warm_state) {
+            std::cerr << "[FAIL] Gate 7: Plan must enable the static expert class and warm state (share="
+                      << pcfg.static_bank_share << ")\n";
+            return 1;
+        }
         if (snap.recommendation.reasons.empty()) {
             std::cerr << "[FAIL] Gate 7: Plan produced no rationale\n";
             return 1;
@@ -482,6 +487,6 @@ int main(int argc, char ** argv) {
                   << best.decode_tps << " tok/s, " << best.hdd_reads << " HDD reads)!\n";
     }
 
-    std::cout << "ALL DUALMOE v0.5.0 GATES PASSED!\n";
+    std::cout << "ALL DUALMOE v0.5.1 GATES PASSED!\n";
     return 0;
 }

@@ -27,13 +27,15 @@ enum class BenchMode { Plan, Full };
 struct BenchOptions {
     std::string model_path;              // empty -> currently loaded model
     BenchMode   mode              = BenchMode::Full;
-    int32_t     tokens            = 96;  // generated tokens per candidate
+    int32_t     tokens            = 64;  // generated tokens per candidate (48-64 is enough to rank)
     std::string prompt;                  // empty -> built-in benchmark prompt
     bool        sweep_threads     = true;
     bool        sweep_cpu_share   = true;
     bool        sweep_vram_bank   = true;
     bool        sweep_ubatch      = true;
-    int32_t     max_candidates    = 16;  // hard cap: every candidate = one model reload
+    int32_t     max_candidates    = 8;   // hard cap: every VRAM-bank point = one model reload
+    bool        fast              = true; // measure the cheap knobs in place (no reload) instead of a grid
+    int32_t     warmup_tokens     = 8;   // discarded tokens so the first candidate runs at steady state
     uint32_t    seed              = 424242u;
 };
 
@@ -44,6 +46,7 @@ struct BenchCandidate {
     EngineConfig cfg;
     bool        ok           = false;
     bool        measured     = false;   // false in Plan mode (estimate only)
+    bool        in_place     = false;   // tuned without a model reload (cheap knobs)
     std::string error;
     double      prefill_tps  = 0.0;
     double      decode_tps   = 0.0;
@@ -108,6 +111,9 @@ private:
     BenchRecommendation plan_config(const BenchOptions & opt, std::string & err) const;
     bool   measure_candidate(BenchCandidate & cand, const BenchOptions & opt,
                              const std::string & prompt, std::string & err);
+    bool   measure_loaded(BenchCandidate & cand, const BenchOptions & opt,
+                          const std::string & prompt, std::string & err);
+    bool   apply_live_knobs(const EngineConfig & cfg);
 
     void set_stage(const std::string & stage, const std::string & message, int32_t pct);
     void push_log(const std::string & line);

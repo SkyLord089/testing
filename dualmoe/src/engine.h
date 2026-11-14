@@ -50,6 +50,10 @@ public:
 
     void request_cancel();
 
+    // Re-tune the knobs that do not need a reload (CPU threads, CPU ∥ GPU share, class split) on the
+    // already loaded context. Used by the benchmark: 1 reload per VRAM-bank point instead of per knob.
+    bool apply_live_config(const EngineConfig & cfg, std::string & err);
+
     // Thread-safe chat generation (OpenAI / LearnHarness / Hermes Studio UI)
     bool generate_chat(const std::vector<ChatMessage> & messages,
                        const SamplingParams & sampling_override,
@@ -95,6 +99,14 @@ private:
     bool on_eval_node(struct ggml_tensor * t, bool ask);
     void on_moe_cache_event(const struct llama_moe_cache_event * ev);
 
+    // Warm expert state: the hot expert set of the previous run of this exact model, so the
+    // first request after a start does not learn the routing from scratch.
+    std::string warm_state_path(const std::string & model_path) const;
+    void        load_warm_state(const EngineConfig & cfg);
+    void        save_warm_state();
+    void        schedule_warm_state_save();
+    void        apply_static_class();
+
     std::string format_chat_prompt(const std::vector<ChatMessage> & messages) const;
     bool run_tokens(const std::vector<llama_token> & tokens,
                     const SamplingParams & sp,
@@ -129,6 +141,17 @@ private:
     std::vector<std::vector<ggml_tensor *>> captured_layer_experts_;
     std::vector<bool> layer_on_gpu_cache_;
     std::vector<std::vector<int32_t>> prev_route_;
+
+    // Hot expert class bookkeeping ({"static" subset pinned in the VRAM bank} + route of the last
+    // prompt, used to prefetch the experts a repeated prefix will hit again).
+    std::vector<std::vector<int32_t>> static_experts_;      // per layer, the pinned experts
+    std::vector<std::vector<int32_t>> prompt_route_;        // per layer, route of the last full prompt
+    bool        static_class_active_ = false;
+    bool        warm_state_loaded_   = false;
+    std::mutex  warm_mu_;
+    std::atomic<bool> warm_save_requested_{false};
+    std::atomic<bool> shutting_down_{false};
+    std::thread warm_save_thread_;
 
     // Diagnostics & crash forensics state
     std::string log_file_path_;

@@ -292,6 +292,10 @@ DualMoeEngine::DualMoeEngine() {
 }
 
 DualMoeEngine::~DualMoeEngine() {
+    shutting_down_.store(true, std::memory_order_release);
+    if (warm_save_thread_.joinable()) {
+        warm_save_thread_.join();
+    }
     if (async_load_thread_.joinable()) {
         async_load_thread_.join();
     }
@@ -667,7 +671,54 @@ void DualMoeEngine::request_cancel() {
     cancel_flag_.store(true, std::memory_order_release);
 }
 
+bool DualMoeEngine::apply_live_config(const EngineConfig & cfg, std::string & err) {
+    std::lock_guard<std::mutex> lk(api_mu_);
+    if (!ctx_ || !loaded_.load(std::memory_order_acquire)) {
+        err = "Модель не загружена";
+        return false;
+    }
+    if (generating_.load(std::memory_order_acquire)) {
+        err = "Идёт генерация — дождитесь ответа";
+        return false;
+    }
+    // A different bank size (or KV precision / context) needs a reload: refuse instead of silently
+    // ignoring the request, the caller then falls back to a full reload.
+    size_t bank_mb = 0;
+    {
+        std::lock_guard<std::mutex> slk(state_mu_);
+        bank_mb = active_vram_cache_mb_;
+    }
+    if (cfg.vram_cache_mb != bank_mb || cfg.kv_type_k != cfg_.kv_type_k || cfg.kv_type_v != cfg_.kv_type_v ||
+        cfg.n_ctx != cfg_.n_ctx) {
+        err = "Эти параметры требуют перезагрузки модели";
+        return false;
+    }
+
+    const int32_t threads = std::clamp<int32_t>(cfg.n_threads, 1, 512);
+    llama_set_n_threads(ctx_, threads, std::max<int32_t>(threads, cfg.n_threads_batch));
+    if (cfg.cpu_share >= 0.0f) {
+        llama_set_moe_cache_cpu_share(ctx_, std::clamp(cfg.cpu_share, 0.0f, 1.0f));
+        active_cpu_share_.store(std::clamp(cfg.cpu_share, 0.0f, 1.0f), std::memory_order_relaxed);
+    }
+    {
+        std::lock_guard<std::mutex> slk(state_mu_);
+        cfg_.n_threads       = threads;
+        cfg_.n_threads_batch = std::max<int32_t>(threads, cfg.n_threads_batch);
+        cfg_.cpu_share       = cfg.cpu_share;
+        cfg_.auto_balance_compute = cfg.auto_balance_compute;
+        cfg_.static_bank_share    = cfg.static_bank_share;
+        cfg_.static_bank_mb       = cfg.static_bank_mb;
+    }
+    if (cfg.static_bank_mb != 0 || cfg.static_bank_share != 0.0f) {
+        apply_static_class();
+    }
+    return true;
+}
+
 void DualMoeEngine::unload_model_locked() {
+    if (loaded_.load(std::memory_order_acquire) && cfg_.warm_state) {
+        save_warm_state(); // the hot set survives the unload (and the process)
+    }
     install_cpu_expert_hook(nullptr, nullptr);
     if (chat_templates_) {
         common_chat_templates_free(chat_templates_);
@@ -690,6 +741,13 @@ void DualMoeEngine::unload_model_locked() {
     captured_layer_experts_.clear();
     layer_on_gpu_cache_.clear();
     prev_route_.clear();
+    {
+        std::lock_guard<std::mutex> wl(warm_mu_);
+        static_experts_.clear();
+        prompt_route_.clear();
+    }
+    static_class_active_ = false;
+    warm_state_loaded_   = false;
 
     loaded_.store(false, std::memory_order_release);
     generating_.store(false, std::memory_order_release);
@@ -722,6 +780,9 @@ void DualMoeEngine::unload_model_locked() {
 void DualMoeEngine::unload_model() {
     if (async_load_thread_.joinable() && async_load_thread_.get_id() != std::this_thread::get_id()) {
         async_load_thread_.join();
+    }
+    if (warm_save_thread_.joinable() && warm_save_thread_.get_id() != std::this_thread::get_id()) {
+        warm_save_thread_.join(); // it reads ctx_ while saving: never free the context under it
     }
     std::lock_guard<std::mutex> lk(api_mu_);
     unload_model_locked();
@@ -1077,6 +1138,11 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
     captured_layer_experts_.assign((size_t) std::max<int32_t>(1, n_layer), {});
     prev_route_.assign((size_t) std::max<int32_t>(1, n_layer), {});
     layer_on_gpu_cache_.assign((size_t) std::max<int32_t>(1, n_layer), false);
+    {
+        std::lock_guard<std::mutex> wl(warm_mu_);
+        static_experts_.assign((size_t) std::max<int32_t>(1, n_layer), {});
+        prompt_route_.assign((size_t) std::max<int32_t>(1, n_layer), {});
+    }
 
     // -------------------------------------------------------------------------
     // STEP 4, 5, 6: Stage-1 Graph Capture, VirtualExpertArena, Safe MMap Guard
@@ -1477,11 +1543,295 @@ bool DualMoeEngine::load_model_impl(const EngineConfig & input_cfg, std::string 
         step8_summary = s8.str();
     }
 
+    // Warm start: the hot experts of the previous run of this model become the pinned static class of
+    // the VRAM bank, and their DDR4 copies are pre-touched, so the first answer after a start already
+    // runs at the steady-state speed instead of learning the routing from scratch.
+    if (stream_moe && cfg.warm_state && cparams.moe_cache_size > 0) {
+        load_warm_state(cfg);
+        if (warm_state_loaded_) {
+            apply_static_class();
+            std::lock_guard<std::mutex> wl(warm_mu_);
+            for (size_t il = 0; il < static_experts_.size(); ++il) {
+                const auto & exps = static_experts_[il];
+                if (!exps.empty() && arena_.has_layer((int32_t) il)) {
+                    arena_.prefetch_experts_async((int32_t) il, exps.data(), exps.size());
+                }
+            }
+        }
+    } else if (stream_moe && cfg.warm_state) {
+        // no VRAM bank (CPU + DDR4): still restore the hot set so the arena starts warm
+        load_warm_state(cfg);
+    }
+
     finish_step(8, "done", step8_summary);
     mark_flight_header("READY", "Модель успешно загружена");
     loaded_.store(true, std::memory_order_release);
     loading_.store(false, std::memory_order_release);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Warm expert state + static expert class
+//
+// The VRAM expert bank is a ClassLRU over (layer, expert). Two problems are fixed here:
+//   * "cold start": every run re-learns the routing, so the first answers are slow — the hot set
+//     of the previous run is stored next to the model and pre-pinned on load;
+//   * "topic shift": the experts of the structure / system prompt are evicted together with the
+//     rest, so the *cheap* part of the model thrashes — a share of the bank is reserved for them.
+// ---------------------------------------------------------------------------
+
+std::string DualMoeEngine::warm_state_path(const std::string & model_path) const {
+    if (model_path.empty()) return {};
+    std::filesystem::path p = std::filesystem::u8path(model_path);
+    std::filesystem::path dir = p.parent_path();
+    const std::string stem = fs_path_to_utf8(p.filename()) + ".warm";
+    // Prefer a sidecar next to the model; fall back to the runtime dir when the folder is read-only.
+    std::error_code ec;
+    if (!dir.empty() && std::filesystem::is_directory(dir, ec) && !ec) {
+        // Write-probe with a throwaway name: never touch an existing warm-state file of the model.
+        std::filesystem::path target = dir / stem;
+        std::filesystem::path probe  = dir / (stem + ".probe");
+        FILE * f = open_utf8_file(fs_path_to_utf8(probe), "ab");
+        if (f) {
+            std::fclose(f);
+            std::filesystem::remove(probe, ec);
+            return fs_path_to_utf8(target);
+        }
+    }
+    return fs_path_to_utf8(resolve_runtime_dir() / stem);
+}
+
+void DualMoeEngine::load_warm_state(const EngineConfig & cfg) {
+    warm_state_loaded_ = false;
+    if (!cfg.warm_state || cfg.model_path.empty()) return;
+
+    std::string path = warm_state_path(cfg.model_path);
+    if (path.empty()) return;
+    FILE * f = open_utf8_file(path, "rb");
+    append_backend_log(GGML_LOG_LEVEL_INFO, (std::string("[warm] читаю ") + path + (f ? " (ok)\n" : " (нет файла)\n")).c_str());
+    if (!f) return;
+
+    const size_t max_bytes = (size_t) std::max<int32_t>(1, cfg.warm_state_max_kb) * 1024ull;
+    std::string data;
+    char buf[4096];
+    while (data.size() < max_bytes) {
+        const size_t got = std::fread(buf, 1, sizeof(buf), f);
+        if (got == 0) break;
+        data.append(buf, got);
+    }
+    std::fclose(f);
+
+    // Format (line based, tolerant to a truncated file):
+    //   dualmoe-warm 1
+    //   model <sha-ish fingerprint: file size + layer/expert count>
+    //   route <layer> <e0> <e1> ...
+    //   hot <layer> <expert> <crf>
+    const size_t nl = data.find('\n');
+    if (nl == std::string::npos || data.compare(0, 12, "dualmoe-warm") != 0) return;
+
+    const std::string expect_model =
+        std::to_string(layout_.summary.file_size_bytes) + "/" +
+        std::to_string(layout_.summary.n_layer) + "/" +
+        std::to_string(layout_.summary.n_expert);
+    const int32_t n_layer = std::max<int32_t>(1, layout_.summary.n_layer);
+    const int32_t n_expert = std::max<int32_t>(1, layout_.summary.n_expert);
+
+    std::vector<std::vector<int32_t>> route((size_t) n_layer);
+    std::vector<std::pair<double, std::pair<int32_t, int32_t>>> hot; // (crf, (il, expert))
+    bool model_ok = false;
+
+    size_t pos = nl + 1;
+    while (pos < data.size()) {
+        size_t end = data.find('\n', pos);
+        if (end == std::string::npos) end = data.size();
+        const std::string line = data.substr(pos, end - pos);
+        pos = end + 1;
+        if (line.compare(0, 6, "model ") == 0) {
+            model_ok = line.compare(6, std::string::npos, expect_model) == 0;
+            if (!model_ok) return; // different model file: the state is meaningless
+            continue;
+        }
+        if (line.compare(0, 6, "route ") == 0) {
+            const char * c = line.c_str() + 6;
+            char * e = nullptr;
+            const long il = std::strtol(c, &e, 10);
+            if (e == c || il < 0 || il >= n_layer) continue;
+            auto & vec = route[(size_t) il];
+            while (*e) {
+                const long v = std::strtol(e, &e, 10);
+                if (v >= 0 && v < n_expert) vec.push_back((int32_t) v);
+            }
+            continue;
+        }
+        if (line.compare(0, 4, "hot ") == 0) {
+            const char * c = line.c_str() + 4;
+            char * e = nullptr;
+            const long il = std::strtol(c, &e, 10);
+            const long ex = std::strtol(e, &e, 10);
+            const double crf = std::strtod(e, &e);
+            if (il >= 0 && il < n_layer && ex >= 0 && ex < n_expert && crf > 0.0) {
+                hot.emplace_back(crf, std::make_pair((int32_t) il, (int32_t) ex));
+            }
+        }
+    }
+    if (!model_ok) return;
+
+    // Hottest first: the caller pins them in this order and stops at the bank capacity.
+    std::sort(hot.begin(), hot.end(), [](const auto & a, const auto & b) {
+        if (a.first != b.first) return a.first > b.first;
+        return a.second < b.second;
+    });
+    static_experts_.assign((size_t) n_layer, {});
+    for (const auto & h : hot) {
+        auto & vec = static_experts_[(size_t) h.second.first];
+        if (vec.size() < 64) vec.push_back(h.second.second);
+    }
+    prompt_route_ = std::move(route);
+    warm_state_loaded_ = true;
+
+    size_t n_hot = 0;
+    for (const auto & v : static_experts_) n_hot += v.size();
+    append_backend_log(GGML_LOG_LEVEL_INFO,
+        ("Warm state: восстановлено " + std::to_string(n_hot) + " горячих экспертов из " + path + "\n").c_str());
+}
+
+void DualMoeEngine::save_warm_state() {
+    EngineConfig cfg;
+    std::string path;
+    {
+        std::lock_guard<std::mutex> slk(state_mu_);
+        cfg = cfg_;
+        path = warm_state_path(cfg_.model_path);
+    }
+    if (!cfg.warm_state || path.empty() || !ctx_) return;
+
+    const int32_t n_layer = std::max<int32_t>(1, (int32_t) prev_route_.size());
+
+    // The hot set is the union of the static class and the observed route, ordered by how often
+    // the expert was selected. Every entry is one line so a truncated file stays readable.
+    struct HotEntry {
+        int32_t count;
+        double  weight;   // 2.0 = came from the static class or a prompt route, 1.0 = decode route
+        int32_t il;
+        int32_t expert;
+    };
+    std::vector<HotEntry> hot;
+    {
+        std::lock_guard<std::mutex> wl(warm_mu_);
+        std::vector<std::vector<int32_t>> merged((size_t) n_layer);
+        for (int32_t il = 0; il < n_layer; ++il) {
+            if ((size_t) il < static_experts_.size()) {
+                for (int32_t e : static_experts_[(size_t) il]) merged[(size_t) il].push_back(e);
+            }
+            if ((size_t) il < prompt_route_.size()) {
+                for (int32_t e : prompt_route_[(size_t) il]) merged[(size_t) il].push_back(e);
+            }
+            if ((size_t) il < prev_route_.size()) {
+                for (int32_t e : prev_route_[(size_t) il]) merged[(size_t) il].push_back(e);
+            }
+        }
+        for (int32_t il = 0; il < n_layer; ++il) {
+            auto & v = merged[(size_t) il];
+            std::sort(v.begin(), v.end());
+            for (size_t i = 0; i < v.size(); ) {
+                size_t j = i;
+                while (j < v.size() && v[j] == v[i]) ++j;
+                hot.push_back(HotEntry{(int32_t) (j - i), (double) (j - i), il, v[i]});
+                i = j;
+            }
+        }
+    }
+    if (hot.empty()) return;
+
+    std::sort(hot.begin(), hot.end(), [](const HotEntry & a, const HotEntry & b) {
+        const double wa = (double) a.count * (0.5 + 0.5 * std::min(a.weight, 4.0));
+        const double wb = (double) b.count * (0.5 + 0.5 * std::min(b.weight, 4.0));
+        if (wa != wb) return wa > wb;
+        if (a.il != b.il) return a.il < b.il;
+        return a.expert < b.expert;
+    });
+
+    const size_t cap_kb = (size_t) std::max<int32_t>(8, cfg.warm_state_max_kb);
+    std::string out;
+    out.reserve(cap_kb * 1024);
+    out += "dualmoe-warm 1\n";
+    out += "model " + std::to_string(layout_.summary.file_size_bytes) + "/" +
+           std::to_string(layout_.summary.n_layer) + "/" +
+           std::to_string(layout_.summary.n_expert) + "\n";
+    for (const auto & h : hot) {
+        if (out.size() > cap_kb * 1024) break;
+        out += "hot " + std::to_string(h.il) + " " + std::to_string(h.expert) +
+               " " + std::to_string(h.count) + "\n";
+    }
+
+    FILE * f = open_utf8_file(path, "wb");
+    if (!f) return;
+    std::fwrite(out.data(), 1, out.size(), f);
+    std::fclose(f);
+}
+
+void DualMoeEngine::schedule_warm_state_save() {
+    if (shutting_down_.load(std::memory_order_acquire)) return;
+    if (warm_save_requested_.exchange(true, std::memory_order_acq_rel)) return;
+    if (warm_save_thread_.joinable()) {
+        warm_save_thread_.join(); // previous save already finished (operator== on id is enough)
+    }
+    warm_save_thread_ = std::thread([this]() {
+        for (int i = 0; i < 30; ++i) { // let the answer finish streaming, but never wait forever
+            if (shutting_down_.load(std::memory_order_acquire)) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (!generating_.load(std::memory_order_acquire)) break;
+        }
+        if (!shutting_down_.load(std::memory_order_acquire) && loaded_.load(std::memory_order_acquire)) {
+            save_warm_state();
+        }
+        warm_save_requested_.store(false, std::memory_order_release);
+    });
+}
+
+void DualMoeEngine::apply_static_class() {
+    static_class_active_ = false;
+    if (!ctx_) return;
+
+    EngineConfig cfg;
+    { std::lock_guard<std::mutex> slk(state_mu_); cfg = cfg_; }
+
+    // The static class only exists when a VRAM bank exists and the user asked for a share of it.
+    if (layout_.summary.n_expert <= 0 || active_vram_cache_mb_ == 0) return;
+
+    size_t pin_mb = cfg.static_bank_mb;
+    if (pin_mb == 0 && cfg.static_bank_share > 0.0f) {
+        pin_mb = (size_t) ((double) active_vram_cache_mb_ * std::clamp((double) cfg.static_bank_share, 0.0, 0.8));
+    }
+    if (pin_mb < 64) return;
+
+    // Experts hold their VRAM slots at ~1/4 of their size on the host, but a bank is filled with the
+    // heaviest 3D expert tensor: derive how many slots the reservation covers.
+    const int32_t n_layer = std::max<int32_t>(1, layout_.summary.n_layer);
+    const int32_t n_expert = std::max<int32_t>(1, layout_.summary.n_expert);
+    const uint64_t bytes_per_slot = std::max<uint64_t>(1, (uint64_t) std::max<uint64_t>(1, layout_.summary.expert_bytes) /
+                                                          ((uint64_t) n_layer * (uint64_t) n_expert));
+    const size_t want = (size_t) std::min<uint64_t>((uint64_t) pin_mb << 20, (uint64_t) -1) / bytes_per_slot;
+
+    std::vector<int32_t> layer_ids, expert_ids;
+    {
+        std::lock_guard<std::mutex> wl(warm_mu_);
+        for (int32_t il = 0; il < n_layer && layer_ids.size() < want; ++il) {
+            if ((size_t) il >= static_experts_.size()) break;
+            for (int32_t e : static_experts_[(size_t) il]) {
+                if (layer_ids.size() >= want) break;
+                layer_ids.push_back(il);
+                expert_ids.push_back(e);
+            }
+        }
+    }
+    if (layer_ids.empty()) return;
+
+    llama_set_moe_cache_pinned(ctx_, layer_ids.data(), expert_ids.data(), layer_ids.size());
+    static_class_active_ = true;
+    append_backend_log(GGML_LOG_LEVEL_INFO,
+        ("Static-class: " + std::to_string(layer_ids.size()) + " экспертов закреплено в банке VRAM (" +
+         std::to_string(pin_mb) + " МБ).\n").c_str());
 }
 
 bool DualMoeEngine::c_eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
@@ -1637,13 +1987,24 @@ bool DualMoeEngine::on_eval_node(struct ggml_tensor * t, bool ask) {
         if ((size_t) il < prev_route_.size()) {
             prev_route_[(size_t) il] = selected;
         }
-        if (cfg_.prefetch_ahead > 0 && n_tokens == 1) {
-            const int32_t next_il = il + 1;
-            if ((size_t) next_il < prev_route_.size() && arena_.has_layer(next_il) &&
-                !prev_route_[(size_t) next_il].empty()) {
-                arena_.prefetch_experts_async(next_il, prev_route_[(size_t) next_il].data(),
-                                              prev_route_[(size_t) next_il].size());
+        // Prefill routes (n_tokens > 1) are what a repeated prefix will hit again on the next turn,
+        // so they are kept apart from the single-token decode route used for layer-ahead prefetch.
+        if (n_tokens > 1) {
+            std::lock_guard<std::mutex> wl(warm_mu_);
+            if ((size_t) il < prompt_route_.size()) {
+                auto & dst = prompt_route_[(size_t) il];
+                dst.insert(dst.end(), selected.begin(), selected.end());
             }
+        }
+        // Prefetch the next layer twice when the prompt is processed: one token of look-ahead is
+        // enough for decode, but a prefill ubatch benefits from the whole next layer being ready.
+        const int32_t lookahead = n_tokens > 1 ? cfg_.prefetch_ahead + 2 : cfg_.prefetch_ahead;
+        for (int32_t step = 1; step <= lookahead; ++step) {
+            const int32_t next_il = il + step;
+            if ((size_t) next_il >= prev_route_.size() || !arena_.has_layer(next_il)) break;
+            if (prev_route_[(size_t) next_il].empty()) continue;
+            arena_.prefetch_experts_async(next_il, prev_route_[(size_t) next_il].data(),
+                                          prev_route_[(size_t) next_il].size());
         }
     }
     return true;
@@ -1898,7 +2259,25 @@ bool DualMoeEngine::generate_chat(const std::vector<ChatMessage> & messages,
     }
 
     const SamplingParams sp = use_override ? sampling_override : cfg_.sampling;
-    return run_tokens(tokens, sp, stop_strings, on_token, full_reply, prompt_tokens_out, completion_tokens_out, err);
+    const bool ok = run_tokens(tokens, sp, stop_strings, on_token, full_reply,
+                               prompt_tokens_out, completion_tokens_out, err);
+    if (ok) {
+        // First session (no warm state yet): the experts that the structure + system prompt selected
+        // are exactly the static class worth pinning for the rest of the session.
+        if (!static_class_active_ && ctx_ && active_vram_cache_mb_ > 0) {
+            std::lock_guard<std::mutex> wl(warm_mu_);
+            for (size_t il = 0; il < prompt_route_.size(); ++il) {
+                auto & src = prompt_route_[il];
+                if (src.empty() || il >= static_experts_.size()) continue;
+                std::sort(src.begin(), src.end());
+                src.erase(std::unique(src.begin(), src.end()), src.end());
+                static_experts_[il] = src;
+            }
+            apply_static_class();
+        }
+        schedule_warm_state_save();
+    }
+    return ok;
 }
 
 bool DualMoeEngine::generate_raw(const std::string & prompt,
@@ -1967,6 +2346,24 @@ bool DualMoeEngine::run_tokens(const std::vector<llama_token> & tokens,
             common_prefix = 0;
         }
         kv_tokens_.resize(common_prefix);
+    }
+
+    // A new prompt starts a new route recording. The route of the previous prompt is the best free
+    // predictor for the same (or a repeated) prefix, so its experts are pushed into the arena now,
+    // while the prompt is still being tokenised/queued — the first prefill ubatch finds them in RAM.
+    {
+        std::vector<std::vector<int32_t>> prev_prompt;
+        {
+            std::lock_guard<std::mutex> wl(warm_mu_);
+            prev_prompt = prompt_route_;
+            for (auto & v : prompt_route_) v.clear();
+        }
+        if (cfg_.prefetch_ahead > 0) {
+            for (size_t il = 0; il < prev_prompt.size(); ++il) {
+                if (prev_prompt[il].empty() || !arena_.has_layer((int32_t) il)) continue;
+                arena_.prefetch_experts_async((int32_t) il, prev_prompt[il].data(), prev_prompt[il].size());
+            }
+        }
     }
 
     const auto t_prefill_start = std::chrono::steady_clock::now();

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>DualMoE v0.5 — Локальная MoE-студия (VRAM ⊕ RAM)</title>
+<title>DualMoE v0.5.1 — Локальная MoE-студия (VRAM ⊕ RAM)</title>
 <style>
   :root {
     --bg:        #0b0b0c;
@@ -790,7 +790,7 @@
     <div class="brand">
       <div class="brand-mark">D</div>
       <div class="brand-meta">
-        <div class="brand-name mono">DUALMOE <em>v0.5</em></div>
+        <div class="brand-name mono">DUALMOE <em>v0.5.1</em></div>
         <div class="bot-desc">VRAM ⊕ RAM · GPU ∥ CPU</div>
       </div>
     </div>
@@ -940,23 +940,27 @@
         <div class="card">
           <div class="card-head">
             <span class="card-title">Что перебирать</span>
-            <span class="mono" style="font-size:11px;color:var(--muted)" id="benchCostHint">каждый кандидат = перезагрузка модели</span>
+            <span class="mono" style="font-size:11px;color:var(--muted)" id="benchCostHint">дешёвые параметры — без перезагрузки</span>
           </div>
           <div class="card-body" style="display:flex;flex-direction:column;gap:11px">
+            <label class="bench-opt-row" style="border-color:rgba(34,199,229,.45)">
+              <input type="checkbox" id="optFast" checked onchange="document.getElementById('benchCostHint').textContent=this.checked?'дешёвые параметры — без перезагрузки':'полный перебор с перезагрузкой'">
+              <b>Умный перебор</b> — потоки и долю CPU ∥ GPU мерить на уже загруженной модели (в 5–10 раз быстрее)
+            </label>
             <div class="bench-opts">
               <label class="bench-opt-row"><input type="checkbox" id="optThreads" checked> Потоки CPU (физические / SMT / половина)</label>
-              <label class="bench-opt-row"><input type="checkbox" id="optCpuShare" checked> Доля CPU ∥ GPU (0.96 / 0.82 / 0.65)</label>
-              <label class="bench-opt-row"><input type="checkbox" id="optVram" checked> Банк горячих экспертов VRAM (65% / 100%)</label>
+              <label class="bench-opt-row"><input type="checkbox" id="optCpuShare" checked> Доля CPU ∥ GPU (0.60 … 0.96 + уточнение вокруг победителя)</label>
+              <label class="bench-opt-row"><input type="checkbox" id="optVram" checked> Банк горячих экспертов VRAM (65% / 100%) — 1 перезагрузка на точку</label>
               <label class="bench-opt-row"><input type="checkbox" id="optUbatch" checked> Микробатч (16 / 32)</label>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
               <div class="field">
-                <span class="field-label">Токенов на кандидата <output id="valBenchTokens">96</output></span>
-                <input type="range" id="inpBenchTokens" min="32" max="256" step="16" value="96" oninput="document.getElementById('valBenchTokens').textContent=this.value">
+                <span class="field-label">Токенов на кандидата <output id="valBenchTokens">64</output></span>
+                <input type="range" id="inpBenchTokens" min="32" max="256" step="16" value="64" oninput="document.getElementById('valBenchTokens').textContent=this.value">
               </div>
               <div class="field">
-                <span class="field-label">Лимит кандидатов <output id="valBenchMax">12</output></span>
-                <input type="range" id="inpBenchMax" min="4" max="20" step="1" value="12" oninput="document.getElementById('valBenchMax').textContent=this.value">
+                <span class="field-label">Лимит кандидатов <output id="valBenchMax">8</output></span>
+                <input type="range" id="inpBenchMax" min="4" max="24" step="1" value="8" oninput="document.getElementById('valBenchMax').textContent=this.value">
               </div>
             </div>
           </div>
@@ -1843,8 +1847,9 @@
     document.querySelectorAll('#benchModeSeg button').forEach(b => {
       b.classList.toggle('active', b.dataset.mode === mode);
     });
-    document.getElementById('benchCostHint').textContent =
-      mode === 'full' ? 'каждый кандидат = перезагрузка модели' : 'мгновенный расчёт без перезагрузки';
+    document.getElementById('benchCostHint').textContent = mode === 'full'
+      ? (document.getElementById('optFast')?.checked ? 'дешёвые параметры — без перезагрузки' : 'полный перебор с перезагрузкой')
+      : 'мгновенный расчёт без перезагрузки';
   }
 
   function benchRunning() {
@@ -1868,7 +1873,8 @@
           sweep_threads: document.getElementById('optThreads').checked,
           sweep_cpu_share: document.getElementById('optCpuShare').checked,
           sweep_vram_bank: document.getElementById('optVram').checked,
-          sweep_ubatch: document.getElementById('optUbatch').checked
+          sweep_ubatch: document.getElementById('optUbatch').checked,
+          fast: document.getElementById('optFast').checked
         })
       });
       const d = await r.json();

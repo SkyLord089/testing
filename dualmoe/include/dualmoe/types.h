@@ -46,6 +46,14 @@ struct EngineConfig {
     int32_t  io_lanes             = 1;      // 1 = HDD-safe sequential reader (no head thrashing); 4 = NVMe SSD
     int32_t  prefetch_ahead       = 1;      // Prefetch previous-token expert route for layer il+1 on CPU path
 
+    // Expert cache classes (see bench plan): a share of the hot VRAM bank is reserved for the
+    // "static" experts (structure + system prompt) that every request re-uses, so a topic shift
+    // evicts only the "dynamic" ones instead of thrashing the whole bank.
+    float    static_bank_share    = 0.35f;  // 0 = single ClassLRU bank, 0.2..0.5 sensible
+    size_t   static_bank_mb       = 0;      // 0 = derived: vram_cache_mb * static_bank_share
+    bool     warm_state           = true;   // persist the hot expert set next to the model between runs
+    int32_t  warm_state_max_kb    = 256;    // cap of the warm-state file
+
     // Context & batch sizing (tuned for RX 580 8 GB VRAM + 16 GB RAM + LearnHarness)
     uint32_t n_ctx                = 16384;
     uint32_t n_batch              = 512;

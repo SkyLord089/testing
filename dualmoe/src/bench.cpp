@@ -238,6 +238,20 @@ BenchRecommendation BenchmarkRunner::plan_config(const BenchOptions & opt, std::
     rec.reasons.push_back(fmt("Начальная доля CPU ∥ GPU = %.2f (авто-балансировщик дальше подстроит сам)",
                               cfg.cpu_share));
 
+    // Cache classes: reserve part of the hot bank for the experts that every request re-uses, and
+    // keep the warm expert set between runs. The RAM side always keeps the full hot set, so the
+    // reservation grows with the bank: 30% at 1.5 GB, 40% from 3 GB (the VRAM is what is scarce).
+    cfg.static_bank_share = bank_mb >= 3072 ? 0.40f : (bank_mb >= 1536 ? 0.30f : 0.25f);
+    cfg.static_bank_mb    = 0;
+    cfg.warm_state        = true;
+    if (bank_mb > 0) {
+        rec.reasons.push_back(fmt("Класс «статических» экспертов (структура + системный промпт) = %.0f%% банка ≈ %llu МБ: смена темы не выбивает их из VRAM",
+                                  (double) (cfg.static_bank_share * 100.0f),
+                                  (unsigned long long) ((uint64_t) (bank_mb * (uint64_t) (cfg.static_bank_share * 100)) / 100)));
+    } else {
+        rec.reasons.push_back("VRAM-банка нет: горячие эксперты закрепляются в арене DDR4, набор прогрева сохраняется между запусками");
+    }
+
     BenchCandidate probe;
     probe.cfg             = cfg;
     probe.vram_used_mb    = cfg.vram_cache_mb;
@@ -272,6 +286,16 @@ bool BenchmarkRunner::measure_candidate(BenchCandidate & cand, const BenchOption
     }
 
     const auto before = engine_.telemetry();
+
+    // Warm-up: the first tokens after a load also fill the expert caches, which would unfairly
+    // favour whichever candidate happened to be measured first. Discard a few tokens first.
+    {
+        const int32_t warm = std::clamp<int32_t>(opt.warmup_tokens, 0, 64);
+        if (warm > 0) {
+            std::string sink;
+            engine_.generate_raw(prompt, warm, 0.0f, opt.seed, nullptr, sink, err);
+        }
+    }
 
     // Wall-clock timing: the engine's live counters are smoothed/atomic and can
     // report absurd values for very short runs, so measure first-token latency
@@ -328,6 +352,85 @@ bool BenchmarkRunner::measure_candidate(BenchCandidate & cand, const BenchOption
     const double hit_bonus   = 0.85 + 0.15 * (cand.vram_hit_pct / 100.0);
     cand.score    = (cand.decode_tps * hit_bonus) / hdd_penalty;
     cand.elapsed_s = (double) (now_ms() - t0) / 1000.0;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Measurement on the context that is already loaded (no reload).
+// Threads, CPU ∥ GPU share and the class split are applied through apply_live_config, so a sweep
+// over them costs one warm-up + one generation per point instead of a full model load.
+// ---------------------------------------------------------------------------
+bool BenchmarkRunner::apply_live_knobs(const EngineConfig & cfg) {
+    std::string err;
+    return engine_.apply_live_config(cfg, err);
+}
+
+bool BenchmarkRunner::measure_loaded(BenchCandidate & cand, const BenchOptions & opt,
+                                     const std::string & prompt, std::string & err) {
+    const int64_t t0 = now_ms();
+    const EngineConfig cur = engine_.current_config();
+    EngineConfig probe = cand.cfg;
+    // keep the live context consistent with what is actually measurable in place
+    probe.n_ctx          = cur.n_ctx;
+    probe.kv_type_k      = cur.kv_type_k;
+    probe.kv_type_v      = cur.kv_type_v;
+    probe.vram_cache_mb  = cur.vram_cache_mb;
+
+    if (!apply_live_knobs(probe)) {
+        return false;
+    }
+    const auto before = engine_.telemetry();
+
+    std::string reply;
+    std::string sink;
+    const int32_t warm = std::clamp<int32_t>(opt.warmup_tokens, 0, 64);
+    if (warm > 0) {
+        engine_.generate_raw(prompt, warm, 0.0f, opt.seed, nullptr, sink, err);
+    }
+
+    const int32_t n_tok = std::clamp<int32_t>(opt.tokens, 16, 512);
+    const auto t_gen0 = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point t_first{};
+    int64_t pieces = 0;
+    const bool gen_ok = engine_.generate_raw(
+        prompt, n_tok, 0.0f, opt.seed,
+        [&](const std::string &) -> bool {
+            if (pieces == 0) t_first = std::chrono::steady_clock::now();
+            ++pieces;
+            return true;
+        },
+        reply, err);
+    if (!gen_ok) return false;
+    const auto t_gen1 = std::chrono::steady_clock::now();
+    const auto after = engine_.telemetry();
+
+    const double total_s  = std::chrono::duration<double>(t_gen1 - t_gen0).count();
+    const double ttft_s   = pieces > 0 ? std::chrono::duration<double>(t_first - t_gen0).count() : total_s;
+    const double decode_s = std::max(1e-6, total_s - ttft_s);
+    const double n_pieces = (double) std::max<int64_t>(1, pieces);
+
+    cand.measured     = true;
+    cand.in_place     = true;
+    cand.ok           = true;
+    cand.cfg.n_threads = probe.n_threads;
+    cand.cfg.cpu_share = probe.cpu_share;
+    cand.decode_tps   = (n_pieces - 1.0) / decode_s;
+    if (!(cand.decode_tps > 0.0) || !std::isfinite(cand.decode_tps)) cand.decode_tps = n_pieces / std::max(1e-6, total_s);
+    cand.ttft_ms      = ttft_s * 1000.0;
+    cand.prefill_tps  = after.prefill_tps;
+    if (cand.prefill_tps <= 0.0 && after.prompt_tokens > 0) {
+        cand.prefill_tps = (double) after.prompt_tokens / std::max(1e-6, ttft_s);
+    }
+    cand.hdd_reads    = after.ssd_expert_reads - before.ssd_expert_reads;
+    cand.ram_used_mb  = after.ram_arena_used_mb;
+    cand.vram_used_mb = after.vram_prewarmed_mb > 0 ? after.vram_prewarmed_mb : after.vram_cache_budget_mb;
+    const uint64_t served = after.gpu_expert_hits + after.cpu_parallel_experts +
+                            (after.ram_cache_hits - before.ram_cache_hits);
+    cand.vram_hit_pct = served > 0 ? 100.0 * (double) after.gpu_expert_hits / (double) served : 100.0;
+    const double hdd_penalty = 1.0 + std::min<double>(1.5, (double) cand.hdd_reads * 0.02);
+    const double hit_bonus   = 0.85 + 0.15 * (cand.vram_hit_pct / 100.0);
+    cand.score       = (cand.decode_tps * hit_bonus) / hdd_penalty;
+    cand.elapsed_s   = (double) (now_ms() - t0) / 1000.0;
     return true;
 }
 
@@ -405,7 +508,7 @@ void BenchmarkRunner::run_plan(const BenchOptions & opt) {
 void BenchmarkRunner::run_full(const BenchOptions & opt) {
     std::string err;
 
-    // 1. Plan first: the best-known-safe config is always candidate #0.
+    // 1. Plan first: the best-known-safe config is always the starting point.
     BenchRecommendation rec = plan_config(opt, err);
     if (!rec.ok) {
         std::lock_guard<std::mutex> lk(mu_);
@@ -423,105 +526,194 @@ void BenchmarkRunner::run_full(const BenchOptions & opt) {
     const SystemMemoryInfo mem = engine_.query_system_memory();
     const int32_t hw = (int32_t) std::max(1u, std::thread::hardware_concurrency());
     const int32_t phys = resolve_phys_threads(hw);
+    const int32_t cap  = std::max<int32_t>(1, opt.max_candidates);
 
-    // 2. Build the candidate grid: one variable changed at a time around the plan.
     std::vector<BenchCandidate> cands;
     auto signature = [](const EngineConfig & c) {
-        // Every candidate is one full model reload, so identical knob sets must
-        // never be measured twice (the plan config often equals a sweep point).
-        return std::to_string(c.n_threads) + "/" + fmt("%.3f", c.cpu_share) + "/" +
-               std::to_string(c.vram_cache_mb) + "/" + std::to_string(c.n_ubatch);
+        // A full reload is expensive, so two candidates may only share it when every knob that needs
+        // the reload matches (threads / share are applied live and can differ inside one group).
+        return std::to_string(c.vram_cache_mb) + "/" + std::to_string(c.n_ubatch);
     };
-    std::vector<std::string> seen;
     auto add = [&](const EngineConfig & c, const std::string & label, const std::vector<std::string> & knobs) {
-        if ((int32_t) cands.size() >= std::max<int32_t>(1, opt.max_candidates)) return;
-        const std::string sig = signature(c);
-        if (std::find(seen.begin(), seen.end(), sig) != seen.end()) return;
-        seen.push_back(sig);
+        if ((int32_t) cands.size() >= cap) return false;
         BenchCandidate b;
-        b.index    = (int32_t) cands.size();
-        b.label    = label;
-        b.knobs    = knobs;
-        b.cfg      = c;
+        b.index = (int32_t) cands.size();
+        b.label = label;
+        b.knobs = knobs;
+        b.cfg   = c;
         b.cfg.model_path = opt.model_path;
         cands.push_back(std::move(b));
+        return true;
     };
 
+    // Group 0: the plan itself. Its reload is reused by every "cheap" (in-place) probe below.
+    const std::string plan_sig = signature(rec.cfg);
     add(rec.cfg, "План движка", {"потоки=" + std::to_string(rec.cfg.n_threads),
                                  "cpu_share=" + fmt("%.2f", rec.cfg.cpu_share),
                                  "vram=" + std::to_string(rec.cfg.vram_cache_mb / 128 * 128) + "МБ"});
 
+    // The cheap axes around the plan, measured on the already loaded context. Stage 1 tests the plan
+    // value plus the two extremes, then stage 2 only fills the gap where the winner sits.
+    struct Sweep { bool enabled; EngineConfig (*mk)(const EngineConfig &, double); std::vector<double> stage1; std::vector<double> all; std::string label; std::string knob; };
+    std::vector<Sweep> sweeps;
+    const std::vector<double> thr_pts = { (double) std::max(1, phys / 2), (double) phys, (double) std::min(hw, phys * 2) };
     if (opt.sweep_threads) {
-        for (int32_t t : {phys, std::min(hw, phys * 2), std::max(1, phys / 2)}) {
-            EngineConfig c = rec.cfg;
-            c.n_threads = t;
-            add(c, "потоки " + std::to_string(t), {"потоки=" + std::to_string(t)});
-        }
+        sweeps.push_back({true, [](const EngineConfig & base, double v) {
+            EngineConfig c = base; c.n_threads = (int32_t) v; return c; },
+            {thr_pts[1], thr_pts[0], thr_pts[2]},
+            {thr_pts[0], (double) std::max(1, (int32_t) (thr_pts[0] + thr_pts[1]) / 2), thr_pts[1], thr_pts[2]},
+            "потоки", "потоки="});
     }
     if (opt.sweep_cpu_share) {
-        for (float s : {0.96f, 0.82f, 0.65f}) {
-            EngineConfig c = rec.cfg;
-            c.cpu_share = s;
-            add(c, "CPU ∥ GPU " + fmt("%.2f", s), {"cpu_share=" + fmt("%.2f", s)});
-        }
+        const double plan_share = (double) rec.cfg.cpu_share;
+        sweeps.push_back({true, [](const EngineConfig & base, double v) {
+            EngineConfig c = base; c.cpu_share = (float) v; return c; },
+            {plan_share, 0.65, 0.96},
+            {0.60, 0.70, 0.80, 0.90, 0.96},
+            "CPU ∥ GPU", "cpu_share="});
     }
+
+    // Group 1+: the VRAM bank sizes, each of which is one reload.
+    std::vector<EngineConfig> groups;
+    groups.push_back(rec.cfg);
     if (opt.sweep_vram_bank && rec.cfg.vram_cache_mb > 512) {
         for (double f : {0.65, 1.0}) {
             EngineConfig c = rec.cfg;
             c.vram_cache_mb = (size_t) std::max<uint64_t>(256, (uint64_t) ((double) rec.cfg.vram_cache_mb * f));
             if (c.vram_cache_mb == rec.cfg.vram_cache_mb) continue;
-            add(c, fmt("банк VRAM %llu МБ", (unsigned long long) c.vram_cache_mb),
-                {fmt("vram=%.0f%%", f * 100.0)});
+            bool dup = false;
+            for (const auto & g : groups) if (g.vram_cache_mb == c.vram_cache_mb) dup = true;
+            if (!dup) groups.push_back(c);
         }
     }
-    if (opt.sweep_ubatch) {
-        for (uint32_t ub : {16u, 32u}) {
-            if (ub == rec.cfg.n_ubatch) continue;
-            EngineConfig c = rec.cfg;
-            c.n_ubatch = ub;
-            add(c, "микробатч " + std::to_string(ub), {"ubatch=" + std::to_string(ub)});
-        }
+    if (opt.sweep_ubatch && rec.cfg.n_ubatch != 16u) {
+        EngineConfig c = rec.cfg;
+        c.n_ubatch = 16u;
+        groups.push_back(c);
     }
 
     {
         std::lock_guard<std::mutex> lk(mu_);
         snap_.candidates       = cands;
-        snap_.candidates_total = (int32_t) cands.size();
+        snap_.candidates_total = cap;
         snap_.model_name       = rec.cfg.model_path;
     }
-    push_log(fmt("Кандидатов к измерению: %zu (каждый = перезагрузка модели)", cands.size()));
+    push_log(fmt("План готов. Быстрый режим: %s. Перезагрузок модели (банк VRAM / микробатч): до %zu",
+                 opt.fast ? "дешёвые параметры меряются без перезагрузки" : "полный перебор", groups.size()));
 
     const int64_t t_start = now_ms();
-    bool canceled = false;
-
-    for (size_t i = 0; i < cands.size(); ++i) {
-        if (cancel_.load(std::memory_order_acquire)) { canceled = true; break; }
+    auto publish_all = [&](int32_t current) {
+        std::lock_guard<std::mutex> lk(mu_);
+        snap_.candidates = cands;
+        snap_.candidates_total = (int32_t) cands.size();
+        snap_.current_index = current;
+        if (current >= 0 && current < (int32_t) cands.size()) snap_.current_label = cands[(size_t) current].label;
+        snap_.candidates_done = (int32_t) std::count_if(cands.begin(), cands.end(),
+            [](const BenchCandidate & c) { return c.ok && c.measured; });
+        snap_.elapsed_s = (double) (now_ms() - t_start) / 1000.0;
+    };
+    auto measure_at = [&](size_t i, bool allow_in_place = false) -> bool {
         BenchCandidate & c = cands[i];
         {
             std::lock_guard<std::mutex> lk(mu_);
             snap_.current_index = (int32_t) i;
             snap_.current_label = c.label;
-            snap_.progress_pct  = (int32_t) ((double) i * 100.0 / (double) cands.size());
             snap_.message       = "Измерение " + c.label;
-            snap_.candidates    = cands;
         }
-        push_log(fmt("[%zu/%zu] %s", i + 1, cands.size(), c.label.c_str()));
-
         std::string cerr;
-        if (!measure_candidate(c, opt, opt.prompt, cerr)) {
-            c.ok    = false;
+        bool ok = false;
+        // Cheap knobs (threads / CPU ∥ GPU share) are applied to the live context: no model reload.
+        if (allow_in_place && opt.fast && engine_.is_loaded()) {
+            ok = measure_loaded(c, opt, opt.prompt, cerr);
+            if (!ok) {
+                cerr.clear();      // fall back to a full reload when the context refused the change
+                c.in_place = false;
+                ok = measure_candidate(c, opt, opt.prompt, cerr);
+            }
+        } else {
+            ok = measure_candidate(c, opt, opt.prompt, cerr);
+        }
+        if (!ok) {
+            c.ok = false;
             c.error = cerr;
             push_log("  ошибка: " + cerr);
-            if (cerr == "Остановлено пользователем") { canceled = true; break; }
         } else {
-            push_log(fmt("  %.2f tok/s • prefill %.1f tok/s • VRAM-попадания %.0f%% • HDD %llu чтений",
-                         c.decode_tps, c.prefill_tps, c.vram_hit_pct, (unsigned long long) c.hdd_reads));
+            push_log(fmt("  %s — %.2f tok/s • TTFT %.0f мс • VRAM-попадания %.0f%% • HDD %llu",
+                         c.in_place ? "на месте" : "после перезагрузки", c.decode_tps, c.ttft_ms,
+                         c.vram_hit_pct, (unsigned long long) c.hdd_reads));
         }
-        {
-            std::lock_guard<std::mutex> lk(mu_);
-            snap_.candidates = cands;
-            snap_.candidates_done = (int32_t) i + 1;
-            snap_.elapsed_s  = (double) (now_ms() - t_start) / 1000.0;
+        publish_all((int32_t) i);
+        return ok;
+    };
+
+    bool canceled = false;
+
+    // 2. Walk the reload groups; the cheap axes are tuned inside each group right after its load.
+    for (size_t g = 0; g < groups.size() && !canceled; ++g) {
+        if (cancel_.load(std::memory_order_acquire)) { canceled = true; break; }
+        if (g > 0 && (int32_t) cands.size() >= cap) {
+            push_log("Достигнут лимит кандидатов — оставшиеся точки банка VRAM пропущены");
+            break;
+        }
+
+        if (g == 0) {
+            if (!measure_at(0)) {
+                if (cands[0].error == "Остановлено пользователем") { canceled = true; break; }
+                push_log("План не загрузился — пробую остальные точки банка VRAM");
+                continue;
+            }
+        } else {
+            const EngineConfig & gc = groups[g];
+            std::string label = (gc.vram_cache_mb != rec.cfg.vram_cache_mb)
+                ? fmt("банк VRAM %llu МБ", (unsigned long long) gc.vram_cache_mb)
+                : ("микробатч " + std::to_string(gc.n_ubatch) + " (банк VRAM " +
+                   std::to_string(gc.vram_cache_mb / 128 * 128) + " МБ)");
+            if (!add(gc, label, {(gc.vram_cache_mb != rec.cfg.vram_cache_mb)
+                                    ? fmt("vram=%.0f%%", 100.0 * (double) gc.vram_cache_mb / (double) std::max<size_t>(1, rec.cfg.vram_cache_mb))
+                                    : ("ubatch=" + std::to_string(gc.n_ubatch))})) {
+                break;
+            }
+            const size_t gi = cands.size() - 1;
+            if (!measure_at(gi)) {
+                if (cands[gi].error == "Остановлено пользователем") { canceled = true; break; }
+                continue;
+            }
+        }
+
+        // --- cheap axes on the loaded context -------------------------------------------------
+        if (!opt.fast) continue;
+        for (const Sweep & sw : sweeps) {
+            if (cancel_.load(std::memory_order_acquire)) { canceled = true; break; }
+            std::vector<double> pts = sw.stage1;
+            std::vector<std::pair<double, double>> scored; // (tps, value)
+            for (double v : pts) {
+                if ((int32_t) cands.size() >= cap) break;
+                EngineConfig c = sw.mk(groups[g], v);
+                const std::string lbl = sw.label + " " + (sw.knob == "cpu_share=" ? fmt("%.2f", v) : std::to_string((int) v));
+                if (!add(c, lbl, {sw.knob + (sw.knob == "cpu_share=" ? fmt("%.2f", v) : std::to_string((int) v))})) break;
+                const size_t i = cands.size() - 1;
+                if (measure_at(i, /*allow_in_place=*/true) && cands[i].ok) {
+                    scored.push_back({cands[i].decode_tps, v});
+                }
+            }
+            if (scored.empty()) continue;
+            const auto best = *std::max_element(scored.begin(), scored.end(),
+                                                [](const auto & a, const auto & b) { return a.first < b.first; });
+            // Stage 2: refine only in the interval around the winner (2 extra points at most).
+            for (double v : sw.all) {
+                if ((int32_t) cands.size() >= cap) break;
+                const bool near = v > best.second - 0.08 || (sw.knob == "потоки=" && v > best.second - 4);
+                if (!near) continue;
+                if (std::abs(v - best.second) < 1e-9) continue;
+                bool dup = false;
+                for (const auto & s2 : scored) if (std::abs(s2.second - v) < 1e-9) dup = true;
+                if (dup) continue;
+                EngineConfig c = sw.mk(groups[g], v);
+                const std::string lbl = sw.label + " " + (sw.knob == "cpu_share=" ? fmt("%.2f", v) : std::to_string((int) v));
+                if (!add(c, lbl, {sw.knob + (sw.knob == "cpu_share=" ? fmt("%.2f", v) : std::to_string((int) v))})) break;
+                measure_at(cands.size() - 1, /*allow_in_place=*/true);
+                if ((int32_t) cands.size() >= cap) break;
+            }
         }
     }
 
@@ -536,21 +728,27 @@ void BenchmarkRunner::run_full(const BenchOptions & opt) {
     }
     if (best >= 0) cands[(size_t) best].best = true;
 
-    // 4. Leave the winner loaded so the chat continues with tuned parameters.
+    // 4. Leave the winner active: cheap knobs apply in place, only a different bank needs a reload.
     if (best >= 0 && !canceled) {
-        // The last measured candidate is already loaded in the winner's slot only
-        // by chance, so reload deterministically (one extra reload, not per token).
         BenchCandidate & w = cands[(size_t) best];
+        const EngineConfig cur = engine_.current_config();
         std::string lerr;
-        push_log("Победитель: " + w.label + " — оставляю модель загруженной с этими параметрами");
-        engine_.unload_model();
-        if (!engine_.load_model(w.cfg, lerr)) {
-            push_log("Не удалось перезагрузить победителя: " + lerr);
+        push_log("Победитель: " + w.label + " — применяю параметры");
+        const bool same_bank = w.cfg.vram_cache_mb == cur.vram_cache_mb && w.cfg.n_ubatch == cur.n_ubatch &&
+                               w.cfg.n_ctx == cur.n_ctx;
+        if (same_bank && apply_live_knobs(w.cfg)) {
+            push_log("Параметры применены без перезагрузки модели");
+        } else {
+            engine_.unload_model();
+            if (!engine_.load_model(w.cfg, lerr)) {
+                push_log("Не удалось перезагрузить победителя: " + lerr);
+            }
         }
     }
 
     std::lock_guard<std::mutex> lk(mu_);
     snap_.candidates       = cands;
+    snap_.candidates_total = (int32_t) cands.size();
     snap_.candidates_done  = (int32_t) std::count_if(cands.begin(), cands.end(),
                                                      [](const BenchCandidate & c) { return c.ok && c.measured; });
     snap_.elapsed_s        = (double) (now_ms() - t_start) / 1000.0;
@@ -558,11 +756,12 @@ void BenchmarkRunner::run_full(const BenchOptions & opt) {
     snap_.progress_pct     = 100;
     snap_.stage            = canceled ? "canceled" : (best >= 0 ? "done" : "failed");
     if (best >= 0) {
-        snap_.recommendation.cfg                = cands[(size_t) best].cfg;
-        snap_.recommendation.ok                 = true;
+        snap_.recommendation.cfg                  = cands[(size_t) best].cfg;
+        snap_.recommendation.ok                   = true;
         snap_.recommendation.predicted_decode_tps = cands[(size_t) best].decode_tps;
-        snap_.message = fmt("Лучший результат: %s — %.2f tok/s", cands[(size_t) best].label.c_str(),
-                            cands[(size_t) best].decode_tps);
+        snap_.message = fmt("Лучший результат: %s — %.2f tok/s (за %.1f с)",
+                            cands[(size_t) best].label.c_str(), cands[(size_t) best].decode_tps,
+                            snap_.elapsed_s);
         snap_.recommendation.reasons.push_back(snap_.message);
     } else if (canceled) {
         snap_.message = "Бенчмарк остановлен пользователем";

@@ -252,6 +252,7 @@ json bench_candidate_to_json(const dualmoe::BenchCandidate & c) {
         {"knobs", knobs},
         {"ok", c.ok},
         {"measured", c.measured},
+        {"in_place", c.in_place},
         {"error", c.error},
         {"prefill_tps", c.prefill_tps},
         {"decode_tps", c.decode_tps},
@@ -276,6 +277,9 @@ json bench_candidate_to_json(const dualmoe::BenchCandidate & c) {
             {"kv_type_k", c.cfg.kv_type_k},
             {"kv_type_v", c.cfg.kv_type_v},
             {"swap_hysteresis", c.cfg.swap_hysteresis},
+            {"static_bank_share", c.cfg.static_bank_share},
+            {"static_bank_mb", c.cfg.static_bank_mb},
+            {"warm_state", c.cfg.warm_state},
             {"auto_balance_compute", c.cfg.auto_balance_compute},
             {"zero_hdd_mode", c.cfg.zero_hdd_mode},
             {"enable_thinking", c.cfg.enable_thinking},
@@ -394,10 +398,10 @@ int parse_app_options(int argc, char ** argv, AppOptions & opt, bool desktop_def
         else if (arg == "--thinking") opt.boot_cfg.enable_thinking = true;
         else if (arg == "--no-thinking") opt.boot_cfg.enable_thinking = false;
         else if (arg == "--version") {
-            std::cout << "DualMoE v0.5.0\n";
+            std::cout << "DualMoE v0.5.1\n";
             return 1;
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "DualMoE v0.5.0 — нативное приложение (окно Windows, без браузера)\n"
+            std::cout << "DualMoE v0.5.1 — нативное приложение (окно Windows, без браузера)\n"
                       << "  --model <file.gguf>       Auto-load GGUF model at startup\n"
                       << "  --models-dir <folder>     Default folder for GGUF UI scanner\n"
                       << "  --host <addr>             Bind address (desktop default 127.0.0.1)\n"
@@ -473,7 +477,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
         const auto cfg = engine.current_config();
         json out = {
             {"ok", true},
-            {"version", "0.5.0"},
+            {"version", "0.5.1"},
             {"default_scan_dir", opt.scan_dir},
             {"roots", list_roots_utf8()},
             {"devices", devs},
@@ -487,6 +491,9 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
                 {"auto_balance_compute", cfg.auto_balance_compute},
                 {"swap_hysteresis", cfg.swap_hysteresis},
                 {"io_lanes", cfg.io_lanes},
+                {"static_bank_share", cfg.static_bank_share},
+                {"static_bank_mb", cfg.static_bank_mb},
+                {"warm_state", cfg.warm_state},
                 {"n_ctx", cfg.n_ctx},
                 {"n_threads", cfg.n_threads},
                 {"n_ubatch", cfg.n_ubatch},
@@ -532,7 +539,7 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             {"ok", true},
             {"mode", opt.desktop_window ? "desktop" : "console"},
             {"native_dialogs", dualmoe::native_file_dialog_available()},
-            {"version", "0.5.0"},
+            {"version", "0.5.1"},
             {"port", bound_port.load(std::memory_order_acquire)},
             {"openai_base_url", openai_base_url_for_json()},
             {"scan_dir", opt.scan_dir},
@@ -656,6 +663,9 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             cfg.dense_anon           = body.value("dense_anon", cfg.dense_anon);
             cfg.release_mmap         = body.value("release_mmap", cfg.release_mmap);
             cfg.enable_thinking      = body.value("enable_thinking", cfg.enable_thinking);
+            cfg.static_bank_share    = std::clamp(body.value("static_bank_share", cfg.static_bank_share), 0.0f, 0.8f);
+            cfg.static_bank_mb       = body.value("static_bank_mb", cfg.static_bank_mb);
+            cfg.warm_state           = body.value("warm_state", cfg.warm_state);
 
             const bool async_mode = body.value("async", false);
             std::string err;
@@ -735,13 +745,15 @@ bool AppServer::Impl::start(const AppOptions & o, std::string & err) {
             opt.mode      = (body.value("mode", std::string("full")) == "plan")
                                 ? dualmoe::BenchMode::Plan : dualmoe::BenchMode::Full;
             opt.model_path = body.value("model_path", std::string(""));
-            opt.tokens     = body.value("tokens", 96);
+            opt.tokens     = body.value("tokens", 64);
             opt.prompt     = body.value("prompt", std::string(""));
             opt.sweep_threads   = body.value("sweep_threads", true);
             opt.sweep_cpu_share = body.value("sweep_cpu_share", true);
             opt.sweep_vram_bank = body.value("sweep_vram_bank", true);
             opt.sweep_ubatch    = body.value("sweep_ubatch", true);
-            opt.max_candidates  = body.value("max_candidates", 16);
+            opt.max_candidates  = std::clamp(body.value("max_candidates", 8), 1, 32);
+            opt.fast            = body.value("fast", true);
+            opt.warmup_tokens   = std::clamp(body.value("warmup_tokens", 8), 0, 64);
             std::string err;
             if (!bench.start(opt, err)) {
                 res.status = 409;
