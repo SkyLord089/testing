@@ -86,10 +86,10 @@ index 2978340..6a8048d 100644
      return NULL;
  
 diff --git a/include/llama.h b/include/llama.h
-index 181d840..2e5befb 100644
+index 181d840..67d6f74 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -1730,6 +1730,30 @@ extern "C" {
+@@ -1730,6 +1730,33 @@ extern "C" {
              ggml_opt_epoch_callback   callback_train,
              ggml_opt_epoch_callback   callback_eval);
  
@@ -115,16 +115,19 @@ index 181d840..2e5befb 100644
 +    LLAMA_API size_t llama_moe_cache_prewarm      (struct llama_context * ctx, llama_moe_cache_fetch_cb_t fetch_cb, void * user_data);
 +    LLAMA_API void   llama_set_moe_cache_swap_cbs (struct llama_context * ctx, llama_moe_cache_evict_cb_t evict_cb, llama_moe_cache_promoted_cb_t promoted_cb, float swap_hysteresis, void * user_data);
 +    LLAMA_API void   llama_set_moe_cache_cpu_share(struct llama_context * ctx, float cpu_share);
++    // DualMoE: pin the experts of the static class (structure + system prompt) in the MoE cache so a
++    // topic shift cannot evict them. layer_ids/expert_ids are n parallel arrays; pass n == 0 to clear.
++    LLAMA_API void   llama_set_moe_cache_pinned(struct llama_context * ctx, const int32_t * layer_ids, const int32_t * expert_ids, size_t n);
 +    LLAMA_API bool   llama_moe_cache_rescue_expert(struct llama_context * ctx, int32_t il, int32_t expert_id, llama_moe_cache_evict_cb_t dst_cb, void * user_data);
 +
  #ifdef __cplusplus
  }
  #endif
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 9066e06..4cbd866 100644
+index 9066e06..9613f39 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -5183,3 +5183,55 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
+@@ -5183,3 +5183,79 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
  llama_context * llama_get_ctx_other(struct llama_context * ctx) {
      return ctx->get_cparams().ctx_other;
  }
@@ -165,6 +168,30 @@ index 9066e06..4cbd866 100644
 +    return ctx ? ctx->moe_cache_prewarm(fetch_cb, user_data) : 0;
 +}
 +
++void llama_context::set_moe_cache_pinned(const std::vector<std::pair<int32_t, int32_t>> * experts) {
++    if (moe_cache) {
++        moe_cache->set_pinned(experts);
++    }
++}
++
++void llama_set_moe_cache_pinned(struct llama_context * ctx, const int32_t * layer_ids, const int32_t * expert_ids, size_t n) {
++    if (!ctx) {
++        return;
++    }
++    if (layer_ids == nullptr || expert_ids == nullptr || n == 0) {
++        ctx->set_moe_cache_pinned(nullptr);
++        return;
++    }
++    std::vector<std::pair<int32_t, int32_t>> experts;
++    experts.reserve(n);
++    for (size_t i = 0; i < n; ++i) {
++        experts.emplace_back(layer_ids[i], expert_ids[i]);
++    }
++    std::sort(experts.begin(), experts.end());
++    experts.erase(std::unique(experts.begin(), experts.end()), experts.end());
++    ctx->set_moe_cache_pinned(&experts);
++}
++
 +void llama_set_moe_cache_swap_cbs(struct llama_context * ctx, llama_moe_cache_evict_cb_t evict_cb, llama_moe_cache_promoted_cb_t promoted_cb, float swap_hysteresis, void * user_data) {
 +    if (ctx) {
 +        ctx->set_moe_cache_swap_cbs(evict_cb, promoted_cb, swap_hysteresis, user_data);
@@ -181,16 +208,17 @@ index 9066e06..4cbd866 100644
 +    return ctx ? ctx->moe_cache_rescue_expert(il, expert_id, dst_cb, user_data) : false;
 +}
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 45eca45..cf6c7e2 100644
+index 45eca45..988a4a0 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -213,6 +213,12 @@ struct llama_context {
+@@ -213,6 +213,13 @@ struct llama_context {
  
      llama_memory_breakdown memory_breakdown() const;
  
 +    void   set_moe_cache_host_cb  (llama_moe_cache_host_cb_t cb, void * user_data);
 +    size_t moe_cache_prewarm      (llama_moe_cache_fetch_cb_t fetch_cb, void * user_data);
 +    void   set_moe_cache_swap_cbs (llama_moe_cache_evict_cb_t evict_cb, llama_moe_cache_promoted_cb_t promoted_cb, float swap_hysteresis, void * user_data);
++    void   set_moe_cache_pinned   (const std::vector<std::pair<int32_t, int32_t>> * experts);
 +    void   set_moe_cache_cpu_share(float cpu_share);
 +    bool   moe_cache_rescue_expert(int32_t il, int32_t expert_id, llama_moe_cache_evict_cb_t dst_cb, void * user_data);
 +
@@ -221,10 +249,81 @@ index 9688a7e..c0bb61a 100644
  #if _WIN32_WINNT >= 0x602
              BOOL (WINAPI *pPrefetchVirtualMemory) (HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
 diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-index 1070b92..5ab771b 100644
+index 1070b92..69b8b20 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
-@@ -178,6 +178,8 @@ struct moe_cache_lru {
+@@ -46,6 +46,10 @@ struct moe_cache_lru {
+ 
+     std::vector<float>   crf;      // [n_layer*n_expert]
+     std::vector<int64_t> last_use; // [n_layer*n_expert] layer clock at the last use, -1 if not used
++    // DualMoE: experts of the static class (structure/system prompt) are never chosen as victims and are
++    // promoted before the dynamic ones, so a topic shift cannot evict the part of the model that is
++    // re-used by every single request.
++    std::vector<uint8_t> pinned;   // [n_layer*n_expert] 1 if the expert is pinned
+     std::vector<int64_t> clock;    // [n_layer] tokens seen by the layer (as added by plan() for each ubatch)
+ 
+     std::vector<uint32_t> seen; // [n_expert] seen[e] == seen_gen if expert e is selected by the current plan()
+@@ -76,6 +80,7 @@ struct moe_cache_lru {
+         list_of.assign(n_slots, 0);
+         crf.assign((size_t) n_layer*n_expert, 0.0f);
+         last_use.assign((size_t) n_layer*n_expert, -1);
++        pinned.assign((size_t) n_layer*n_expert, 0);
+         clock.assign(n_layer, 0);
+         seen.assign(n_expert, 0);
+     }
+@@ -141,20 +146,25 @@ struct moe_cache_lru {
+     }
+ 
+     // the least recently used slot of list c that this plan() does not select, -1 if none
+-    int32_t candidate(int c, int32_t il) const {
++    // pinned experts are skipped unless ignore_pins is set (the static class exhausted the cache)
++    int32_t candidate(int c, int32_t il, bool ignore_pins) const {
+         for (int32_t s = head[c]; s >= 0; s = next[s]) {
+-            if (!is_selected(il, key_of[s])) {
++            const int32_t key = key_of[s];
++            if (!ignore_pins && key >= 0 && pinned[key]) {
++                continue; // static expert: not a victim
++            }
++            if (!is_selected(il, key)) {
+                 return s;
+             }
+         }
+         return -1;
+     }
+ 
+-    int32_t victim(int32_t il) const {
++    int32_t victim_impl(int32_t il, bool ignore_pins) const {
+         int32_t res = -1;
+         double res_score = -1.0;
+         for (int c = 0; c < n_class; ++c) {
+-            const int32_t s = candidate(c, il);
++            const int32_t s = candidate(c, il, ignore_pins);
+             if (s < 0) {
+                 continue;
+             }
+@@ -169,15 +179,28 @@ struct moe_cache_lru {
+                 res_score = score;
+             }
+         }
+-        if (res < 0) {
++        return res;
++    }
++
++    int32_t victim(int32_t il) const {
++        const int32_t s = victim_impl(il, /*ignore_pins=*/false);
++        if (s >= 0) {
++            return s;
++        }
++        // Every slot holds a pinned expert and this plan needs room: the cache cannot honour the
++        // static class, so degrade to the plain ClassLRU choice instead of aborting.
++        const int32_t fb = victim_impl(il, /*ignore_pins=*/true);
++        if (fb < 0) {
+             GGML_ABORT("no MoE cache victim");
+         }
+-        return res;
++        return fb;
+     }
+ 
      struct fill {
          int32_t expert;
          int32_t slot;
@@ -233,7 +332,7 @@ index 1070b92..5ab771b 100644
      };
  
      // give a slot to each expert selected by ids (n_tokens tokens) in layer il
-@@ -186,7 +188,7 @@ struct moe_cache_lru {
+@@ -186,7 +209,7 @@ struct moe_cache_lru {
      // returns false if the ids select more distinct experts than there are slots
      template <typename F>
      bool plan(int32_t il, const int32_t * ids, size_t n_ids, int64_t n_tokens, int32_t n_used, int32_t n_zero, F && n_cpu,
@@ -242,7 +341,7 @@ index 1070b92..5ab771b 100644
          fills.clear();
          cpu.clear();
          n_hit = 0;
-@@ -222,6 +224,40 @@ struct moe_cache_lru {
+@@ -222,6 +245,40 @@ struct moe_cache_lru {
              }
          }
  
@@ -283,7 +382,7 @@ index 1070b92..5ab771b 100644
          // the misses with the lowest CRF are left to the CPU, a miss that keeps being used gains CRF and enters the cache
          // all misses are used at the same clock, so their CRF compare without decay
          const size_t n_c = std::min(n_cpu(misses.size()), misses.size());
-@@ -231,48 +267,52 @@ struct moe_cache_lru {
+@@ -231,48 +288,62 @@ struct moe_cache_lru {
                  const float crf_b = crf[make_key(il, b)];
                  return crf_a != crf_b ? crf_a < crf_b : a < b;
              });
@@ -325,9 +424,18 @@ index 1070b92..5ab771b 100644
  
 +        // CRF hysteresis gate: only swap RAM -> VRAM when the candidate miss is genuinely hotter than the coldest VRAM victim
 +        if (swap_hysteresis > 0.0f && n_zero > 0 && !misses.empty()) {
++            // pinned (static class) misses are promoted first: they belong to the part of the model
++            // that every request re-uses, so a topic shift must not leave them on the CPU
 +            std::sort(misses.begin(), misses.end(), [&](int32_t a, int32_t b) {
-+                const float crf_a = crf[make_key(il, a)];
-+                const float crf_b = crf[make_key(il, b)];
++                const int32_t ka = make_key(il, a);
++                const int32_t kb = make_key(il, b);
++                const bool pa = pinned[ka] != 0;
++                const bool pb = pinned[kb] != 0;
++                if (pa != pb) {
++                    return pa;
++                }
++                const float crf_a = crf[ka];
++                const float crf_b = crf[kb];
 +                return crf_a != crf_b ? crf_a > crf_b : a < b;
 +            });
 +            std::vector<int32_t> promote;
@@ -338,7 +446,8 @@ index 1070b92..5ab771b 100644
 +                if (vic_key >= 0) {
 +                    const float miss_crf = decayed_crf(il, make_key(il, e));
 +                    const float vic_crf  = decayed_crf(key_layer(vic_key), vic_key);
-+                    if (miss_crf < vic_crf * swap_hysteresis && try_assign_cpu_zero(e)) {
++                    const float gate     = pinned[make_key(il, e)] ? 1.0f : swap_hysteresis;
++                    if (miss_crf < vic_crf * gate && try_assign_cpu_zero(e)) {
 +                        continue;
 +                    }
 +                }
@@ -362,7 +471,7 @@ index 1070b92..5ab771b 100644
              } else {
                  n_filled++;
              }
-@@ -280,7 +320,7 @@ struct moe_cache_lru {
+@@ -280,7 +351,7 @@ struct moe_cache_lru {
              key_of[s] = key;
              slots[e]  = s;
              move(s, class_of(key));
@@ -371,7 +480,7 @@ index 1070b92..5ab771b 100644
          }
          clock[il] += n_tokens;
          return true;
-@@ -383,6 +423,15 @@ struct llama_moe_cache::impl {
+@@ -383,6 +454,17 @@ struct llama_moe_cache::impl {
      std::vector<int32_t> ids;
      std::vector<moe_cache_lru::fill> fills;
      std::vector<moe_cache_lru::fill> cpu;
@@ -384,10 +493,12 @@ index 1070b92..5ab771b 100644
 +    llama_moe_cache_promoted_cb_t promoted_cb     = nullptr;
 +    void *                        swap_cb_ud      = nullptr;
 +    float                         swap_hysteresis = 0.0f;
++
++    size_t   n_pinned = 0; // experts of the static class, see set_pinned()
  
      float    cpu_share = 0.0f;
      uint32_t cpu_share_q = 0; // cpu_share in 1/65536, integer so that a simulator can reproduce the rounding
-@@ -506,7 +555,17 @@ struct llama_moe_cache::impl {
+@@ -506,7 +588,17 @@ struct llama_moe_cache::impl {
              const int32_t n_expert  = g.ref[0]->ne[2];
              const size_t  budget    = (size_t) ((double) size*d.split/split_sum*g.host_bytes/d.host_bytes);
              const int32_t max_slots = g.layers.size()*n_expert;
@@ -406,7 +517,7 @@ index 1070b92..5ab771b 100644
                  g.n_slots++;
              }
              if (g.n_slots < n_expert_used) {
-@@ -817,7 +876,7 @@ struct llama_moe_cache::impl {
+@@ -817,7 +909,7 @@ struct llama_moe_cache::impl {
              return (size_t) (acc >> 16);
          };
          size_t n_hit = 0;
@@ -415,7 +526,7 @@ index 1070b92..5ab771b 100644
              GGML_ABORT("the MoE cache is too small for the experts selected in layer %d", il);
          }
          if (has_cpu) {
-@@ -832,6 +891,58 @@ struct llama_moe_cache::impl {
+@@ -832,6 +924,58 @@ struct llama_moe_cache::impl {
              }
          }
  
@@ -474,7 +585,7 @@ index 1070b92..5ab771b 100644
          // upload the missing experts, consecutive experts going to consecutive slots are uploaded together
          size_t bytes = 0;
          for (size_t ip = 0; ip < l.experts.size(); ++ip) {
-@@ -849,6 +960,13 @@ struct llama_moe_cache::impl {
+@@ -849,6 +993,13 @@ struct llama_moe_cache::impl {
              }
          }
  
@@ -488,7 +599,7 @@ index 1070b92..5ab771b 100644
          stats & st = ids.size() <= (size_t) 8*n_expert_used ? stats_small : stats_large;
          st.hits   += n_hit;
          st.misses += fills.size() + cpu.size();
-@@ -970,6 +1088,119 @@ int64_t llama_moe_cache::copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -970,6 +1121,150 @@ int64_t llama_moe_cache::copy_experts(ggml_backend_t backend, const ggml_tensor
      return pimpl->copy_experts(backend, w, dst, e, last);
  }
  
@@ -563,6 +674,37 @@ index 1070b92..5ab771b 100644
 +    return total_uploaded;
 +}
 +
++void llama_moe_cache::set_pinned(const std::vector<std::pair<int32_t, int32_t>> * experts) {
++    size_t n_pinned = 0;
++    for (auto & g : pimpl->groups) {
++        std::fill(g.lru.pinned.begin(), g.lru.pinned.end(), 0);
++        if (experts == nullptr) {
++            continue;
++        }
++        for (const auto & e : *experts) {
++            const int32_t il = e.first;
++            const int32_t ex = e.second;
++            if (il < 0 || (size_t) il >= pimpl->layers.size() || ex < 0 || ex >= g.lru.n_expert) {
++                continue;
++            }
++            if (g.lru.slot_map[il] == nullptr) {
++                continue; // the layer is not cached in this group
++            }
++            uint8_t & flag = g.lru.pinned[(size_t) g.lru.make_key(il, ex)];
++            if (!flag) {
++                flag = 1;
++                n_pinned++;
++            }
++        }
++        // never pin more experts than there are slots: keep the ClassLRU usable
++        if (n_pinned >= (size_t) g.lru.n_slots) {
++            std::fill(g.lru.pinned.begin(), g.lru.pinned.end(), 0);
++            n_pinned = 0;
++        }
++    }
++    pimpl->n_pinned = n_pinned;
++}
++
 +void llama_moe_cache::set_swap_cbs(llama_moe_cache_evict_cb_t evict_cb, llama_moe_cache_promoted_cb_t promoted_cb, float swap_hysteresis, void * user_data) {
 +    pimpl->evict_cb        = evict_cb;
 +    pimpl->promoted_cb     = promoted_cb;
@@ -609,22 +751,30 @@ index 1070b92..5ab771b 100644
      std::map<ggml_backend_buffer_type_t, size_t> res;
      for (const auto & d : pimpl->devices) {
 diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
-index 833eac3..43febf9 100644
+index 833eac3..39d1a65 100644
 --- a/src/llama-moe-cache.h
 +++ b/src/llama-moe-cache.h
-@@ -1,5 +1,6 @@
+@@ -1,8 +1,10 @@
  #pragma once
  
 +#include "llama.h"
  #include "ggml-backend.h"
  
  #include <map>
-@@ -60,6 +61,12 @@ public:
++#include <utility>
+ #include <memory>
+ #include <vector>
+ 
+@@ -60,6 +62,16 @@ public:
      // returns the number of experts copied, 0 if expert e is not in the cache
      int64_t copy_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e, int64_t last);
  
 +    void set_host_cb(llama_moe_cache_host_cb_t cb, void * user_data);
 +    size_t prewarm(llama_moe_cache_fetch_cb_t fetch_cb, void * user_data);
++    // DualMoE: the static class of experts (structure + system prompt) that may not be evicted.
++    // n_pinned of the [n_layer*n_expert] flags are set from `ops`, ops == nullptr clears all of them.
++    void set_pinned(const std::vector<std::pair<int32_t, int32_t>> * experts);
++
 +    void set_swap_cbs(llama_moe_cache_evict_cb_t evict_cb, llama_moe_cache_promoted_cb_t promoted_cb, float swap_hysteresis, void * user_data);
 +    void set_cpu_share(float cpu_share);
 +    bool rescue_expert(int32_t il, int32_t expert_id, llama_moe_cache_evict_cb_t dst_cb, void * user_data);
